@@ -8,6 +8,7 @@ import {
   ShieldQuestion, Swords, Target,
 } from "lucide-react";
 import type { EventItem } from "@/components/research/types";
+import { CountUp, FadeIn } from "@/components/magic";
 
 const STEP_ICON: Record<string, React.ReactNode> = {
   think: <Brain className="h-3.5 w-3.5" />,
@@ -200,7 +201,11 @@ export function StepsCard({
           <CheckCircle2 className="h-4 w-4 shrink-0 text-primary" />
         )}
         <span className={active ? "shimmer-text min-w-0 truncate text-sm font-medium" : "min-w-0 truncate text-sm font-medium text-foreground"}>
-          {active ? activeLabel(lastType, stage, liveThought?.label) : `Research process · ${rows.length} steps`}
+          {active
+            ? activeLabel(lastType, stage, liveThought?.label)
+            : (
+              <>Research process · <CountUp to={rows.length} duration={0.5} /> steps</>
+            )}
         </span>
         {active && (
           <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
@@ -230,7 +235,7 @@ export function StepsCard({
               const showLiveText = live && (showThinking || userExpanded);
               const showDoneText = !live && userExpanded;
               return (
-                <div key={g.thoughtId} className="relative flex gap-3">
+                <FadeIn key={g.thoughtId} className="relative flex gap-3">
                   <span
                     className={`z-[1] mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full ring-1 transition-colors ${
                       live ? "bg-primary/10 text-primary ring-primary/20" : "bg-card text-primary/80 ring-border"
@@ -269,14 +274,14 @@ export function StepsCard({
                         </div>
                       )}
                   </div>
-                </div>
+                </FadeIn>
               );
             }
             const e = row.e;
             const highlight = e.type === "eta" || e.type === "selfcheck" || e.type === "critique" || e.type === "agent" || e.type === "presearch" || e.type === "learning" || e.type === "walk" || e.type === "curate" || e.type === "verify" || e.type === "contradiction" || e.type === "comprehend" || e.type === "rerank" || e.type === "citecheck" || e.type === "redteam" || e.type === "debate" || e.type === "diversity" || e.type === "score" || e.type === "diff";
             const isError = e.type === "error";
             return (
-              <div key={e.seq} className="relative flex gap-3">
+              <FadeIn key={e.seq} className="relative flex gap-3">
                 <span
                   className={`z-[1] mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full ring-1 ${
                     isError
@@ -307,7 +312,7 @@ export function StepsCard({
                       </div>
                     )}
                   </div>
-                </div>
+                </FadeIn>
             );
           })}
             </div>

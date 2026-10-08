@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/research/markdown";
+import { CountUp } from "@/components/magic";
 import { useTyper } from "@/hooks/use-typer";
 import type { SourceItem, SectionItem, JobItem } from "@/components/research/types";
 import { fmtElapsed } from "@/components/research/types";
@@ -104,7 +105,12 @@ function QualityCard({ quality }: { quality: NonNullable<NonNullable<JobItem["st
               style={{ transition: "stroke-dasharray 700ms cubic-bezier(0.25,0.1,0.25,1)" }}
             />
           </svg>
-          <span className={`absolute text-[15px] font-semibold tabular-nums ${toneClass(quality.overall)}`}>{quality.overall}</span>
+          <CountUp
+            to={quality.overall}
+            decimals={1}
+            duration={0.9}
+            className={`absolute text-[15px] font-semibold tabular-nums ${toneClass(quality.overall)}`}
+          />
         </span>
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold">Report quality — self-scored</p>

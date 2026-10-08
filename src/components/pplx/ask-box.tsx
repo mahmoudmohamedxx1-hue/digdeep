@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Slider } from "@/components/ui/slider";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Magnet } from "@/components/magic";
 import type { AdvParams, AttachedDoc } from "@/components/research/types";
 
 export const MODES = [
@@ -374,20 +375,23 @@ export function AskBox({
                   {stopping ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-3 w-3.5 fill-current" />}
                 </Button>
               )}
-              <Button
-                size="icon"
-                onClick={() => canSubmit && onSubmit()}
-                disabled={!canSubmit}
-                aria-label="Start research"
-                className={`press-scale spring-pop h-9 w-9 shrink-0 rounded-full border-0 transition-all duration-200 ${
-                  canSubmit
-                    ? "bg-foreground text-background shadow-elev-2 hover:bg-foreground/85"
-                    : "bg-transparent text-muted-foreground/60 hover:bg-muted/60"
-                }`}
-                style={{ transitionTimingFunction: "cubic-bezier(0.25,0.1,0.25,1)" }}
-              >
-                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-[18px] w-[18px]" strokeWidth={2.5} />}
-              </Button>
+              <Magnet className="shrink-0" maxPull={3} pad={22}>
+                <Button
+                  size="icon"
+                  onClick={() => canSubmit && onSubmit()}
+                  disabled={!canSubmit}
+                  aria-label="Start research"
+                  className={`press-scale spring-pop relative h-9 w-9 shrink-0 overflow-hidden rounded-full border-0 transition-all duration-200 ${
+                    canSubmit
+                      ? "bg-foreground text-background shadow-elev-2 hover:bg-foreground/85"
+                      : "bg-transparent text-muted-foreground/60 hover:bg-muted/60"
+                  }`}
+                  style={{ transitionTimingFunction: "cubic-bezier(0.25,0.1,0.25,1)" }}
+                >
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-[18px] w-[18px]" strokeWidth={2.5} />}
+                  {canSubmit && !busy && <span className="btn-sheen" aria-hidden />}
+                </Button>
+              </Magnet>
             </>
           )}
         </div>

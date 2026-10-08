@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Globe } from "lucide-react";
+import { CountUp, FadeIn } from "@/components/magic";
 import type { SourceItem } from "@/components/research/types";
 
 function Favicon({ domain, className = "h-4 w-4" }: { domain: string; className?: string }) {
@@ -54,7 +55,7 @@ export function SourcesRow({ sources }: { sources: SourceItem[] }) {
           </span>
         )}
       </div>
-      <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{sources.length}</span>
+      <CountUp to={sources.length} duration={0.8} className="shrink-0 text-[11px] tabular-nums text-muted-foreground" />
     </div>
   );
 }
@@ -79,10 +80,15 @@ export function SourcesPanel({ sources }: { sources: SourceItem[] }) {
           </>
         );
         const cls = "hover-lift group flex gap-2.5 rounded-[16px] border border-input bg-card p-3";
-        return linkable ? (
+        const body = linkable ? (
           <a key={s.id} id={`ref-${i + 1}`} href={s.url} target="_blank" rel="noreferrer" className={cls}>{inner}</a>
         ) : (
           <span key={s.id} id={`ref-${i + 1}`} className={`${cls} opacity-80`}>{inner}</span>
+        );
+        return (
+          <FadeIn key={s.id} y={4}>
+            {body}
+          </FadeIn>
         );
       })}
     </div>

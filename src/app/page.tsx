@@ -17,6 +17,7 @@ import { CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, C
 import { toast } from "@/hooks/use-toast";
 import { LogoMark, LogoWord } from "@/components/pplx/logo";
 import { AskBox, MODE_PARAMS, MODES } from "@/components/pplx/ask-box";
+import { AuroraHero, ShinyText, SpotlightCard, SplitText, StaggerIn } from "@/components/magic";
 import { ThreadTurn } from "@/components/pplx/turn";
 import { SourcesPanel } from "@/components/pplx/sources-row";
 import type { AdvParams, AttachedDoc, HistoryItem, PoolEndpointUi, SearchSettingsUi, Turn } from "@/components/research/types";
@@ -892,25 +893,26 @@ export default function Home() {
         {sidebarOpen && groupedHistory.length > 0 && (
           <div className="slim-scroll mt-4 min-h-0 flex-1 overflow-y-auto pb-1">
             <p className="px-4 pb-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">Recents</p>
-            {groupedHistory.map((g) => (
+            {groupedHistory.map((g, gi) => (
                 <div key={g.label} className="mb-0.5">
                   <p className="px-4 pb-0.5 pt-2 text-[11px] font-medium text-muted-foreground/70">{g.label}</p>
-                  {g.items.map((h) => {
+                  {g.items.map((h, hi) => {
                     const isActive = view === "thread" && h.threadId != null && h.threadId === threadId;
                     return (
-                      <button
-                        key={h.id}
-                        onClick={() => openFromHistory(h)}
-                        title={h.query}
-                        className={`flex h-8 w-full items-center gap-2.5 rounded-[10px] px-4 text-left text-[13px] transition-colors ${
-                          isActive
-                            ? "bg-accent font-medium text-foreground"
-                            : "text-foreground/75 hover:bg-accent/70 hover:text-foreground"
-                        }`}
-                      >
-                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT[h.status] ?? "bg-amber-500 pulse-dot"}`} aria-hidden />
-                        <span className="min-w-0 flex-1 truncate">{h.query}</span>
-                      </button>
+                      <StaggerIn key={h.id} index={gi * 4 + hi} y={4} className="px-0">
+                        <button
+                          onClick={() => openFromHistory(h)}
+                          title={h.query}
+                          className={`flex h-8 w-full items-center gap-2.5 rounded-[10px] px-4 text-left text-[13px] transition-colors ${
+                            isActive
+                              ? "bg-accent font-medium text-foreground"
+                              : "text-foreground/75 hover:bg-accent/70 hover:text-foreground"
+                          }`}
+                        >
+                          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT[h.status] ?? "bg-amber-500 pulse-dot"}`} aria-hidden />
+                          <span className="min-w-0 flex-1 truncate">{h.query}</span>
+                        </button>
+                      </StaggerIn>
                     );
                   })}
                 </div>
@@ -965,18 +967,24 @@ export default function Home() {
         </div>
 
         {view === "home" ? (
-          /* ================= HOME — the composer is the hero; everything else whispers ================= */
-          <div className="mx-auto w-full max-w-[768px] px-4 pb-24 pt-[12vh] sm:pt-[15vh]">
-            <div className="rise-in stagger-1 flex flex-col items-center text-center">
-              <h1 className="text-balance text-[32px] font-semibold leading-[1.15] tracking-[-0.032em] text-foreground sm:text-[34px]">
-                {greeting()}
+          /* ================= HOME — aurora hero, composer is the star ================= */
+          <div className="relative mx-auto w-full max-w-[768px] px-4 pb-24 pt-[12vh] sm:pt-[15vh]">
+            <AuroraHero />
+            <div className="relative z-10 flex flex-col items-center text-center">
+              <span className="badge-aurora rise-in h-8 items-center gap-1.5 rounded-full px-3.5 text-[11.5px] font-medium text-foreground/85">
+                <Sparkles className="h-3 w-3 shrink-0 text-primary" />
+                Free &amp; open-source deep research
+              </span>
+              <h1 className="mt-5 text-balance text-[32px] font-semibold leading-[1.15] tracking-[-0.032em] text-foreground sm:text-[34px]">
+                <SplitText text={greeting()} delay={120} stagger={70} />
               </h1>
-              <p className="mt-2.5 font-serif text-[21px] leading-snug text-muted-foreground">
+              <p className="rise-in mt-2.5 font-serif text-[21px] leading-snug text-muted-foreground [animation-delay:380ms]">
                 What should we dig into?
               </p>
             </div>
 
-            <div className="rise-in stagger-2 mt-8">
+            <div className="group/composer rise-in relative z-10 mt-8 [animation-delay:480ms]">
+              <div aria-hidden className="composer-glow opacity-70 transition-opacity duration-500 group-focus-within/composer:opacity-100" />
               <AskBox
                 value={query}
                 onChange={setQuery}
@@ -1000,22 +1008,25 @@ export default function Home() {
                 onDocs={setDocs}
                 inputId="ask-input"
               />
-              <p className="mt-3 text-center text-[12.5px] font-medium leading-relaxed text-foreground/60 dark:text-foreground/80">
-                Free &amp; keyless · every claim cited · every citation audited · honest quality scores
+              <p className="rise-in relative z-10 mt-3.5 text-center text-[12.5px] font-medium leading-relaxed [animation-delay:560ms]">
+                <ShinyText>Free &amp; keyless · every claim cited · every citation audited · honest quality scores</ShinyText>
               </p>
             </div>
 
-            {/* starter chips — quiet pills, one violet icon each */}
-            <div className="rise-in stagger-3 mt-8 flex flex-wrap items-center justify-center gap-2">
-              {SUGGESTIONS.map((s) => (
-                <button
-                  key={s.label}
-                  onClick={() => { setQuery(s.label); document.getElementById("ask-input")?.focus(); }}
-                  className="press-scale group inline-flex h-10 max-w-full items-center gap-2 rounded-full border border-border/90 bg-card px-4 text-[13px] font-medium text-foreground/80 shadow-elev-1 transition-all duration-200 hover:border-primary/35 hover:bg-accent/40 hover:text-foreground"
-                >
-                  <s.icon className="h-4 w-4 shrink-0 text-primary/85" strokeWidth={2.1} />
-                  <span className="truncate">{s.label}</span>
-                </button>
+            {/* starter chips — spotlight pills that wake under the cursor */}
+            <div className="relative z-10 mt-8 flex flex-wrap items-center justify-center gap-2">
+              {SUGGESTIONS.map((s, i) => (
+                <StaggerIn key={s.label} index={i} enterDelay={0.62} className="inline-flex">
+                  <SpotlightCard size={190} className="rounded-full">
+                    <button
+                      onClick={() => { setQuery(s.label); document.getElementById("ask-input")?.focus(); }}
+                      className="press-scale group inline-flex h-10 max-w-full items-center gap-2 rounded-full border border-border/90 bg-card px-4 text-[13px] font-medium text-foreground/80 shadow-elev-1 transition-all duration-200 hover:border-primary/35 hover:bg-accent/40 hover:text-foreground"
+                    >
+                      <s.icon className="h-4 w-4 shrink-0 text-primary/85" strokeWidth={2.1} />
+                      <span className="truncate">{s.label}</span>
+                    </button>
+                  </SpotlightCard>
+                </StaggerIn>
               ))}
             </div>
           </div>
@@ -1036,20 +1047,21 @@ export default function Home() {
             ) : (
               <div className="mt-6 divide-y divide-border/70 overflow-hidden rounded-[20px] border border-border/80 bg-card shadow-elev-1">
                 {trending.slice(0, 10).map((t, i) => (
-                  <button
-                    key={t.url}
-                    onClick={() => { setQuery(t.title); setView("home"); }}
-                    className="group flex w-full items-center gap-3.5 px-4 py-3 text-left transition-colors hover:bg-accent"
-                    title={`Research: ${t.title}`}
-                  >
-                    <span className="w-4 shrink-0 text-[13px] font-semibold tabular-nums text-muted-foreground/50">{i + 1}</span>
-                    <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{t.title}</span>
-                    <span className="hidden shrink-0 items-center gap-1.5 text-[11px] tabular-nums text-muted-foreground sm:flex">
-                      <span className="truncate">{t.domain}</span>
-                      <span className="opacity-50">▲ {t.points}</span>
-                    </span>
-                    <ArrowUpRight className="h-3.5 w-3.5 shrink-0 self-center text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
-                  </button>
+                  <StaggerIn key={t.url} index={i} y={8}>
+                    <button
+                      onClick={() => { setQuery(t.title); setView("home"); }}
+                      className="group flex w-full items-center gap-3.5 px-4 py-3 text-left transition-colors hover:bg-accent"
+                      title={`Research: ${t.title}`}
+                    >
+                      <span className="w-4 shrink-0 text-[13px] font-semibold tabular-nums text-muted-foreground/50">{i + 1}</span>
+                      <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{t.title}</span>
+                      <span className="hidden shrink-0 items-center gap-1.5 text-[11px] tabular-nums text-muted-foreground sm:flex">
+                        <span className="truncate">{t.domain}</span>
+                        <span className="opacity-50">▲ {t.points}</span>
+                      </span>
+                      <ArrowUpRight className="h-3.5 w-3.5 shrink-0 self-center text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                    </button>
+                  </StaggerIn>
                 ))}
               </div>
             )}
