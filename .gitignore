@@ -1,0 +1,76 @@
+# dependencies
+node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+*.log
+dev.log
+dev.out.log
+server.log
+
+# env files — never commit real secrets
+.env*
+!.env.example
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# local runtime data
+db/
+*.db
+*.sqlite
+
+# vercel
+.vercel
+
+# ---------------------------------------------------------------
+# internal workspace — scaffolding and agent artifacts that are
+# NOT part of the shipped product
+# ---------------------------------------------------------------
+worklog.md
+tool-results/
+download/
+agent-ctx/
+skills/
+reference/
+.z-ai-config
+.claude
+.zscripts/
+mini-services/
+examples/
+tests/
+Caddyfile
+
+# scripts: only the product toolchain is committed
+scripts/*
+!scripts/test-routing.ts
+!scripts/mock-llm.js
+!scripts/benchmark-harness.mjs
+!scripts/bench/
+scripts/bench/*
+!scripts/bench/questions.jsonl

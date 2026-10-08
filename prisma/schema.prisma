@@ -1,0 +1,95 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model ResearchJob {
+  id             String       @id @default(cuid())
+  query          String
+  threadId       String? // groups follow-up questions into one Perplexity-style thread
+  status         String       @default("queued") // queued|planning|researching|critiquing|synthesizing|completed|failed|cancelled
+  stage          String       @default("Initializing")
+  progress       Int          @default(0)
+  preset         String       @default("standard") // quick|standard|deep|exhaustive|custom
+  mode           String       @default("research") // chat|quick|research — how the engine answered this turn
+  language       String       @default("English")
+  modelPref      String       @default("auto") // auto|glm|pool
+  breadth        Int          @default(3)
+  depth          Int          @default(2)
+  maxSources     Int          @default(18)
+  maxMinutes     Int          @default(30)
+  reportMd       String?
+  plan           String? // JSON research plan
+  stats          String? // JSON final stats
+  docs           String? // JSON [{name, text}] — user-attached ground-truth documents (P2-3)
+  error          String?
+  cancelRequested Boolean     @default(false)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  startedAt      DateTime?
+  completedAt    DateTime?
+  events         ActivityEvent[]
+  sources        Source[]
+  sections       ResearchSection[]
+
+  @@index([status, updatedAt])
+}
+
+model ActivityEvent {
+  id      String       @id @default(cuid())
+  jobId   String
+  job     ResearchJob  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  seq     Int
+  ts      DateTime     @default(now())
+  type    String // think|search|read|source|summary|gap|section|draft|critique|error|info|done
+  title   String
+  detail  String?
+  model   String?
+  meta    String? // JSON
+  level   String       @default("normal") // normal|verbose
+
+  @@unique([jobId, seq])
+}
+
+model Source {
+  id           String       @id @default(cuid())
+  jobId        String
+  job          ResearchJob  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  url          String
+  domain       String
+  title        String
+  snippet      String?
+  engine       String
+  words        Int          @default(0)
+  quality      Int          @default(0)
+  used         Boolean      @default(false)
+  sectionTitle String?
+  round        Int          @default(1)
+  createdAt    DateTime     @default(now())
+
+  @@unique([jobId, url])
+}
+
+model ResearchSection {
+  id        String       @id @default(cuid())
+  jobId     String
+  job       ResearchJob  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  order     Int
+  title     String
+  question  String
+  status    String       @default("pending") // pending|researching|done
+  findings  String?
+  draftMd   String?
+  queries   String? // JSON string[]
+  rounds    Int          @default(0)
+  createdAt DateTime     @default(now())
+}
+
+model Setting {
+  key   String   @id
+  value String
+}
