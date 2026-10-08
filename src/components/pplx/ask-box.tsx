@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, ChevronDown, FileText, Gauge, Infinity as InfinityIcon, Loader2, Paperclip, Plus, Settings2, Square, X, BrainCircuit } from "lucide-react";
+import { ArrowUp, ChevronDown, FileText, Gauge, Infinity as InfinityIcon, Loader2, Plus, Settings2, Square, X, BrainCircuit } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Slider } from "@/components/ui/slider";
@@ -144,7 +144,7 @@ export function AskBox({
   };
 
   return (
-    <div className="askbox-focus group relative rounded-[16px] border border-input bg-card shadow-elev-1">
+    <div className="composer-focus group relative rounded-[28px] border border-input bg-card shadow-elev-1">
       <Textarea
         ref={taRef}
         id={inputId}
@@ -159,18 +159,18 @@ export function AskBox({
         placeholder={placeholder}
         aria-label="Research question"
         rows={1}
-        className={`resize-none border-0 bg-transparent px-4 pb-1.5 pt-3 text-[16px] leading-[1.6] shadow-none focus-visible:ring-0 ${compact ? "min-h-[46px]" : "min-h-[60px]"}`}
+        className={`resize-none border-0 bg-transparent px-5 pb-1.5 pt-4 text-[16px] leading-[1.6] shadow-none focus-visible:ring-0 placeholder:text-muted-foreground ${compact ? "min-h-[52px]" : "min-h-[64px]"}`}
       />
 
       {/* attached documents (P2-3) */}
       {attached.length > 0 && (
-        <div className="flex flex-wrap gap-2 px-4 pb-1 pt-1">
+        <div className="flex flex-wrap gap-2 px-5 pb-1 pt-1">
           {attached.map((d, i) => (
-            <span key={i} className="flex h-8 items-center gap-1.5 rounded-lg bg-secondary px-2.5 text-xs font-medium">
+            <span key={i} className="flex h-8 items-center gap-1.5 rounded-full bg-secondary px-2.5 text-xs font-medium">
               <FileText className="h-3.5 w-3.5 text-primary" />
               <span className="max-w-[160px] truncate">{d.name}</span>
               <button
-                className="ml-0.5 rounded-md p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                className="ml-0.5 rounded-full p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 onClick={() => onDocs?.(attached.filter((_, j) => j !== i))}
                 aria-label={`Remove ${d.name}`}
               >
@@ -181,7 +181,8 @@ export function AskBox({
         </div>
       )}
 
-      <div className="flex items-center gap-1 px-2.5 pb-2.5 pt-1.5">
+      {/* toolbar — tools left, action right (ChatGPT/Claude composer anatomy) */}
+      <div className="flex items-center gap-1.5 px-3 pb-3 pt-1.5">
         {/* attach documents */}
         {onDocs && (
           <>
@@ -196,25 +197,25 @@ export function AskBox({
               tabIndex={-1}
             />
             <button
-              className="press-scale flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              className="press-scale flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               onClick={() => fileRef.current?.click()}
               aria-label="Attach documents as ground-truth sources"
               title="Attach .txt / .md documents — they become ground-truth sources for this research"
             >
-              <Paperclip className="h-[17px] w-[17px]" />
+              <Plus className="h-[18px] w-[18px]" strokeWidth={2.2} />
             </button>
           </>
         )}
 
-        {/* all settings live here — one quiet gear, zero footer noise */}
+        {/* research settings — one quiet gear, zero footer noise */}
         <Popover open={settingsOpen} onOpenChange={setSettingsOpen}>
           <PopoverTrigger asChild>
             <button
-              className={`press-scale flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${advDirty || !showThinking ? "bg-primary/10 text-primary hover:bg-primary/15" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}
+              className={`press-scale flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors ${advDirty || !showThinking ? "text-primary hover:bg-primary/10" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}
               aria-label="Research settings"
               title="Research settings — budgets, language, backend, visible thinking"
             >
-              <Settings2 className="h-[17px] w-[17px]" />
+              <Settings2 className="h-[18px] w-[18px]" />
             </button>
           </PopoverTrigger>
           <PopoverContent align="start" className="glass w-[352px] rounded-[20px] p-4" side="top">
@@ -320,20 +321,20 @@ export function AskBox({
           </PopoverContent>
         </Popover>
 
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex items-center gap-1.5">
           {/* depth pill — grouped with the action cluster for visual balance */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="press-scale flex h-8 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
-                <Gauge className="h-3.5 w-3.5 text-primary/80" />
+              <button className="press-scale hidden h-9 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:flex">
+                <Gauge className="h-4 w-4 text-primary/70" />
                 {modeLabel}
                 <ChevronDown className="h-3 w-3 opacity-50" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="glass w-72 rounded-[16px]">
+            <DropdownMenuContent align="end" className="glass w-72 rounded-[18px]">
               <DropdownMenuLabel className="text-xs text-muted-foreground">Research depth</DropdownMenuLabel>
               {MODES.map((m) => (
-                <DropdownMenuItem key={m.id} onClick={() => onMode(m.id)} className={`gap-2 ${mode === m.id ? "bg-primary/10" : ""}`}>
+                <DropdownMenuItem key={m.id} onClick={() => onMode(m.id)} className={`gap-2 rounded-[10px] ${mode === m.id ? "bg-primary/10" : ""}`}>
                   <span className="flex min-w-0 flex-col">
                     <span className="flex items-center gap-1.5 text-sm font-medium">
                       {m.id === "unlimited" && <InfinityIcon className="h-3.5 w-3.5 text-primary" />}
@@ -346,7 +347,7 @@ export function AskBox({
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
-          {/* submit / stop — 44px target. Ink when ready, clearly muted when not. */}
+          {/* submit / stop — 36px circle. Ink when ready, clearly muted when not. */}
           {stopMode && onStop && !canSubmit ? (
             <Button
               size="icon"
@@ -354,9 +355,9 @@ export function AskBox({
               disabled={stopping}
               aria-label="Stop responding"
               title="Stop the running research / response"
-              className="press-scale h-11 w-11 shrink-0 rounded-full bg-foreground text-background shadow-elev-2 hover:bg-foreground/85"
+              className="press-scale h-9 w-9 shrink-0 rounded-full bg-foreground text-background shadow-elev-2 hover:bg-foreground/85"
             >
-              {stopping ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4 fill-current" />}
+              {stopping ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-3.5 w-3.5 fill-current" />}
             </Button>
           ) : (
             <>
@@ -368,9 +369,9 @@ export function AskBox({
                   disabled={stopping}
                   aria-label="Stop responding"
                   title="Stop the running research / response"
-                  className="press-scale h-11 w-11 shrink-0 rounded-full border-input text-muted-foreground hover:text-foreground"
+                  className="press-scale h-9 w-9 shrink-0 rounded-full border-input text-muted-foreground hover:text-foreground"
                 >
-                  {stopping ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-3.5 w-3.5 fill-current" />}
+                  {stopping ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-3 w-3.5 fill-current" />}
                 </Button>
               )}
               <Button
@@ -378,10 +379,10 @@ export function AskBox({
                 onClick={() => canSubmit && onSubmit()}
                 disabled={!canSubmit}
                 aria-label="Start research"
-                className={`press-scale h-11 w-11 shrink-0 rounded-full border-0 transition-all duration-200 ${
+                className={`press-scale spring-pop h-9 w-9 shrink-0 rounded-full border-0 transition-all duration-200 ${
                   canSubmit
-                    ? "spring-pop bg-primary text-white shadow-elev-primary hover:bg-primary/90"
-                    : "border border-input bg-transparent text-muted-foreground/60 hover:bg-muted/60"
+                    ? "bg-foreground text-background shadow-elev-2 hover:bg-foreground/85"
+                    : "bg-transparent text-muted-foreground/60 hover:bg-muted/60"
                 }`}
                 style={{ transitionTimingFunction: "cubic-bezier(0.25,0.1,0.25,1)" }}
               >

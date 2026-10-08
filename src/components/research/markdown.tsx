@@ -56,17 +56,17 @@ export function Markdown({ text, compact = false }: { text: string; compact?: bo
     const L = list;
     blocks.push(
       L.ordered ? (
-        <ol key={`b${k++}`} className="my-[18px] list-decimal space-y-[7px] pl-[22px] marker:font-medium marker:text-muted-foreground/70">
+        <ol key={`b${k++}`} className="my-[18px] list-decimal space-y-2 pl-[22px] marker:font-medium marker:text-muted-foreground/70">
           {L.items.map((it, i) => (
-            <li key={i} id={`ref-${i + 1}`} className="leading-[1.65]">
+            <li key={i} id={`ref-${i + 1}`} className="leading-[1.7]">
               {inline(it, `li${k}-${i}`)}
             </li>
           ))}
         </ol>
       ) : (
-        <ul key={`b${k++}`} className="my-[18px] space-y-[7px]">
+        <ul key={`b${k++}`} className="my-[18px] space-y-2">
           {L.items.map((it, i) => (
-            <li key={i} className="relative leading-[1.65] pl-[20px] before:absolute before:left-[2px] before:top-[0.72em] before:h-[4px] before:w-[4px] before:rounded-full before:bg-primary/70 before:content-['']">
+            <li key={i} className="relative leading-[1.7] pl-[20px] before:absolute before:left-[2px] before:top-[0.72em] before:h-[4px] before:w-[4px] before:rounded-full before:bg-primary/70 before:content-['']">
               {inline(it, `ul${k}-${i}`)}
             </li>
           ))}
@@ -151,13 +151,13 @@ export function Markdown({ text, compact = false }: { text: string; compact?: bo
     if (!line.trim()) continue;
     if (line.startsWith("### "))
       blocks.push(
-        <h3 key={`b${k++}`} className={`font-semibold tracking-[-0.018em] text-foreground ${compact ? "mt-4 mb-1.5 text-[15px]" : "mt-8 mb-2.5 text-[17.5px]"}`}>
+        <h3 key={`b${k++}`} className={`font-semibold tracking-[-0.018em] text-foreground ${compact ? "mt-4 mb-1.5 text-[15px]" : "mt-8 mb-2.5 text-[18px]"}`}>
           {inline(line.slice(4), `h3${k}`)}
         </h3>
       );
     else if (line.startsWith("## "))
       blocks.push(
-        <h2 key={`b${k++}`} className={`font-semibold tracking-[-0.02em] text-foreground ${compact ? "mt-5 mb-2 text-[16px]" : "mt-11 mb-3.5 border-b border-border/60 pb-2.5 text-[22px]"}`}>
+        <h2 key={`b${k++}`} className={`font-semibold tracking-[-0.022em] text-foreground ${compact ? "mt-5 mb-2 text-[16px]" : "mt-10 mb-3 border-b border-border/50 pb-2.5 text-[22px]"}`}>
           {inline(line.slice(3), `h2${k}`)}
         </h2>
       );
@@ -177,7 +177,7 @@ export function Markdown({ text, compact = false }: { text: string; compact?: bo
       );
     else
       blocks.push(
-        <p key={`b${k++}`} className={`leading-[1.75] ${compact ? "text-sm text-muted-foreground" : "my-4"}`}>
+        <p key={`b${k++}`} className={`leading-[1.75] ${compact ? "text-sm text-muted-foreground" : "my-[18px]"}`}>
           {inline(line, `p${k}`)}
         </p>
       );
@@ -190,5 +190,5 @@ export function Markdown({ text, compact = false }: { text: string; compact?: bo
         <code>{code.join("\n")}</code>
       </pre>
     );
-  return <div className={compact ? "" : "text-[15.5px]"}>{blocks}</div>;
+  return <div className={compact ? "" : "text-[16px]"}>{blocks}</div>;
 }

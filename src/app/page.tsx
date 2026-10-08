@@ -2,9 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTheme } from "next-themes";
+import type { LucideIcon } from "lucide-react";
 import {
-  ArrowLeft, ArrowUpRight, Compass, Gauge, Globe, House, LibraryBig, Loader2,
-  Moon, PanelLeftClose, PanelLeftOpen, Plus, Search as SearchIcon, Sun, Trash2, TrendingUp, Wifi, WifiOff,
+  ArrowLeft, ArrowUpRight, BadgeCheck, ChevronDown, Compass, Gauge, House, LibraryBig, Loader2,
+  Moon, PanelLeftClose, PanelLeftOpen, Plus, Scale, Search as SearchIcon, Settings2, ShieldCheck,
+  Sparkles, Sun, Trash2, TrendingUp, Wifi, WifiOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,13 +25,46 @@ import { saveTurn, getTurn, getThreadTurns, listHistory, deleteTurn, deleteThrea
 
 interface TrendingItem { title: string; url: string; domain: string; points: number; comments: number }
 
-/** One-tap starter questions — chosen to show what digdeep is *for*. */
-const SUGGESTIONS = [
-  "Why do AI search engines cite sources that don't support their claims?",
-  "Is Rust actually replacing C++ in new systems work?",
-  "What breaks first if the web's TLS PKI rotates overnight?",
-  "How honest are LLM citations across Perplexity, ChatGPT and Gemini?",
+/** One-tap starter chips — short enough to wear as pills, sharp enough to be real research. */
+const SUGGESTIONS: { icon: LucideIcon; label: string }[] = [
+  { icon: BadgeCheck, label: "How honest are AI citations?" },
+  { icon: Scale, label: "Is Rust replacing C++ yet?" },
+  { icon: ShieldCheck, label: "What breaks if TLS PKI rotates?" },
+  { icon: Sparkles, label: "What's new in deep research?" },
 ];
+
+/** Time-aware greeting — the room always knows what time it is. */
+function greeting(): string {
+  const h = new Date().getHours();
+  if (h < 5) return "Up late";
+  if (h < 12) return "Good morning";
+  if (h < 18) return "Good afternoon";
+  return "Good evening";
+}
+
+/** ChatGPT-style time grouping for sidebar recents. */
+function groupHistory(items: HistoryItem[]): { label: string; items: HistoryItem[] }[] {
+  const day = 86_400_000;
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const t0 = start.getTime();
+  const groups: { label: string; items: HistoryItem[] }[] = [
+    { label: "Today", items: [] },
+    { label: "Yesterday", items: [] },
+    { label: "Previous 7 days", items: [] },
+    { label: "Previous 30 days", items: [] },
+    { label: "Older", items: [] },
+  ];
+  for (const h of items.slice(0, 14)) {
+    const t = new Date(h.createdAt).getTime();
+    if (t >= t0) groups[0].items.push(h);
+    else if (t >= t0 - day) groups[1].items.push(h);
+    else if (t >= t0 - 7 * day) groups[2].items.push(h);
+    else if (t >= t0 - 30 * day) groups[3].items.push(h);
+    else groups[4].items.push(h);
+  }
+  return groups.filter((g) => g.items.length > 0);
+}
 
 const STATUS_DOT: Record<string, string> = {
   completed: "bg-primary",
@@ -96,7 +131,7 @@ function BackendsDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="glass max-h-[85vh] overflow-y-auto rounded-[20px] sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><Globe className="h-4 w-4 text-primary" /> Backends &amp; web search</DialogTitle>
+          <DialogTitle className="flex items-center gap-2"><Settings2 className="h-4 w-4 text-primary" /> Backends &amp; web search</DialogTitle>
           <DialogDescription>
             Keyless LLM failover chain, optional frontier keys, and the general-web search layer (P0). Everything
             defaults to free and keyless — keys are optional upgrades.
@@ -358,6 +393,7 @@ export default function Home() {
 
   // ---------- sidebar ----------
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const groupedHistory = useMemo(() => groupHistory(history), [history]);
 
   // ---------- stop-all ----------
   const [stoppingAll, setStoppingAll] = useState(false);
@@ -745,6 +781,35 @@ export default function Home() {
 
   const submitFollowUp = () => startResearch(followQuery, threadId, followDocs);
 
+  // ---------- scroll: jump-to-latest FAB + bottom-follow while streaming ----------
+  const mainRef = useRef<HTMLElement>(null);
+  const [showJump, setShowJump] = useState(false);
+  const onMainScroll = useCallback(() => {
+    const el = mainRef.current;
+    if (!el) return;
+    setShowJump(el.scrollHeight - el.scrollTop - el.clientHeight >= 140);
+  }, []);
+  // entering a thread → land on the latest turn instantly
+  useEffect(() => {
+    if (view !== "thread") return;
+    const el = mainRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+    setShowJump(false);
+  }, [view, threadId]);
+  // new content while pinned to the bottom → follow it (ChatGPT behavior)
+  useEffect(() => {
+    if (view !== "thread") return;
+    const el = mainRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 160;
+    if (atBottom) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+      setShowJump(false);
+    } else {
+      setShowJump(true);
+    }
+  }, [turns]);
+
   // global shortcuts: ⌘K opens the command palette, "/" focuses the ask box
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -822,7 +887,46 @@ export default function Home() {
           />
           <SidebarItem collapsed={!sidebarOpen} icon={<LibraryBig className="h-4.5 w-4.5" />} label="Library" onClick={() => { refreshHistory(); setHistoryOpen(true); }} />
         </nav>
-        <div className={`mt-auto space-y-1 border-t border-sidebar-border/70 pb-4 pt-3 ${sidebarOpen ? "px-3" : "px-1"}`}>
+
+        {/* recents — inline, time-grouped (the ChatGPT/Claude sidebar signature) */}
+        {sidebarOpen && groupedHistory.length > 0 && (
+          <div className="slim-scroll mt-4 min-h-0 flex-1 overflow-y-auto pb-1">
+            <p className="px-4 pb-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">Recents</p>
+            {groupedHistory.map((g) => (
+                <div key={g.label} className="mb-0.5">
+                  <p className="px-4 pb-0.5 pt-2 text-[11px] font-medium text-muted-foreground/70">{g.label}</p>
+                  {g.items.map((h) => {
+                    const isActive = view === "thread" && h.threadId != null && h.threadId === threadId;
+                    return (
+                      <button
+                        key={h.id}
+                        onClick={() => openFromHistory(h)}
+                        title={h.query}
+                        className={`flex h-8 w-full items-center gap-2.5 rounded-[10px] px-4 text-left text-[13px] transition-colors ${
+                          isActive
+                            ? "bg-accent font-medium text-foreground"
+                            : "text-foreground/75 hover:bg-accent/70 hover:text-foreground"
+                        }`}
+                      >
+                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT[h.status] ?? "bg-amber-500 pulse-dot"}`} aria-hidden />
+                        <span className="min-w-0 flex-1 truncate">{h.query}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ))
+            }
+            {history.length > 14 && (
+              <button
+                className="mt-1 px-4 py-1 text-xs text-primary hover:underline"
+                onClick={() => { refreshHistory(); setHistoryOpen(true); }}
+              >
+                View all in Library →
+              </button>
+            )}
+          </div>
+        )}
+        <div className={`mt-auto space-y-1 border-t border-sidebar-border pb-4 pt-3 ${sidebarOpen ? "px-3" : "px-1"}`}>
           <SidebarItem collapsed={!sidebarOpen} icon={<SearchIcon className="h-4.5 w-4.5" />} label="Backends & search" onClick={() => { loadPool(); setPoolOpen(true); }} />
           <SidebarItem
             collapsed={!sidebarOpen}
@@ -834,7 +938,7 @@ export default function Home() {
       </aside>
 
       {/* ---------- MAIN ---------- */}
-      <main className="slim-scroll relative flex-1 overflow-y-auto">
+      <main ref={mainRef} onScroll={onMainScroll} className="slim-scroll relative flex-1 overflow-y-auto">
         {/* mobile top bar — Apple glass nav */}
         <div className="glass-nav sticky top-0 z-30 flex items-center gap-2 px-4 py-3 md:hidden">
           {view === "thread" ? (
@@ -861,15 +965,18 @@ export default function Home() {
         </div>
 
         {view === "home" ? (
-          /* ================= HOME — a workspace, not a landing page ================= */
-          <div className="mx-auto w-full max-w-2xl px-4 pb-24 pt-[12vh]">
+          /* ================= HOME — the composer is the hero; everything else whispers ================= */
+          <div className="mx-auto w-full max-w-[768px] px-4 pb-24 pt-[12vh] sm:pt-[15vh]">
             <div className="rise-in stagger-1 flex flex-col items-center text-center">
-              <h1 className="text-balance text-[30px] font-bold leading-[1.12] tracking-[-0.028em] sm:text-[32px]">
-                What do you want to know?
+              <h1 className="text-balance text-[32px] font-semibold leading-[1.15] tracking-[-0.032em] text-foreground sm:text-[34px]">
+                {greeting()}
               </h1>
+              <p className="mt-2.5 font-serif text-[21px] leading-snug text-muted-foreground">
+                What should we dig into?
+              </p>
             </div>
 
-            <div className="rise-in stagger-2 mt-7">
+            <div className="rise-in stagger-2 mt-8">
               <AskBox
                 value={query}
                 onChange={setQuery}
@@ -893,47 +1000,24 @@ export default function Home() {
                 onDocs={setDocs}
                 inputId="ask-input"
               />
-              <p className="mt-2.5 text-center text-[12.5px] font-medium leading-relaxed text-foreground/60 dark:text-foreground/75">
+              <p className="mt-3 text-center text-[12.5px] font-medium leading-relaxed text-foreground/60 dark:text-foreground/80">
                 Free &amp; keyless · every claim cited · every citation audited · honest quality scores
               </p>
             </div>
 
-            {/* starter questions — a structured 2×2 menu, not a pile of pills */}
-            <div className="rise-in stagger-3 mt-9 grid gap-2 sm:grid-cols-2">
+            {/* starter chips — quiet pills, one violet icon each */}
+            <div className="rise-in stagger-3 mt-8 flex flex-wrap items-center justify-center gap-2">
               {SUGGESTIONS.map((s) => (
                 <button
-                  key={s}
-                  onClick={() => { setQuery(s); document.getElementById("ask-input")?.focus(); }}
-                  className="press-scale group flex w-full items-center gap-2.5 rounded-[14px] border border-border/80 bg-card px-4 py-3 text-left shadow-elev-1 transition-colors hover:border-primary/40 hover:bg-accent/40"
+                  key={s.label}
+                  onClick={() => { setQuery(s.label); document.getElementById("ask-input")?.focus(); }}
+                  className="press-scale group inline-flex h-10 max-w-full items-center gap-2 rounded-full border border-border/90 bg-card px-4 text-[13px] font-medium text-foreground/80 shadow-elev-1 transition-all duration-200 hover:border-primary/35 hover:bg-accent/40 hover:text-foreground"
                 >
-                  <span className="min-w-0 flex-1 text-[14px] font-medium leading-snug text-foreground/85 group-hover:text-foreground">{s}</span>
-                  <ArrowUpRight className="h-4 w-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                  <s.icon className="h-4 w-4 shrink-0 text-primary/85" strokeWidth={2.1} />
+                  <span className="truncate">{s.label}</span>
                 </button>
               ))}
             </div>
-
-            {/* recent threads — iOS inset grouped list */}
-            {history.length > 0 && (
-              <section className="rise-in stagger-4 mt-12">
-                <div className="mb-2.5 flex items-center justify-between px-1">
-                  <h2 className="text-[15px] font-semibold">Recent</h2>
-                  <button className="flex items-center gap-1 text-xs text-primary hover:underline" onClick={() => { refreshHistory(); setHistoryOpen(true); }}>
-                    Library <ArrowUpRight className="h-3 w-3" />
-                  </button>
-                </div>
-                <div className="divide-y rounded-[20px] border border-border/80 bg-card shadow-elev-1">
-                  {history.slice(0, 5).map((h) => (
-                    <button key={h.id} onClick={() => openFromHistory(h)} className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-accent">
-                      <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[h.status] ?? "bg-amber-500 pulse-dot"}`} />
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium">{h.query}</span>
-                      <span className="shrink-0 text-[11px] capitalize text-muted-foreground">{h.mode === "chat" ? "chat" : h.mode === "quick" ? "quick" : (h.preset === "custom" ? "custom" : h.preset)}</span>
-                      <span className="shrink-0 text-[11px] text-muted-foreground">{new Date(h.createdAt).toLocaleDateString()}</span>
-                    </button>
-                  ))}
-                </div>
-              </section>
-            )}
-
           </div>
         ) : view === "discover" ? (
           /* ================= DISCOVER — the web, editorially ================= */
@@ -973,6 +1057,17 @@ export default function Home() {
         ) : (
           /* ================= THREAD ================= */
           <div>
+            {/* jump to latest — appears when you scroll up mid-stream (ChatGPT behavior) */}
+            {showJump && view === "thread" && (
+              <button
+                onClick={() => mainRef.current?.scrollTo({ top: mainRef.current.scrollHeight, behavior: "smooth" })}
+                className="glass spring-pop press-scale fixed bottom-[104px] left-1/2 z-30 flex h-10 w-10 -translate-x-1/2 items-center justify-center rounded-full text-foreground shadow-elev-2"
+                aria-label="Jump to latest"
+                title="Jump to latest"
+              >
+                <ChevronDown className="h-5 w-5" />
+              </button>
+            )}
             {/* desktop toolbar — native-app chrome, glass over content */}
             <div className="glass-nav sticky top-0 z-30 hidden items-center gap-1 px-4 py-2 md:flex">
               <Button variant="ghost" size="icon" className="press-scale h-9 w-9 shrink-0 rounded-[12px]" onClick={goHome} aria-label="Back to home" title="Back">
@@ -986,7 +1081,7 @@ export default function Home() {
               </span>
             </div>
             <div className="mx-auto flex w-full max-w-[1140px] justify-center gap-8 px-4 pb-44 pt-6 sm:pt-8">
-              <div className="mx-auto w-full max-w-[768px] space-y-10">
+              <div className="mx-auto w-full max-w-[768px] space-y-12">
                 {turns.map((t) => (
                   <ThreadTurn
                     key={t.jobId}
@@ -1007,7 +1102,7 @@ export default function Home() {
               {lastTurn && (
                 <aside className="sticky top-6 hidden h-fit w-[300px] shrink-0 space-y-6 xl:block">
                   <div>
-                    <p className="mb-2 text-[13px] font-semibold">Thread</p>
+                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">Thread</p>
                     <div className="flex flex-wrap gap-1.5">
                       <span className="rounded-lg bg-muted px-2.5 py-1 text-[11px] font-medium capitalize text-muted-foreground">
                         {lastTurn.job?.mode === "chat" ? "chat" : lastTurn.job?.mode === "quick" ? "quick answer" : (lastTurn.job?.preset ?? mode)}
@@ -1029,7 +1124,7 @@ export default function Home() {
 
                   {allModels.length > 0 && (
                     <div>
-                      <p className="mb-2 text-[13px] font-semibold">Models used</p>
+                      <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">Models used</p>
                       <div className="space-y-1.5">
                         {allModels.map(([m, c]) => (
                           <div key={m} className="flex items-center justify-between rounded-[12px] border border-border/70 bg-card px-3 py-2">
@@ -1043,7 +1138,7 @@ export default function Home() {
 
                   {lastTurn.sources.length > 0 && (
                     <div className="max-h-[520px] overflow-hidden">
-                      <p className="mb-2 text-[13px] font-semibold">Sources · {lastTurn.sources.length}</p>
+                      <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">Sources · {lastTurn.sources.length}</p>
                       <div className="slim-scroll max-h-[460px] space-y-2 overflow-y-auto pr-1">
                         <SourcesPanel sources={lastTurn.sources} />
                       </div>

@@ -8,6 +8,7 @@
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", sans-serif;
+  --font-serif: "Charter", "New York", "Iowan Old Style", Georgia, "Times New Roman", serif;
   --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
@@ -58,10 +59,11 @@
   --primary-foreground: #ffffff;
   --secondary: #efeff2;
   --secondary-foreground: #1a1b1e;
-  --muted: #efeff2;
+  --muted: #ececf0;
   --muted-foreground: #6e6e76;
   --accent: rgba(26, 27, 30, 0.05);
-  --accent-foreground: #6d28d9;
+  /* neutral hover ink — color discipline: violet lives only in the brand moments */
+  --accent-foreground: #1a1b1e;
   --destructive: #e5484d;
   --border: rgba(26, 27, 30, 0.09);
   --input: rgba(26, 27, 30, 0.09);
@@ -94,21 +96,21 @@
   /* Warm charcoal — never pure black: keeps room for shadows and glows */
   --background: #0f1014;
   --foreground: #f4f4f6;
-  --card: #1a1b21;
+  --card: #1e1f26;
   --card-foreground: #f4f4f6;
-  --popover: #1e1f26;
+  --popover: #23242c;
   --popover-foreground: #f4f4f6;
   --primary: #8b5cf4;
   --primary-foreground: #ffffff;
   --secondary: #24252b;
   --secondary-foreground: #f4f4f6;
-  --muted: #24252b;
-  --muted-foreground: #a8a8b3;
-  --accent: rgba(255, 255, 255, 0.06);
+  --muted: #26272e;
+  --muted-foreground: #b3b3bf;
+  --accent: rgba(255, 255, 255, 0.07);
   --accent-foreground: #f4f4f6;
   --destructive: #ff5d5d;
-  --border: rgba(255, 255, 255, 0.08);
-  --input: rgba(255, 255, 255, 0.1);
+  --border: rgba(255, 255, 255, 0.11);
+  --input: rgba(255, 255, 255, 0.15);
   --ring: #8b5cf4;
   --chart-1: #8b5cf4;
   --chart-2: #64a7ff;
@@ -119,9 +121,9 @@
   --sidebar-foreground: #f4f4f6;
   --sidebar-primary: #8b5cf4;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: rgba(255, 255, 255, 0.06);
+  --sidebar-accent: rgba(255, 255, 255, 0.07);
   --sidebar-accent-foreground: #f4f4f6;
-  --sidebar-border: rgba(255, 255, 255, 0.06);
+  --sidebar-border: rgba(255, 255, 255, 0.09);
   --sidebar-ring: #8b5cf4;
   --elev-1: 0 1px 2px rgba(0, 0, 0, 0.4);
   --elev-2: 0 1px 2px rgba(0, 0, 0, 0.45), 0 8px 24px -8px rgba(0, 0, 0, 0.5), 0 16px 40px -16px rgba(0, 0, 0, 0.55);
@@ -161,17 +163,15 @@
   }
 }
 
-/* ---------- Ambient canvas — a whisper of light, not a disco ---------- */
+/* ---------- Ambient canvas — barely-there tint, the content is the color ---------- */
 .app-bg {
   background:
-    radial-gradient(1100px 480px at 50% -8%, color-mix(in oklab, var(--primary) 4.5%, transparent), transparent 62%),
-    radial-gradient(1600px 1000px at 50% 42%, transparent 55%, rgba(26, 27, 30, 0.035) 100%),
+    radial-gradient(1100px 460px at 50% -10%, color-mix(in oklab, var(--primary) 3%, transparent), transparent 58%),
     var(--background);
 }
 .dark .app-bg {
   background:
-    radial-gradient(1100px 500px at 50% -8%, color-mix(in oklab, var(--primary) 7%, transparent), transparent 60%),
-    radial-gradient(1600px 1000px at 50% 42%, transparent 55%, rgba(0, 0, 0, 0.4) 100%),
+    radial-gradient(1100px 460px at 50% -10%, color-mix(in oklab, var(--primary) 4.5%, transparent), transparent 56%),
     var(--background);
 }
 
@@ -249,6 +249,11 @@
   border: 1px solid var(--border);
   box-shadow: var(--elev-1);
 }
+/* ---------- Quiet surface — borderless inset for thinking / meta blocks ---------- */
+.surface-quiet {
+  background: color-mix(in oklab, var(--muted) 42%, transparent);
+  border: none;
+}
 
 /* ---------- Apple motion ---------- */
 .ease-apple {
@@ -297,6 +302,16 @@
   outline: none;
   box-shadow: 0 0 0 3px color-mix(in oklab, var(--primary) 45%, transparent);
 }
+/* ---------- composer — the hero element: gets the strongest elevation on focus ---------- */
+.composer-focus {
+  transition: border-color 220ms cubic-bezier(0.25, 0.1, 0.25, 1), box-shadow 220ms cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+.composer-focus:focus-within {
+  border-color: color-mix(in oklab, var(--primary) 28%, var(--border));
+  box-shadow:
+    0 0 0 4px color-mix(in oklab, var(--primary) 10%, transparent),
+    var(--elev-2);
+}
 .askbox-focus {
   transition: border-color 250ms cubic-bezier(0.25, 0.1, 0.25, 1), box-shadow 250ms cubic-bezier(0.25, 0.1, 0.25, 1);
 }
@@ -305,28 +320,35 @@
   box-shadow: 0 0 0 3.5px color-mix(in oklab, var(--primary) 12%, transparent), var(--elev-2);
 }
 
-/* ---------- chat: user bubble — accent ink, flatted reply corner ---------- */
+/* ---------- chat: user bubble — the one place color pops. Vertical violet gradient,
+     lit top edge, flatted reply corner. Everything else in the thread stays ink. ---------- */
 .chat-bubble-user {
-  background: var(--primary);
+  background: linear-gradient(178deg, #8b5cf6 0%, #7c3aed 52%, #6d28d9 100%);
   color: #fff;
-  border-radius: 20px;
+  border-radius: 22px;
   border-bottom-right-radius: 8px;
-  /* material: lit top edge + one breath of colored shadow — feels physical, not CSS-flat */
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.18),
-    0 1px 2px color-mix(in oklab, var(--primary) 32%, transparent);
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    0 1px 2px color-mix(in oklab, #7c3aed 30%, transparent);
 }
 .dark .chat-bubble-user {
-  background: #7c3aed;
+  background: linear-gradient(178deg, #a78bfa 0%, #8b5cf6 52%, #7c3aed 100%);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.22),
-    0 2px 12px color-mix(in oklab, #7c3aed 34%, transparent);
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    0 2px 12px color-mix(in oklab, #8b5cf6 32%, transparent);
 }
 @keyframes bubble-in {
   from { opacity: 0; transform: translateX(10px) scale(0.98); }
   to { opacity: 1; transform: translateX(0) scale(1); }
 }
 .bubble-in { animation: bubble-in 340ms cubic-bezier(0.25, 0.1, 0.25, 1) both; }
+
+/* ---------- chat: assistant content entrance ---------- */
+@keyframes message-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.message-in { animation: message-in 320ms cubic-bezier(0.25, 0.1, 0.25, 1) both; }
 
 /* ---------- chat: typing dots (iMessage-style waiting) ---------- */
 @keyframes typing-dot {

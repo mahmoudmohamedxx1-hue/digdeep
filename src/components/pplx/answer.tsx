@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import {
-  ArrowUpRight, BadgeCheck, Check, Copy, FileDown, FileText, RefreshCw,
+  BadgeCheck, Check, Copy, FileDown, FileText, RefreshCw,
   RotateCw, Share2, SquarePen, FastForward, XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -91,7 +91,7 @@ function QualityCard({ quality }: { quality: NonNullable<NonNullable<JobItem["st
   const circ = 2 * Math.PI * r;
   const pct = Math.max(0, Math.min(1, quality.overall / 10));
   return (
-    <div className="mt-10 rounded-[20px] border border-input bg-card p-5 shadow-elev-1">
+    <div className="surface-quiet mt-10 rounded-[20px] p-5">
       <div className="flex items-center gap-4">
         <span className="relative flex h-12 w-12 shrink-0 items-center justify-center" role="img" aria-label={`Overall quality ${quality.overall} out of 10`}>
           <svg viewBox="0 0 44 44" className="h-12 w-12 -rotate-90">
@@ -272,20 +272,20 @@ export function AnswerView({
       <div className="fade-up">
         {exec && (
           <div className="mb-7">
-            <p className="mb-2.5 text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Executive summary</p>
+            <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">Executive summary</p>
             <Markdown text={exec} />
           </div>
         )}
         {body && <Markdown text={isQuick ? body.replace(/^##\s.*\n+/, "") : body} />}
         {conclusion && (
           <div className="mt-10">
-            <p className="mb-2.5 text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Conclusion</p>
+            <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">Conclusion</p>
             <Markdown text={conclusion} />
           </div>
         )}
         {diff && (
           <div className="mt-10">
-            <p className="mb-2.5 text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">What changed since the last run</p>
+            <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">What changed since the last run</p>
             <Markdown text={diff} />
           </div>
         )}
@@ -373,20 +373,19 @@ export function AnswerView({
           </div>
         )}
 
-        {/* related questions */}
+        {/* related questions — quiet pills, not a form */}
         {related.length > 0 && (
           <div className="mt-10">
-            <p className="mb-2.5 text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Related</p>
-            <div className="divide-y divide-border/60 rounded-[16px] border border-input bg-card shadow-elev-1">
+            <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">Related</p>
+            <div className="flex flex-wrap gap-2">
               {related.map((q, i) => (
                 <button
                   key={i}
                   onClick={() => onFollowUp(q)}
-                  className="group flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-medium transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.03]"
+                  className="group inline-flex h-9 max-w-full items-center gap-2 rounded-full border border-border/90 bg-card px-3.5 text-[13px] font-medium text-foreground/80 shadow-elev-1 transition-all duration-200 hover:border-primary/35 hover:bg-accent/40 hover:text-foreground"
                 >
-                  <SquarePen className="h-4 w-4 shrink-0 text-muted-foreground/70" />
-                  <span className="min-w-0 flex-1">{q}</span>
-                  <ArrowUpRight className="h-4 w-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                  <SquarePen className="h-3.5 w-3.5 shrink-0 text-primary/80" />
+                  <span className="truncate">{q}</span>
                 </button>
               ))}
             </div>

@@ -188,7 +188,7 @@ export function StepsCard({
   };
 
   return (
-    <div className="overflow-hidden rounded-[20px] border border-input bg-card shadow-elev-1">
+    <div className="surface-quiet overflow-hidden rounded-[20px]">
       <button
         className="flex w-full items-center gap-2.5 px-4 py-3 text-left transition-colors hover:bg-accent"
         onClick={() => setOverride(!open)}
@@ -211,7 +211,7 @@ export function StepsCard({
       </button>
 
       {open && (
-        <div ref={bodyRef} className="slim-scroll max-h-[340px] overflow-y-auto border-t px-4 py-3">
+        <div ref={bodyRef} className="slim-scroll max-h-[340px] overflow-y-auto px-4 py-3">
           {rows.length === 0 && (
             <p className="flex items-center gap-2 px-1 py-2 text-sm text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" /> Starting research…
@@ -347,7 +347,7 @@ export function ChatThinking({
 
   if (live) {
     return (
-      <div className="fade-up rounded-[20px] border border-input bg-card px-4 py-3 shadow-elev-1">
+      <div className="surface-quiet fade-up rounded-[18px] px-4 py-3">
         <div className="flex items-center gap-2.5">
           <span className={`shrink-0 text-primary ${last.text ? "" : "pulse-dot"}`}>
             <Brain className="h-4 w-4" />

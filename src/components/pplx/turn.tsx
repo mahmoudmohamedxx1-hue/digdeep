@@ -9,20 +9,6 @@ import { LogoMark } from "@/components/pplx/logo";
 import type { Turn } from "@/components/research/types";
 import { ACTIVE_STATUSES } from "@/components/research/types";
 
-/** iMessage-style time divider — tiny, centered, easy to ignore until you need it. */
-function TurnTime({ iso }: { iso: string }) {
-  let label = "";
-  try {
-    const d = new Date(iso);
-    label = d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-  } catch { return null; }
-  return (
-    <div className="flex items-center justify-center" aria-hidden>
-      <span className="text-[10.5px] font-medium tracking-wide text-muted-foreground/60">{label}</span>
-    </div>
-  );
-}
-
 export function ThreadTurn({
   turn, showThinking, now, elapsedMs, onStop, onRetry, onFollowUp, onRerun, animate,
 }: {
@@ -41,7 +27,9 @@ export function ThreadTurn({
   if (!job) {
     return (
       <article className="space-y-4">
-        <div className="skeleton-line h-6 w-2/3 rounded-lg" />
+        <div className="flex justify-end">
+          <div className="skeleton-line h-10 w-2/3 rounded-[22px]" />
+        </div>
         <div className="skeleton-line h-24 rounded-[20px]" />
       </article>
     );
@@ -50,17 +38,16 @@ export function ThreadTurn({
   const isChat = job.mode === "chat";
 
   return (
-    <article className="space-y-3">
-      {/* time divider + user question — a real chat turn, not a document heading */}
-      {job.startedAt && <TurnTime iso={job.startedAt} />}
+    <article className="space-y-4">
+      {/* user question — right-aligned gradient bubble; the one place color pops */}
       <div className="flex justify-end">
-        <p className="bubble-in chat-bubble-user max-w-[85%] px-4 py-2.5 text-[15px] leading-[1.55]">
+        <p className="bubble-in chat-bubble-user max-w-[75%] whitespace-pre-wrap px-4 py-2.5 text-[15px] leading-[1.55]">
           {job.query}
         </p>
       </div>
 
       {/* assistant — avatar gutter on the left, content owns the rest */}
-      <div className="fade-up flex gap-3">
+      <div className="message-in flex gap-3">
         <LogoMark className="mt-0.5 h-7 w-7 shrink-0 rounded-[7.5px] shadow-elev-1" />
         <div className="min-w-0 flex-1 space-y-5">
           {active && (
