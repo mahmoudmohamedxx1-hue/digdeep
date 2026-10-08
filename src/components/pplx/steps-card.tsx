@@ -190,7 +190,7 @@ export function StepsCard({
   return (
     <div className="overflow-hidden rounded-[20px] border border-input bg-card shadow-elev-1">
       <button
-        className="flex w-full items-center gap-2.5 px-4 py-3 text-left transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.03]"
+        className="flex w-full items-center gap-2.5 px-4 py-3 text-left transition-colors hover:bg-accent"
         onClick={() => setOverride(!open)}
         aria-expanded={open}
       >

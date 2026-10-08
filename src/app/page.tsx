@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTheme } from "next-themes";
 import {
-  ArrowLeft, ArrowUpRight, Compass, Globe, House, LibraryBig, Loader2,
+  ArrowLeft, ArrowUpRight, Compass, Gauge, Globe, House, LibraryBig, Loader2,
   Moon, PanelLeftClose, PanelLeftOpen, Plus, Search as SearchIcon, Sun, Trash2, TrendingUp, Wifi, WifiOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -11,9 +11,10 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator, CommandShortcut } from "@/components/ui/command";
 import { toast } from "@/hooks/use-toast";
 import { LogoMark, LogoWord } from "@/components/pplx/logo";
-import { AskBox, MODE_PARAMS } from "@/components/pplx/ask-box";
+import { AskBox, MODE_PARAMS, MODES } from "@/components/pplx/ask-box";
 import { ThreadTurn } from "@/components/pplx/turn";
 import { SourcesPanel } from "@/components/pplx/sources-row";
 import type { AdvParams, AttachedDoc, HistoryItem, PoolEndpointUi, SearchSettingsUi, Turn } from "@/components/research/types";
@@ -21,6 +22,14 @@ import { ACTIVE_STATUSES, fmtElapsed } from "@/components/research/types";
 import { saveTurn, getTurn, getThreadTurns, listHistory, deleteTurn, deleteThread, clearAll, orphanTurn } from "@/lib/idb-store";
 
 interface TrendingItem { title: string; url: string; domain: string; points: number; comments: number }
+
+/** One-tap starter questions — chosen to show what digdeep is *for*. */
+const SUGGESTIONS = [
+  "Why do AI search engines cite sources that don't support their claims?",
+  "Is Rust actually replacing C++ in new systems work?",
+  "What breaks first if the web's TLS PKI rotates overnight?",
+  "How honest are LLM citations across Perplexity, ChatGPT and Gemini?",
+];
 
 const STATUS_DOT: Record<string, string> = {
   completed: "bg-primary",
@@ -37,8 +46,8 @@ function SidebarItem({
         onClick={onClick}
         title={label}
         aria-label={label}
-        className={`press-scale mx-auto flex h-11 w-11 items-center justify-center rounded-[12px] transition-colors ${
-          active ? "bg-primary/12 text-primary" : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+        className={`press-scale mx-auto flex h-11 w-11 items-center justify-center rounded-[10px] transition-colors ${
+          active ? "bg-accent text-foreground" : "text-foreground/70 hover:bg-accent/70 hover:text-foreground"
         }`}
       >
         {icon}
@@ -48,8 +57,8 @@ function SidebarItem({
   return (
     <button
       onClick={onClick}
-      className={`press-scale flex h-11 w-full items-center gap-3 rounded-[12px] px-3 text-sm font-medium transition-colors ${
-        active ? "bg-primary/12 text-primary" : "text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+      className={`press-scale flex h-11 w-full items-center gap-3 rounded-[10px] px-3 text-sm font-medium transition-colors ${
+        active ? "bg-accent text-foreground" : "text-foreground/70 hover:bg-accent/70 hover:text-foreground"
       }`}
     >
       {icon}
@@ -314,7 +323,7 @@ function BackendsDialog({
 export default function Home() {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
-  const [view, setView] = useState<"home" | "thread">("home");
+  const [view, setView] = useState<"home" | "thread" | "discover">("home");
 
   // ---------- form ----------
   const [query, setQuery] = useState("");
@@ -352,6 +361,9 @@ export default function Home() {
 
   // ---------- stop-all ----------
   const [stoppingAll, setStoppingAll] = useState(false);
+
+  // ---------- ⌘K command palette ----------
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   // ---------- backends & search (P0-1 / P2-4) ----------
   const [poolOpen, setPoolOpen] = useState(false);
@@ -733,16 +745,16 @@ export default function Home() {
 
   const submitFollowUp = () => startResearch(followQuery, threadId, followDocs);
 
-  // global focus shortcuts: ⌘K/Ctrl+K and "/" jump into the ask box
+  // global shortcuts: ⌘K opens the command palette, "/" focuses the ask box
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       const typing = e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        (view === "home" ? document.getElementById("ask-input") : document.getElementById("follow-input"))?.focus();
+        setPaletteOpen((v) => !v);
       } else if (e.key === "/" && !typing) {
         e.preventDefault();
-        (view === "home" ? document.getElementById("ask-input") : document.getElementById("follow-input"))?.focus();
+        (view === "thread" ? document.getElementById("follow-input") : document.getElementById("ask-input"))?.focus();
       }
     };
     window.addEventListener("keydown", h);
@@ -791,7 +803,7 @@ export default function Home() {
         <div className={sidebarOpen ? "px-3" : "px-1"}>
           <button
             onClick={goHome}
-            className={`press-scale flex h-10 items-center gap-2 rounded-[12px] bg-primary text-[13px] font-semibold text-primary-foreground shadow-elev-primary transition-colors hover:bg-primary/90 ${sidebarOpen ? "w-full justify-center" : "mx-auto w-11 justify-center px-0"}`}
+            className={`press-scale flex h-10 items-center gap-2 rounded-[10px] bg-foreground text-[13px] font-semibold text-background shadow-elev-2 transition-colors hover:bg-foreground/85 ${sidebarOpen ? "w-full justify-center" : "mx-auto w-11 justify-center px-0"}`}
             aria-label="New research"
             title="New research"
           >
@@ -805,11 +817,12 @@ export default function Home() {
             collapsed={!sidebarOpen}
             icon={<Compass className="h-4.5 w-4.5" />}
             label="Discover"
-            onClick={() => { goHome(); setTimeout(() => document.getElementById("discover")?.scrollIntoView({ behavior: "smooth" }), 80); }}
+            active={view === "discover"}
+            onClick={() => setView("discover")}
           />
           <SidebarItem collapsed={!sidebarOpen} icon={<LibraryBig className="h-4.5 w-4.5" />} label="Library" onClick={() => { refreshHistory(); setHistoryOpen(true); }} />
         </nav>
-        <div className={`mt-auto space-y-1 pb-4 ${sidebarOpen ? "px-3" : "px-1"}`}>
+        <div className={`mt-auto space-y-1 border-t border-sidebar-border/70 pb-4 pt-3 ${sidebarOpen ? "px-3" : "px-1"}`}>
           <SidebarItem collapsed={!sidebarOpen} icon={<SearchIcon className="h-4.5 w-4.5" />} label="Backends & search" onClick={() => { loadPool(); setPoolOpen(true); }} />
           <SidebarItem
             collapsed={!sidebarOpen}
@@ -817,11 +830,6 @@ export default function Home() {
             label={mounted && theme === "dark" ? "Light mode" : "Dark mode"}
             onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
           />
-          {sidebarOpen && (
-            <p className="px-3 pt-3 text-[10.5px] font-medium text-muted-foreground">
-              Free · no keys · local history
-            </p>
-          )}
         </div>
       </aside>
 
@@ -830,12 +838,18 @@ export default function Home() {
         {/* mobile top bar — Apple glass nav */}
         <div className="glass-nav sticky top-0 z-30 flex items-center gap-2 px-4 py-3 md:hidden">
           {view === "thread" ? (
-            <Button variant="ghost" size="icon" className="press-scale h-9 w-9 rounded-[12px]" onClick={goHome} aria-label="Back to home">
-              <ArrowLeft className="h-4 w-4" />
-            </Button>
-          ) : null}
-          <LogoMark className="h-6 w-6" />
-          <LogoWord className="text-sm" />
+            <>
+              <Button variant="ghost" size="icon" className="press-scale h-9 w-9 shrink-0 rounded-[12px]" onClick={goHome} aria-label="Back to home">
+                <ArrowLeft className="h-4 w-4" />
+              </Button>
+              <p className="min-w-0 flex-1 truncate text-[13px] font-medium">{turns[0]?.job?.query ?? "Research"}</p>
+            </>
+          ) : (
+            <>
+              <LogoMark className="h-6 w-6" />
+              <LogoWord className="text-sm" />
+            </>
+          )}
           <div className="ml-auto flex items-center gap-0.5">
             <Button variant="ghost" size="icon" className="press-scale h-9 w-9 rounded-[12px]" onClick={() => { refreshHistory(); setHistoryOpen(true); }} aria-label="Library">
               <LibraryBig className="h-4 w-4" />
@@ -847,19 +861,15 @@ export default function Home() {
         </div>
 
         {view === "home" ? (
-          /* ================= HOME — confident, product-first hero ================= */
-          <div className="mx-auto w-full max-w-2xl px-4 pb-24 pt-[13vh]">
+          /* ================= HOME — a workspace, not a landing page ================= */
+          <div className="mx-auto w-full max-w-2xl px-4 pb-24 pt-[12vh]">
             <div className="rise-in stagger-1 flex flex-col items-center text-center">
-              <LogoMark className="h-14 w-14 rounded-[16px] shadow-elev-3" />
-              <h1 className="mt-6 text-balance text-[32px] font-semibold leading-[1.12] tracking-[-0.025em] sm:text-[40px]">
+              <h1 className="text-balance text-[30px] font-bold leading-[1.12] tracking-[-0.028em] sm:text-[32px]">
                 What do you want to know?
               </h1>
-              <p className="mt-3 max-w-md text-pretty text-[15px] leading-relaxed text-muted-foreground">
-                Deep research that shows its work — every claim cited, every citation audited.
-              </p>
             </div>
 
-            <div className="rise-in stagger-2 mt-8">
+            <div className="rise-in stagger-2 mt-7">
               <AskBox
                 value={query}
                 onChange={setQuery}
@@ -883,14 +893,24 @@ export default function Home() {
                 onDocs={setDocs}
                 inputId="ask-input"
               />
+              <p className="mt-2.5 text-center text-[12.5px] font-medium leading-relaxed text-foreground/60 dark:text-foreground/75">
+                Free &amp; keyless · every claim cited · every citation audited · honest quality scores
+              </p>
             </div>
 
-            <p className="rise-in stagger-3 mt-3.5 flex items-center justify-center gap-2 text-center text-[11px] text-muted-foreground">
-              <span className="kbd">↵</span> research
-              <span className="opacity-40">·</span>
-              <span className="kbd">⇧↵</span> new line
-              <span className="hidden sm:inline"><span className="opacity-40">·</span> <span className="kbd">⌘K</span> focus</span>
-            </p>
+            {/* starter questions — a structured 2×2 menu, not a pile of pills */}
+            <div className="rise-in stagger-3 mt-9 grid gap-2 sm:grid-cols-2">
+              {SUGGESTIONS.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => { setQuery(s); document.getElementById("ask-input")?.focus(); }}
+                  className="press-scale group flex w-full items-center gap-2.5 rounded-[14px] border border-border/80 bg-card px-4 py-3 text-left shadow-elev-1 transition-colors hover:border-primary/40 hover:bg-accent/40"
+                >
+                  <span className="min-w-0 flex-1 text-[14px] font-medium leading-snug text-foreground/85 group-hover:text-foreground">{s}</span>
+                  <ArrowUpRight className="h-4 w-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                </button>
+              ))}
+            </div>
 
             {/* recent threads — iOS inset grouped list */}
             {history.length > 0 && (
@@ -901,9 +921,9 @@ export default function Home() {
                     Library <ArrowUpRight className="h-3 w-3" />
                   </button>
                 </div>
-                <div className="glass divide-y rounded-[20px]">
+                <div className="divide-y rounded-[20px] border border-border/80 bg-card shadow-elev-1">
                   {history.slice(0, 5).map((h) => (
-                    <button key={h.id} onClick={() => openFromHistory(h)} className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]">
+                    <button key={h.id} onClick={() => openFromHistory(h)} className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-accent">
                       <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[h.status] ?? "bg-amber-500 pulse-dot"}`} />
                       <span className="min-w-0 flex-1 truncate text-sm font-medium">{h.query}</span>
                       <span className="shrink-0 text-[11px] capitalize text-muted-foreground">{h.mode === "chat" ? "chat" : h.mode === "quick" ? "quick" : (h.preset === "custom" ? "custom" : h.preset)}</span>
@@ -914,43 +934,59 @@ export default function Home() {
               </section>
             )}
 
-            {/* discover / trending — editorial numbered list, not a card wall */}
-            <section className="rise-in stagger-5 mt-12" id="discover">
-              <div className="mb-2.5 flex items-center gap-1.5 px-1">
-                <TrendingUp className="h-3.5 w-3.5 text-primary" />
-                <h2 className="text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Trending on the web</h2>
+          </div>
+        ) : view === "discover" ? (
+          /* ================= DISCOVER — the web, editorially ================= */
+          <div className="mx-auto w-full max-w-2xl px-4 pb-24 pt-12">
+            <div className="flex items-center gap-2">
+              <TrendingUp className="h-4 w-4 text-primary" />
+              <h1 className="text-[22px] font-semibold tracking-[-0.02em]">Discover</h1>
+            </div>
+            <p className="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">
+              What the web is talking about right now — tap a line to turn it into a proper research question.
+            </p>
+            {trending.length === 0 ? (
+              <div className="mt-6 space-y-2">
+                {[...Array(8)].map((_, i) => <div key={i} className="skeleton-line h-[45px] rounded-[14px]" />)}
               </div>
-              {trending.length === 0 ? (
-                <div className="space-y-2">
-                  {[...Array(5)].map((_, i) => <div key={i} className="skeleton-line h-[45px] rounded-[14px]" />)}
-                </div>
-              ) : (
-                <div className="divide-y divide-border/60 rounded-[16px] border border-input bg-card shadow-elev-1">
-                  {trending.slice(0, 5).map((t, i) => (
-                    <button
-                      key={t.url}
-                      onClick={() => { setQuery(t.title); document.getElementById("ask-input")?.focus(); window.scrollTo({ top: 0, behavior: "smooth" }); }}
-                      className="group flex w-full items-baseline gap-3.5 px-4 py-[13px] text-left transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.03]"
-                      title={`Research: ${t.title}`}
-                    >
-                      <span className="w-4 shrink-0 text-[13px] font-semibold tabular-nums text-muted-foreground/60">{i + 1}</span>
-                      <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{t.title}</span>
-                      <span className="hidden shrink-0 items-center gap-1.5 text-[11px] text-foreground/60 dark:text-foreground/55 sm:flex">
-                        <span className="truncate">{t.domain}</span>
-                        <span className="opacity-50">▲ {t.points}</span>
-                      </span>
-                      <ArrowUpRight className="h-3.5 w-3.5 shrink-0 self-center text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
-                    </button>
-                  ))}
-                </div>
-              )}
-            </section>
+            ) : (
+              <div className="mt-6 divide-y divide-border/70 overflow-hidden rounded-[20px] border border-border/80 bg-card shadow-elev-1">
+                {trending.slice(0, 10).map((t, i) => (
+                  <button
+                    key={t.url}
+                    onClick={() => { setQuery(t.title); setView("home"); }}
+                    className="group flex w-full items-center gap-3.5 px-4 py-3 text-left transition-colors hover:bg-accent"
+                    title={`Research: ${t.title}`}
+                  >
+                    <span className="w-4 shrink-0 text-[13px] font-semibold tabular-nums text-muted-foreground/50">{i + 1}</span>
+                    <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{t.title}</span>
+                    <span className="hidden shrink-0 items-center gap-1.5 text-[11px] tabular-nums text-muted-foreground sm:flex">
+                      <span className="truncate">{t.domain}</span>
+                      <span className="opacity-50">▲ {t.points}</span>
+                    </span>
+                    <ArrowUpRight className="h-3.5 w-3.5 shrink-0 self-center text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         ) : (
           /* ================= THREAD ================= */
           <div>
-            <div className="mx-auto flex w-full max-w-[1140px] justify-center gap-8 px-4 pb-44 pt-6 sm:pt-10">
-              <div className="mx-auto w-full max-w-[768px] space-y-14">
+            {/* desktop toolbar — native-app chrome, glass over content */}
+            <div className="glass-nav sticky top-0 z-30 hidden items-center gap-1 px-4 py-2 md:flex">
+              <Button variant="ghost" size="icon" className="press-scale h-9 w-9 shrink-0 rounded-[12px]" onClick={goHome} aria-label="Back to home" title="Back">
+                <ArrowLeft className="h-4 w-4" />
+              </Button>
+              <p className="min-w-0 flex-1 truncate px-2 text-center text-[13px] font-medium text-foreground/85">
+                {turns[0]?.job?.query ?? "Research thread"}
+              </p>
+              <span className="mr-1 hidden shrink-0 rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium capitalize text-muted-foreground lg:inline-flex">
+                {lastTurn?.job?.mode === "chat" ? "chat" : lastTurn?.job?.mode === "quick" ? "quick answer" : (lastTurn?.job?.preset ?? mode)}
+              </span>
+            </div>
+            <div className="mx-auto flex w-full max-w-[1140px] justify-center gap-8 px-4 pb-44 pt-6 sm:pt-8">
+              <div className="mx-auto w-full max-w-[768px] space-y-10">
                 {turns.map((t) => (
                   <ThreadTurn
                     key={t.jobId}
@@ -996,7 +1032,7 @@ export default function Home() {
                       <p className="mb-2 text-[13px] font-semibold">Models used</p>
                       <div className="space-y-1.5">
                         {allModels.map(([m, c]) => (
-                          <div key={m} className="glass flex items-center justify-between rounded-[12px] px-3 py-2">
+                          <div key={m} className="flex items-center justify-between rounded-[12px] border border-border/70 bg-card px-3 py-2">
                             <span className="font-mono text-[11px]">{m}</span>
                             <span className="text-[11px] text-muted-foreground">{c} steps</span>
                           </div>
@@ -1051,19 +1087,56 @@ export default function Home() {
           </div>
         )}
 
-        {/* desktop floating new-thread button */}
-        {view === "thread" && (
-          <Button
-            size="icon"
-            className="press-scale fixed bottom-24 right-6 z-20 hidden h-12 w-12 rounded-full bg-primary text-primary-foreground shadow-elev-primary hover:bg-primary/90 md:flex"
-            onClick={goHome}
-            aria-label="New research"
-            title="New research"
-          >
-            <Plus className="h-5 w-5" />
-          </Button>
-        )}
       </main>
+
+      {/* ---------- ⌘K COMMAND PALETTE ---------- */}
+      <CommandDialog open={paletteOpen} onOpenChange={setPaletteOpen}>
+        <CommandInput placeholder="Type a command or search…" />
+        <CommandList>
+          <CommandEmpty>Nothing found.</CommandEmpty>
+          <CommandGroup heading="Actions">
+            <CommandItem onSelect={() => { setPaletteOpen(false); goHome(); setTimeout(() => document.getElementById("ask-input")?.focus(), 60); }}>
+              <Plus className="h-4 w-4" /> New research <CommandShortcut>⌘K then ↵</CommandShortcut>
+            </CommandItem>
+            <CommandItem onSelect={() => { setPaletteOpen(false); setView("discover"); }}>
+              <Compass className="h-4 w-4" /> Discover — trending on the web
+            </CommandItem>
+            <CommandItem onSelect={() => { setPaletteOpen(false); refreshHistory(); setHistoryOpen(true); }}>
+              <LibraryBig className="h-4 w-4" /> Library — saved threads
+            </CommandItem>
+            <CommandItem onSelect={() => { setPaletteOpen(false); setTheme(theme === "dark" ? "light" : "dark"); }}>
+              {mounted && theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              {mounted && theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            </CommandItem>
+            <CommandItem onSelect={() => { setPaletteOpen(false); loadPool(); setPoolOpen(true); }}>
+              <SearchIcon className="h-4 w-4" /> Backends &amp; web search
+            </CommandItem>
+          </CommandGroup>
+          <CommandSeparator />
+          <CommandGroup heading="Research depth">
+            {MODES.map((m) => (
+              <CommandItem key={m.id} onSelect={() => { setPaletteOpen(false); applyMode(m.id); }}>
+                <Gauge className="h-4 w-4" />
+                {m.label} <span className="text-muted-foreground">· {m.hint}</span>
+                {mode === m.id && <CommandShortcut>current</CommandShortcut>}
+              </CommandItem>
+            ))}
+          </CommandGroup>
+          {history.length > 0 && (
+            <>
+              <CommandSeparator />
+              <CommandGroup heading="Recent threads">
+                {history.slice(0, 5).map((h) => (
+                  <CommandItem key={h.id} onSelect={() => { setPaletteOpen(false); openFromHistory(h); }}>
+                  <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT[h.status] ?? "bg-amber-500"}`} />
+                  <span className="truncate">{h.query}</span>
+                </CommandItem>
+                ))}
+              </CommandGroup>
+            </>
+          )}
+        </CommandList>
+      </CommandDialog>
 
       {/* ---------- LIBRARY SHEET (this browser's IndexedDB) ---------- */}
       <Sheet open={historyOpen} onOpenChange={setHistoryOpen}>

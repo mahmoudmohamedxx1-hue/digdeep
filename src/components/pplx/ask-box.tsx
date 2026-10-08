@@ -1,11 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, ChevronDown, FileText, Infinity as InfinityIcon, Loader2, Paperclip, Plus, Settings2, Sparkles, BrainCircuit, Square, X } from "lucide-react";
+import { ArrowUp, ChevronDown, FileText, Gauge, Infinity as InfinityIcon, Loader2, Paperclip, Plus, Settings2, Square, X, BrainCircuit } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Slider } from "@/components/ui/slider";
-import { Switch } from "@/components/ui/switch";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { AdvParams, AttachedDoc } from "@/components/research/types";
@@ -60,6 +59,11 @@ function AdvRow({
       />
     </div>
   );
+}
+
+/** quiet popover section label */
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">{children}</p>;
 }
 
 export function AskBox({
@@ -140,7 +144,7 @@ export function AskBox({
   };
 
   return (
-    <div className="askbox-focus group relative rounded-[20px] border border-input bg-card shadow-elev-2">
+    <div className="askbox-focus group relative rounded-[16px] border border-input bg-card shadow-elev-1">
       <Textarea
         ref={taRef}
         id={inputId}
@@ -155,7 +159,7 @@ export function AskBox({
         placeholder={placeholder}
         aria-label="Research question"
         rows={1}
-        className={`resize-none border-0 bg-transparent px-4.5 pb-1 pt-4 text-[16px] leading-relaxed shadow-none focus-visible:ring-0 ${compact ? "min-h-[46px]" : "min-h-[56px]"}`}
+        className={`resize-none border-0 bg-transparent px-4 pb-1.5 pt-3 text-[16px] leading-[1.6] shadow-none focus-visible:ring-0 ${compact ? "min-h-[46px]" : "min-h-[60px]"}`}
       />
 
       {/* attached documents (P2-3) */}
@@ -177,7 +181,7 @@ export function AskBox({
         </div>
       )}
 
-      <div className="flex items-center gap-2 px-3 pb-3 pt-1">
+      <div className="flex items-center gap-1 px-2.5 pb-2.5 pt-1.5">
         {/* attach documents */}
         {onDocs && (
           <>
@@ -192,7 +196,7 @@ export function AskBox({
               tabIndex={-1}
             />
             <button
-              className="press-scale flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="press-scale flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               onClick={() => fileRef.current?.click()}
               aria-label="Attach documents as ground-truth sources"
               title="Attach .txt / .md documents — they become ground-truth sources for this research"
@@ -202,20 +206,20 @@ export function AskBox({
           </>
         )}
 
-        {/* + settings (advanced) */}
+        {/* all settings live here — one quiet gear, zero footer noise */}
         <Popover open={settingsOpen} onOpenChange={setSettingsOpen}>
           <PopoverTrigger asChild>
             <button
-              className={`press-scale flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${advDirty ? "bg-primary/10 text-primary hover:bg-primary/15" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
-              aria-label="Advanced research settings"
-              title="Advanced settings — unlimited budgets, language"
+              className={`press-scale flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${advDirty || !showThinking ? "bg-primary/10 text-primary hover:bg-primary/15" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}
+              aria-label="Research settings"
+              title="Research settings — budgets, language, backend, visible thinking"
             >
               <Settings2 className="h-[17px] w-[17px]" />
             </button>
           </PopoverTrigger>
-          <PopoverContent align="start" className="glass w-[340px] rounded-[20px] p-4" side="top">
+          <PopoverContent align="start" className="glass w-[352px] rounded-[20px] p-4" side="top">
             <div className="mb-3 flex items-center justify-between">
-              <p className="text-sm font-semibold">Advanced settings</p>
+              <p className="text-sm font-semibold">Research settings</p>
               {advDirty && (
                 <button
                   className="flex items-center gap-1 text-[11px] text-primary hover:underline"
@@ -225,11 +229,67 @@ export function AskBox({
                 </button>
               )}
             </div>
+
             <div className="space-y-4">
-              <AdvRow label="Aspects (breadth)" value={adv.breadth} min={1} max={16} onChange={(v) => setAdvKey("breadth", v)} />
-              <AdvRow label="Rounds per aspect" value={adv.depth} min={1} max={12} onChange={(v) => setAdvKey("depth", v)} />
-              <AdvRow label="Max sources" value={adv.maxSources} min={4} max={300} onChange={(v) => setAdvKey("maxSources", v)} />
-              <AdvRow label="Time budget" value={adv.maxMinutes} min={5} max={1440} unit=" min" onChange={(v) => setAdvKey("maxMinutes", v)} />
+              {/* visible thinking */}
+              <div className="flex items-center justify-between rounded-[12px] border bg-muted/40 px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <BrainCircuit className={`h-4 w-4 ${showThinking ? "text-primary" : "text-muted-foreground"}`} />
+                  <div>
+                    <p className="text-xs font-medium">Visible thinking</p>
+                    <p className="text-[11px] text-muted-foreground">Show raw reasoning while it works</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => onShowThinking(!showThinking)}
+                  role="switch"
+                  aria-checked={showThinking}
+                  aria-label="Toggle visible thinking"
+                  className={`relative h-[26px] w-[44px] shrink-0 rounded-full transition-colors duration-200 ${showThinking ? "bg-primary" : "bg-muted-foreground/25"}`}
+                >
+                  <span
+                    className={`absolute top-[3px] h-5 w-5 rounded-full bg-white shadow-sm transition-all duration-200 ${showThinking ? "left-[21px]" : "left-[3px]"}`}
+                    style={{ transitionTimingFunction: "cubic-bezier(0.25,0.1,0.25,1)" }}
+                  />
+                </button>
+              </div>
+
+              {/* backend */}
+              <div>
+                <SectionLabel>LLM backend — keyless</SectionLabel>
+                <div className="space-y-1">
+                  {([
+                    ["auto", "Auto", "GLM-5.3-Flash → GLM-4.5-Flash → LLM7 → Pollinations"],
+                    ["glm", "GLM Flash", "z.ai SDK — always free, no key"],
+                    ["pool", "Keyless pool only", "LLM7 / Pollinations / your endpoints"],
+                  ] as const).map(([id, label, desc]) => (
+                    <button
+                      key={id}
+                      onClick={() => onModelPref(id)}
+                      className={`flex w-full items-start gap-2.5 rounded-[12px] px-3 py-2 text-left transition-colors ${modelPref === id ? "bg-primary/10" : "hover:bg-accent"}`}
+                    >
+                      <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${modelPref === id ? "bg-primary" : "bg-muted-foreground/30"}`} />
+                      <span className="min-w-0">
+                        <span className="block text-xs font-medium">{label}</span>
+                        <span className="block text-[11px] leading-snug text-muted-foreground">{desc}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* budgets */}
+              <div>
+                <SectionLabel>Budgets{advDirty ? " · custom" : ""}</SectionLabel>
+                <div className="space-y-4">
+                  <AdvRow label="Aspects (breadth)" value={adv.breadth} min={1} max={16} onChange={(v) => setAdvKey("breadth", v)} />
+                  <AdvRow label="Rounds per aspect" value={adv.depth} min={1} max={12} onChange={(v) => setAdvKey("depth", v)} />
+                  <AdvRow label="Max sources" value={adv.maxSources} min={4} max={300} onChange={(v) => setAdvKey("maxSources", v)} />
+                  <AdvRow label="Time budget" value={adv.maxMinutes} min={5} max={1440} unit=" min" onChange={(v) => setAdvKey("maxMinutes", v)} />
+                </div>
+              </div>
+
+              {/* language */}
               <div className="flex items-center justify-between rounded-[12px] border bg-muted/40 px-3 py-2">
                 <div>
                   <p className="text-xs font-medium">Report language</p>
@@ -244,6 +304,14 @@ export function AskBox({
                   {LANGUAGES.map((l) => <option key={l}>{l}</option>)}
                 </select>
               </div>
+
+              <button
+                onClick={() => { setSettingsOpen(false); onManagePool(); }}
+                className="flex w-full items-center justify-center gap-1.5 rounded-[12px] border border-dashed py-2 text-[12px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary"
+              >
+                <Plus className="h-3.5 w-3.5" /> Manage backends &amp; web search
+              </button>
+
               <p className="text-[11px] leading-relaxed text-muted-foreground">
                 ∞ = truly unlimited — the agent keeps researching until its own self-critique says coverage is
                 sufficient (with a hidden 20-round-per-aspect safety ceiling). Aspects run in parallel; honest time estimates update live.
@@ -252,76 +320,33 @@ export function AskBox({
           </PopoverContent>
         </Popover>
 
-        {/* mode pill (depth selector) */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button className="press-scale flex h-8 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
-              <Sparkles className="h-3.5 w-3.5 text-primary" />
-              {modeLabel}
-              <ChevronDown className="h-3 w-3 opacity-50" />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="glass w-72 rounded-[16px]">
-            <DropdownMenuLabel className="text-xs text-muted-foreground">Research depth</DropdownMenuLabel>
-            {MODES.map((m) => (
-              <DropdownMenuItem key={m.id} onClick={() => onMode(m.id)} className={`gap-2 ${mode === m.id ? "bg-primary/10" : ""}`}>
-                <span className="flex min-w-0 flex-col">
-                  <span className="flex items-center gap-1.5 text-sm font-medium">
-                    {m.id === "unlimited" && <InfinityIcon className="h-3.5 w-3.5 text-primary" />}
-                    {m.label}
-                    <span className="text-[10px] font-normal text-muted-foreground">{m.hint}</span>
-                  </span>
-                  <span className="text-[11px] text-muted-foreground">{m.desc}</span>
-                </span>
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        {/* visible thinking toggle */}
-        <button
-          onClick={() => onShowThinking(!showThinking)}
-          className={`press-scale flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${showThinking ? "bg-primary/10 text-primary hover:bg-primary/15" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
-          title="Show the model's raw thinking in the research steps"
-          aria-pressed={showThinking}
-          aria-label="Toggle visible thinking"
-        >
-          <BrainCircuit className="h-[17px] w-[17px]" />
-        </button>
-
-        <div className="ml-auto flex items-center gap-2">
-          {/* model chip */}
+        <div className="ml-auto flex items-center gap-1">
+          {/* depth pill — grouped with the action cluster for visual balance */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="press-scale hidden h-8 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:flex" title="Keyless LLM backend">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 pulse-dot" />
-                {modelPref === "auto" ? "Auto" : modelPref === "glm" ? "GLM Flash" : "Pool"}
+              <button className="press-scale flex h-8 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">
+                <Gauge className="h-3.5 w-3.5 text-primary/80" />
+                {modeLabel}
                 <ChevronDown className="h-3 w-3 opacity-50" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="glass w-72 rounded-[16px]">
-              <DropdownMenuLabel className="text-xs text-muted-foreground">Keyless LLM backend</DropdownMenuLabel>
-              {([
-                ["auto", "Auto — failover chain", "GLM-5.3-Flash → GLM-4.5-Flash → LLM7 → Pollinations → custom"],
-                ["glm", "GLM Flash (z.ai SDK)", "GLM-5.3-Flash → GLM-4.5-Flash — always free, no key"],
-                ["pool", "Keyless pool only", "LLM7 / Pollinations / your endpoints"],
-              ] as const).map(([id, label, desc]) => (
-                <DropdownMenuItem key={id} onClick={() => onModelPref(id)} className={`gap-2 ${modelPref === id ? "bg-primary/10" : ""}`}>
-                  <span className={`h-2 w-2 shrink-0 rounded-full ${modelPref === id ? "bg-primary" : "bg-muted-foreground/30"}`} />
-                  <span className="flex flex-col">
-                    <span className="text-sm font-medium">{label}</span>
-                    <span className="text-[11px] text-muted-foreground">{desc}</span>
+              <DropdownMenuLabel className="text-xs text-muted-foreground">Research depth</DropdownMenuLabel>
+              {MODES.map((m) => (
+                <DropdownMenuItem key={m.id} onClick={() => onMode(m.id)} className={`gap-2 ${mode === m.id ? "bg-primary/10" : ""}`}>
+                  <span className="flex min-w-0 flex-col">
+                    <span className="flex items-center gap-1.5 text-sm font-medium">
+                      {m.id === "unlimited" && <InfinityIcon className="h-3.5 w-3.5 text-primary" />}
+                      {m.label}
+                      <span className="text-[10px] font-normal text-muted-foreground">{m.hint}</span>
+                    </span>
+                    <span className="text-[11px] text-muted-foreground">{m.desc}</span>
                   </span>
                 </DropdownMenuItem>
               ))}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={onManagePool}>
-                <Plus className="h-4 w-4" /> Manage backends &amp; search…
-              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-
-          {/* submit / stop — 44px Apple target, foreground ink like a native compose field */}
+          {/* submit / stop — 44px target. Ink when ready, clearly muted when not. */}
           {stopMode && onStop && !canSubmit ? (
             <Button
               size="icon"
@@ -353,7 +378,12 @@ export function AskBox({
                 onClick={() => canSubmit && onSubmit()}
                 disabled={!canSubmit}
                 aria-label="Start research"
-                className="press-scale h-11 w-11 shrink-0 rounded-full bg-foreground text-background shadow-elev-1 transition-all hover:bg-foreground/85 disabled:opacity-25 disabled:shadow-none"
+                className={`press-scale h-11 w-11 shrink-0 rounded-full border-0 transition-all duration-200 ${
+                  canSubmit
+                    ? "spring-pop bg-primary text-white shadow-elev-primary hover:bg-primary/90"
+                    : "border border-input bg-transparent text-muted-foreground/60 hover:bg-muted/60"
+                }`}
+                style={{ transitionTimingFunction: "cubic-bezier(0.25,0.1,0.25,1)" }}
               >
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-[18px] w-[18px]" strokeWidth={2.5} />}
               </Button>

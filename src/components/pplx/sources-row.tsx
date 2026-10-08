@@ -27,7 +27,7 @@ export function SourcesRow({ sources }: { sources: SourceItem[] }) {
   const overflow = sources.length - visible.length;
   return (
     <div className="fade-up flex min-w-0 items-center gap-2.5">
-      <span className="text-[13px] font-semibold">Sources</span>
+      <span className="text-[12px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">Sources</span>
       <div className="flex min-w-0 items-center -space-x-1.5">
         {visible.map((s, i) => {
           const linkable = !s.url.startsWith("attachment://");
@@ -70,10 +70,10 @@ export function SourcesPanel({ sources }: { sources: SourceItem[] }) {
             <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-primary/10 text-[11px] font-semibold tabular-nums text-primary">{i + 1}</span>
             <span className="min-w-0 flex-1">
               <span className="line-clamp-2 text-[13px] font-medium leading-snug">{s.title}</span>
-              <span className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <span className="mt-1 flex items-center gap-1.5 text-[11px] text-foreground/60">
                 <Favicon domain={s.domain} className="h-3.5 w-3.5" />
                 {s.domain}
-                {s.words > 0 && <span className="opacity-60">· {s.words.toLocaleString()} words read</span>}
+                {s.words > 0 && <span className="opacity-70">· {s.words.toLocaleString()} words read</span>}
               </span>
             </span>
           </>

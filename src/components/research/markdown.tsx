@@ -177,7 +177,7 @@ export function Markdown({ text, compact = false }: { text: string; compact?: bo
       );
     else
       blocks.push(
-        <p key={`b${k++}`} className={`leading-[1.72] ${compact ? "text-sm text-muted-foreground" : "my-[14px]"}`}>
+        <p key={`b${k++}`} className={`leading-[1.75] ${compact ? "text-sm text-muted-foreground" : "my-4"}`}>
           {inline(line, `p${k}`)}
         </p>
       );

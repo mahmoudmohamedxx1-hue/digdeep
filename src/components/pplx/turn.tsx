@@ -5,8 +5,23 @@ import { Button } from "@/components/ui/button";
 import { StepsCard, ChatThinking } from "@/components/pplx/steps-card";
 import { SourcesRow } from "@/components/pplx/sources-row";
 import { AnswerView } from "@/components/pplx/answer";
+import { LogoMark } from "@/components/pplx/logo";
 import type { Turn } from "@/components/research/types";
 import { ACTIVE_STATUSES } from "@/components/research/types";
+
+/** iMessage-style time divider — tiny, centered, easy to ignore until you need it. */
+function TurnTime({ iso }: { iso: string }) {
+  let label = "";
+  try {
+    const d = new Date(iso);
+    label = d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  } catch { return null; }
+  return (
+    <div className="flex items-center justify-center" aria-hidden>
+      <span className="text-[10.5px] font-medium tracking-wide text-muted-foreground/60">{label}</span>
+    </div>
+  );
+}
 
 export function ThreadTurn({
   turn, showThinking, now, elapsedMs, onStop, onRetry, onFollowUp, onRerun, animate,
@@ -35,50 +50,62 @@ export function ThreadTurn({
   const isChat = job.mode === "chat";
 
   return (
-    <article className="space-y-5">
-      {/* query as thread title */}
-      <div className="flex items-start justify-between gap-3">
-        <h2 className={`tracking-[-0.022em] ${isChat ? "text-[19px] font-semibold leading-snug sm:text-xl" : "text-[22px] font-semibold leading-snug sm:text-2xl"}`}>{job.query}</h2>
-        {active && (
-          <Button
-            size="sm"
-            variant="outline"
-            className="press-scale h-9 shrink-0 gap-1.5 rounded-full text-xs"
-            onClick={onStop}
-          >
-            <Square className="h-3 w-3 fill-current" /> Stop
-          </Button>
-        )}
+    <article className="space-y-3">
+      {/* time divider + user question — a real chat turn, not a document heading */}
+      {job.startedAt && <TurnTime iso={job.startedAt} />}
+      <div className="flex justify-end">
+        <p className="bubble-in chat-bubble-user max-w-[85%] px-4 py-2.5 text-[15px] leading-[1.55]">
+          {job.query}
+        </p>
       </div>
 
-      {/* steps (visible thinking, honest check-ins, self-critique) — research turns;
-          chat turns get a compact live-thinking strip instead */}
-      {isChat ? (
-        <ChatThinking events={turn.events} active={active} showThinking={showThinking} now={now} />
-      ) : (
-        <StepsCard
-          events={turn.events}
-          active={active}
-          stage={job.stage}
-          elapsedMs={elapsedMs}
-          showThinking={showThinking}
-          now={now}
-        />
-      )}
+      {/* assistant — avatar gutter on the left, content owns the rest */}
+      <div className="fade-up flex gap-3">
+        <LogoMark className="mt-0.5 h-7 w-7 shrink-0 rounded-[7.5px] shadow-elev-1" />
+        <div className="min-w-0 flex-1 space-y-5">
+          {active && (
+            <div className="flex justify-end">
+              <Button
+                size="sm"
+                variant="outline"
+                className="press-scale h-7 shrink-0 gap-1.5 rounded-full border-border/70 px-2.5 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+                onClick={onStop}
+              >
+                <Square className="h-2.5 w-2.5 fill-current" /> Stop
+              </Button>
+            </div>
+          )}
 
-      {/* sources row */}
-      <SourcesRow sources={turn.sources} />
+          {/* steps (visible thinking, honest check-ins, self-critique) — research turns;
+              chat turns get a compact live-thinking strip instead */}
+          {isChat ? (
+            <ChatThinking events={turn.events} active={active} showThinking={showThinking} now={now} />
+          ) : (
+            <StepsCard
+              events={turn.events}
+              active={active}
+              stage={job.stage}
+              elapsedMs={elapsedMs}
+              showThinking={showThinking}
+              now={now}
+            />
+          )}
 
-      {/* streaming answer */}
-      <AnswerView
-        job={job}
-        sources={turn.sources}
-        sections={turn.sections}
-        animate={animate}
-        onRetry={onRetry}
-        onFollowUp={onFollowUp}
-        onRerun={onRerun ? () => onRerun(job.query) : undefined}
-      />
+          {/* sources row */}
+          <SourcesRow sources={turn.sources} />
+
+          {/* streaming answer */}
+          <AnswerView
+            job={job}
+            sources={turn.sources}
+            sections={turn.sections}
+            animate={animate}
+            onRetry={onRetry}
+            onFollowUp={onFollowUp}
+            onRerun={onRerun ? () => onRerun(job.query) : undefined}
+          />
+        </div>
+      </div>
     </article>
   );
 }

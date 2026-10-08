@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import {
-  ArrowUpRight, BadgeCheck, Check, Copy, FileDown, FileText, Loader2, RefreshCw,
+  ArrowUpRight, BadgeCheck, Check, Copy, FileDown, FileText, RefreshCw,
   RotateCw, Share2, SquarePen, FastForward, XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -405,10 +405,12 @@ export function AnswerView({
             <Markdown text={typedChat} />
           </div>
         ) : (
-          <p className="flex items-center gap-2 text-sm">
-            <Loader2 className="h-4 w-4 animate-spin text-primary" />
-            <span className="shimmer-text font-medium">{job.stage || "Thinking…"}</span>
-          </p>
+          <div className="flex items-center gap-2.5">
+            <span className="typing-dots" aria-hidden>
+              <span /><span /><span />
+            </span>
+            <span className="shimmer-text text-sm font-medium">{job.stage || "Thinking…"}</span>
+          </div>
         )}
       </div>
     );
@@ -421,8 +423,10 @@ export function AnswerView({
         <div className={typing ? "typing-caret" : ""}>
           <Markdown text={typedText} />
         </div>
-        <p className="mt-4 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+        <p className="mt-4 flex flex-wrap items-center gap-2.5 text-xs text-muted-foreground">
+          <span className="typing-dots" aria-hidden>
+            <span /><span /><span />
+          </span>
           <span className="shimmer-text">{job.stage || "Writing report…"}</span>
           {typing && <SkipTypingButton onClick={skipTyping} />}
         </p>
@@ -433,8 +437,10 @@ export function AnswerView({
   // ---------- LIVE: RESEARCHING (skeleton, Perplexity answer-loading style) ----------
   return (
     <div aria-label="Preparing answer">
-      <p className="mb-4 flex items-center gap-2 text-sm">
-        <Loader2 className="h-4 w-4 animate-spin text-primary" />
+      <p className="mb-4 flex items-center gap-2.5 text-sm">
+        <span className="typing-dots" aria-hidden>
+          <span /><span /><span />
+        </span>
         <span className="shimmer-text font-medium">{job.stage || "Researching…"}</span>
       </p>
       <div className="space-y-3">
