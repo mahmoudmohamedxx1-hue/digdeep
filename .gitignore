@@ -71,6 +71,7 @@ scripts/*
 !scripts/test-routing.ts
 !scripts/mock-llm.js
 !scripts/benchmark-harness.mjs
+!scripts/replay-self-questions.sh
 !scripts/bench/
 scripts/bench/*
 !scripts/bench/questions.jsonl

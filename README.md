@@ -45,6 +45,8 @@ Ask anything. digdeep routes your message through three lanes:
 
 Routing is *understanding-first*: before a lane is chosen, the model restates what you actually meant — and that understanding streams into the UI in real time, the moment it thinks it. If the router is ever wrong, you see why, immediately.
 
+Questions about digdeep itself ("what engines do you have?", "how does your research work?", "i mean the engines, not the AI model") never touch the web — they're answered instantly from a grounded, always-accurate product-knowledge spec (all 13 engines by name, the 10-stage pipeline, the model chain), the way a product should know itself. Chat craft follows the Claude Fable 5.1 school: every sentence adds something, no repetitive sign-off invitations, corrections get owned in a few words and then answered precisely.
+
 ## Feature highlights
 
 ### Research that checks itself

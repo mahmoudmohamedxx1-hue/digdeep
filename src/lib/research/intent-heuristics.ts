@@ -5,6 +5,91 @@
  * null = needs the LLM classifier.
  */
 
+/** Shared message normalizer: lowercase, strip emoji/punctuation, collapse
+ *  whitespace, then strip repeatable conversational wrappers ("so ok hey …"). */
+function normalize(raw: string): string {
+  let s = raw
+    .toLowerCase()
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, "")
+    .replace(/[\s\p{P}\p{S}]+/gu, " ")
+    .trim();
+  for (let i = 0; i < 4; i++) {
+    const stripped = s
+      .replace(/^(so|ok|okay|k|well|hey|hi|hello|yo|hmm+|um+|please|pls|and|but|just|actually|really|btw|by the way) /, "")
+      .replace(/( please| pls| man| bro| dude| mate| buddy| thanks| thank you| thx| lol| haha+| now| really)$/, "")
+      .trim();
+    if (stripped === s) break;
+    s = stripped;
+  }
+  return s;
+}
+
+/** What the question is really about, when it is a question about DigDeep ITSELF.
+ *  Used to (a) route self-machinery questions to chat — answering them with web
+ *  research would be absurd — and (b) pick which part of the grounded
+ *  SELF_KNOWLEDGE spec the answer must be built from. null = not about DigDeep. */
+export type SelfTopic = "engines" | "process" | "models" | "sources" | "capabilities";
+
+/**
+ * Detects questions about DigDeep's own machinery — search engines, technical
+ * process, models, data sources — including the frustrated corrections users
+ * send when a previous answer missed ("i mean like brave and those engine not
+ * the ai model", "iam asking about search engines you got"). These MUST be
+ * answered from DigDeep's own configuration, never researched on the web and
+ * never improvised by the model.
+ *
+ * Anchoring discipline: patterns either reference the second person (you/your)
+ * or DigDeep by name, or have a distinctive correction shape — so real research
+ * questions ("which search engine is the most private", "brave vs duckduckgo")
+ * never match.
+ */
+export function selfKnowledgeTopic(raw: string): SelfTopic | null {
+  const s = normalize(raw);
+  if (!s) return null;
+  const patterns: [RegExp, SelfTopic][] = [
+    // ---- engines ----
+    [/(what|which|how many) (search |web )?engines (do|does|did|can|would|will|have|has|are|is) (you|u|it|this|that|digdeep)\b/, "engines"],
+    [/(what|which|how many) (search |web )?engines? (you|u) (have|has|got|use|used|run|running)\b/, "engines"],
+    [/engines? (that |which )?(you|u) (got|have|has|use|used|run|search|employ)/, "engines"],
+    [/what (search )?engines (are|is) (in|inside|under the hood|behind)\b/, "engines"],
+    // ---- sources / where does information come from ----
+    [/(what|which) (sources|sites|websites|databases|places|verticals) (do|does|can|would) (you|u|it|this|digdeep)\b/, "sources"],
+    [/where do (you|u) (search|look|get|find|fetch|pull)\b/, "sources"],
+    // ---- process / how a run actually works ----
+    [new RegExp(
+      `^how (do|does) (you|u) (make|do|run|perform|conduct|carry out|handle|build|write) (a |an |any |your |this )?` +
+      `(deep |web |online |full |proper |serious |thorough |real |quick |good |complete |autonomous )?` +
+      `(research|researches|search|searches|investigation|investigations|analysis|analyses|report|reports|dig|digs)` +
+      `( for me| for real| seriously| right now| today| as well| too| also)?\\s*[?.!]*$`
+    ), "process"],
+    [/^how (do|does) (a |an |this |your )?(deep |web )?(research|dig) work\s*[?.!]*$/, "process"],
+    [/^how (does|do) (your|ur) (research|search|technical|full|whole|entire|report|deep research) (process|pipeline|workflow|methodology|method|engines?)\b/, "process"],
+    [/^explain (how|your) (you |u )?(do|make|run|perform|conduct|work|research|process|pipeline)/, "process"],
+    [/(walk me through|tell me about|describe) (your|the) (full |complete |whole |entire |research |technical )?(process|pipeline|workflow|methodology|steps|stages)\b/, "process"],
+    [/(your|ur|digdeep|this (app|tool|site|assistant|thing|product))'?s? (full |complete |whole |entire |exact |actual |real )?(technical )?(process|pipeline|workflow|methodology|stages?|steps?)\b/, "process"],
+    [/^(what|explain|describe|tell me about) (is )?(the )?(full |complete |entire |whole )?technical process( of (yours|you|digdeep|this|it|the app|this app))?\s*[?.!]*$/, "process"],
+    // ---- models / backends ----
+    [/what (models?|llms?|ais?|backends?) (do|does|are|can|would|will|have|has) (you|u|it|this|that|digdeep)\b/, "models"],
+    [/what (models?|llms?|ais?|backends?) (you|u) (have|got|use|used|run|running)\b/, "models"],
+    // ---- corrections: the user is telling us the previous answer missed ----
+    [/i (mean|meant|am asking|m asking|was asking|said|want)[^.!?]{0,60}\b(those|these|that'?s|your|the actual|the real)\b[^.!?]{0,30}\b(engines?|search engines?)\b/, "engines"],
+    [/\b(engines?|search engines?)\b[^.!?]{0,50}\b(not|instead of|rather than|no|never)\b[^.!?]{0,25}\b(ai|llm|model|models|gpt|glm|chatgpt)\b/, "engines"],
+    [/\b(not|no)\b[^.!?]{0,15}\bthe (ai|llm|language )?models?\b[^.!?]{0,40}\b(engines?|search)\b/, "engines"],
+    [/i (mean|meant)[^.!?]{0,60}\b(models?|llm|ai)\b[^.!?]{0,40}\byou\b/, "models"],
+    // ---- identity / capabilities ----
+    [/what (can|could|do|does) (you|u) (do|offer|provide|help with)/, "capabilities"],
+    [/what (you|u) (can|could) do/, "capabilities"],
+    [/tell me (more )?about (yourself|you)\s*$/, "capabilities"],
+    [/^(who|what) (are|r) (you|u)\b/, "capabilities"],
+    [/how (do|does) (you|u|this|it|digdeep) work/, "capabilities"],
+    [/^what is this( app| tool| thing| website| page)?\s*[?.!]*$/, "capabilities"],
+    [/^is (this|it|digdeep) (free|really free)\b/, "capabilities"],
+    [/do (you|u|i) need (an? )?(api )?key/, "capabilities"],
+  ];
+  for (const [p, topic] of patterns) if (p.test(s)) return topic;
+  return null;
+}
+
 /**
  * Capability questions about DigDeep's own abilities, phrased with NO topic —
  * "can you make a deep research?", "do you do deep research?", "i want you to
@@ -17,20 +102,7 @@
  * these MUST NOT match — that is a genuine research request.
  */
 export function capabilityQuestion(raw: string): boolean {
-  let s = raw
-    .toLowerCase()
-    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, "")
-    .replace(/[\s\p{P}\p{S}]+/gu, " ")
-    .trim();
-  // strip conversational wrappers (same loop as heuristicChatIntent)
-  for (let i = 0; i < 4; i++) {
-    const stripped = s
-      .replace(/^(so|ok|okay|k|well|hey|hi|hello|yo|hmm+|um+|please|pls|and|but|just|actually|really|btw|by the way) /, "")
-      .replace(/( please| pls| man| bro| dude| mate| buddy| thanks| thank you| thx| lol| haha+| now| really)$/, "")
-      .trim();
-    if (stripped === s) break;
-    s = stripped;
-  }
+  const s = normalize(raw);
   if (!s) return true;
   const MOD = "(deep |web |online |full |proper |serious |thorough |real |quick |good |long )?";
   const THING = "(research|researches|search|searches|searching|reports?|investigations?|investigating|analysis|analyses|digging|dig)";
@@ -56,22 +128,7 @@ export function capabilityQuestion(raw: string): boolean {
 }
 
 export function heuristicChatIntent(raw: string): "chat" | null {
-  let s = raw
-    .toLowerCase()
-    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, "") // emoji
-    .replace(/[\s\p{P}\p{S}]+/gu, " ")
-    .trim();
-  if (!s) return "chat";
-  // strip conversational wrappers so "hey, how do you work?" matches "how do you work"
-  // (repeatable — handles "so ok hey ...")
-  for (let i = 0; i < 4; i++) {
-    const stripped = s
-      .replace(/^(so|ok|okay|k|well|hey|hi|hello|yo|hmm+|um+|please|pls|and|but|just|actually|really|btw|by the way) /, "")
-      .replace(/( please| pls| man| bro| dude| mate| buddy| thanks| thank you| thx| lol| haha+| now| really)$/, "")
-      .trim();
-    if (stripped === s) break;
-    s = stripped;
-  }
+  const s = normalize(raw);
   if (!s) return "chat";
   const patterns: RegExp[] = [
     /^(hi+|hey+|hello+|yo+|sup|hiya|hy+|hola|salut|bonjour|merhaba)$/,
@@ -109,5 +166,9 @@ export function heuristicChatIntent(raw: string): "chat" | null {
   if (patterns.some((p) => p.test(s))) return "chat";
   // "can you make a deep research?" — a topic-free ask about my own abilities: answer, never research
   if (capabilityQuestion(raw)) return "chat";
+  // "what engines you have" / "how do you make deep research" / "i mean the engines
+  // not the ai model" — questions about DigDeep's own machinery: answer from the
+  // grounded self-knowledge spec, never research the literal words on the web
+  if (selfKnowledgeTopic(raw)) return "chat";
   return null;
 }

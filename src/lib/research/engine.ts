@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { llmComplete, llmStreamComplete, type ChatMsg, type LlmResult, type ModelPref, type StreamDelta } from "./llm";
-import { capabilityQuestion, heuristicChatIntent } from "./intent-heuristics";
+import { capabilityQuestion, heuristicChatIntent, selfKnowledgeTopic, type SelfTopic } from "./intent-heuristics";
 import { searchAll, fetchPageContent, domainOf, type SearchResult } from "./search";
 import {
   RESEARCHER_SYS,
@@ -32,6 +32,7 @@ import {
   diffDigestPrompt,
   type Intent,
 } from "./prompts";
+import { PIPELINE_ONE_LINER } from "./self-knowledge";
 
 const activeJobs = new Set<string>();
 
@@ -470,10 +471,58 @@ async function classifyIntent(
   }
 }
 
+/** Topic word for the visible routing thought. */
+function selfTopicWord(t: SelfTopic): string {
+  switch (t) {
+    case "engines": return "search engines";
+    case "process": return "research process";
+    case "models": return "AI models";
+    case "sources": return "information sources";
+    case "capabilities": return "capabilities";
+  }
+}
+
 /** Built-in replies for the cases we can answer perfectly without any model call.
- *  Used when every free backend is throttled — a chat reply must never hang for minutes. */
+ *  Used when every free backend is throttled — a chat reply must never hang for minutes.
+ *  Self-knowledge questions (engines, process, models) get the REAL spec — the same
+ *  grounded facts the model would be prompted with — so even a zero-LLM reply is
+ *  accurate instead of vague filler. */
 function builtinChatReply(query: string): string {
   const s = query.toLowerCase();
+  const topic = selfKnowledgeTopic(query) ?? (capabilityQuestion(query) ? ("capabilities" as SelfTopic) : null);
+  if (topic === "engines" || topic === "sources") {
+    const wantsProcessToo = /process|pipeline|how|work|stages?|steps?|technical/.test(s);
+    return `Thirteen in total, in three groups:
+
+- **Whole-web, keyless** — DuckDuckGo, SearXNG (public instances; you can add your own in Settings), Mojeek, Marginalia
+- **Whole-web, optional keys** — Brave Search and Google Programmable Search (I work fully without any key; a free-tier key in Settings switches them on)
+- **Verticals** — Bing News, Wikipedia, arXiv, Crossref, Hacker News, Stack Overflow, GitHub
+
+Every research query fans out across them in parallel, results are deduped and interleaved, and an LLM reranks the candidates with publication dates in view so fast-moving topics prefer fresh evidence.${wantsProcessToo ? ` And the run itself goes: ${PIPELINE_ONE_LINER.replace(/->/g, "→")}.` : ""}`;
+  }
+  if (topic === "process") {
+    return `A deep run goes through ten stages, all visible live while it works:
+
+1. **Route** — your message is understood first (restate → intent → lane)
+2. **Comprehend** — the question is restated, success criteria and sub-questions drawn, a domain-expert role adopted
+3. **Plan** — report type, section aspects, first queries
+4. **Research** — parallel workers per aspect: multi-engine search → diversity-aware selection → LLM rerank → parallel page reads → cited synthesis → reflection that spawns follow-ups
+5. **Debate** — contested claims argued proposer vs skeptic over fresh evidence, then judged
+6. **Red team** — a hostile reviewer attacks the weakest findings before any drafting
+7. **Draft** — sections written with [n] citations, disagreements surfaced rather than averaged away
+8. **Citation audit** — every citation checked against the text actually read; weak ones re-anchored or dropped; integrity % published
+9. **Grade** — the report scores itself on evidence, coverage, honesty and clarity, and names its biggest weakness
+10. **Deliver** — summary, conclusion, references, Markdown/PDF export — and re-runs produce a "what changed" diff
+
+Depth is yours to set: Quick, Standard, Deep, Exhaustive, Custom, or Unlimited (no caps on aspects, rounds, sources or time).`;
+  }
+  if (topic === "models") {
+    return `The model chain is **GLM-5.3-Flash → GLM-4.5-Flash** (z.ai), with automatic failover to the keyless LLM7 and Pollinations pools — no API keys needed.
+
+You can add your own endpoint in Settings → Backends (presets for OpenAI, Gemini, DeepSeek, Groq, or any OpenAI-compatible URL); a key flagged "synthesis" is used only for report-writing, with the free chain behind it as failover. When a model is throttled, the answer says so instead of silently swapping.
+
+And to be clear about the distinction: the **models** answer and write; the **engines** (DuckDuckGo, SearXNG, Mojeek, Marginalia, Brave, Google CSE, Bing News, Wikipedia, arXiv, Crossref, HN, Stack Overflow, GitHub) search.`;
+  }
   if (capabilityQuestion(query)) {
     return `Yes — deep research is exactly what I do. Give me any topic or question and I'll plan it, search the web in parallel, read the sources, critique my own evidence as I go, and write you a cited report you can export.
 
@@ -503,14 +552,24 @@ A few things I'm good at: quick cited answers for simple lookups, and full multi
 (The free models are being throttled right now, so this is a stock reply — ask again in a minute and I'll answer properly.)`;
 }
 
-/** CHAT LANE — direct conversational reply, no search, no report structure. */
+/** CHAT LANE — direct conversational reply, no search, no report structure.
+ *  Self-knowledge questions (engines/process/models/capabilities) get the grounded
+ *  SELF_KNOWLEDGE spec injected into the prompt, so the answer is accurate even
+ *  though the model has never seen the codebase. */
 async function runChatLane(
   ctx: Ctx,
   job: { id: string; query: string },
   threadContext: string
 ): Promise<void> {
+  const selfTopic = selfKnowledgeTopic(job.query) ?? (capabilityQuestion(job.query) ? ("capabilities" as SelfTopic) : null);
   await updateJob(ctx.jobId, { status: "planning", stage: "Thinking…", progress: 40, startedAt: new Date() });
-  await ctx.emit("info", "Chat mode — no research needed for this", "This message reads as conversation (greeting / small talk / about DigDeep), so I am replying directly instead of launching the research pipeline. Ask any real question and I will dig deep.");
+  await ctx.emit(
+    "info",
+    "Chat mode — no research needed for this",
+    selfTopic
+      ? `This asks about my own ${selfTopicWord(selfTopic)} — I know that from my configuration, so I am answering directly from my product spec instead of launching the research pipeline.`
+      : "This message reads as conversation (greeting / small talk / about DigDeep), so I am replying directly instead of launching the research pipeline. Ask any real question and I will dig deep."
+  );
   const sec = await db.researchSection.create({
     data: { jobId: ctx.jobId, order: 0, title: "Reply", question: job.query, queries: "[]" },
   });
@@ -522,7 +581,7 @@ async function runChatLane(
     // being written instead of staring at a spinner. Fast-fail opts: chat must never ride
     // minutes of throttling; the built-in script below catches total exhaustion.
     const res = await ctx.llmLive(
-      [{ role: "user", content: chatPrompt(job.query, threadContext ? threadContext.slice(0, 1200) : "") }],
+      [{ role: "user", content: chatPrompt(job.query, threadContext ? threadContext.slice(0, 1200) : "", selfTopic) }],
       "chat-reply",
       "Thinking about your message",
       { system: CHAT_SYS, streamTo: sec.id, fast: { patient: false, timeoutMs: 30_000 } }
@@ -730,8 +789,9 @@ export async function runJob(jobId: string) {
     await updateJob(jobId, { status: "planning", stage: "Reading your message", progress: 3 });
     let intent: Intent = "research";
     let routeWhy = "";
+    const selfTopic = selfKnowledgeTopic(job.query) ?? (capabilityQuestion(job.query) ? ("capabilities" as SelfTopic) : null);
     const heuristic = heuristicChatIntent(job.query);
-    if (heuristic === "chat") {
+    if (heuristic === "chat" || selfTopic) {
       intent = "chat";
       // The understanding is VISIBLE the instant the job starts — no model call, no delay.
       // The user sees exactly why this is a direct reply, in the same thought-block style
@@ -743,16 +803,19 @@ export async function runJob(jobId: string) {
         "think",
         "Understanding your message",
         `Reading your message: “${job.query.slice(0, 200)}”. ${
-          cap
+          selfTopic
+            ? `This asks about my own ${selfTopicWord(selfTopic)} — my machinery, not a topic out in the world. I know this about myself from my configuration, so I am answering directly from my product spec. Searching the web for a question about myself would be absurd.`
+            : cap
             ? "This is a question about whether I can do something — my own abilities — not a research topic. Searching the web for these literal words would be absurd, so I am answering directly instead."
             : "This reads as conversation — a greeting, small talk, or a question about me — so it needs no web research. I am replying directly instead of launching the pipeline."
         }`,
         undefined,
         { thoughtId: tid, done: true, model: "instant read — no model call needed" }
       );
-      routeWhy = `this is ${cap ? "a question about my own abilities" : "conversation"} — no research needed (understood instantly, no model call required)${
-        ["deep", "exhaustive", "unlimited"].includes(job.preset) ? `. Your "${job.preset}" mode applies to real research questions, not to this` : ""
-      }`;
+      routeWhy = selfTopic
+        ? `a question about my own ${selfTopicWord(selfTopic)} — answered from my grounded product spec, no research needed (understood instantly, no model call required)`
+        : `this is ${cap ? "a question about my own abilities" : "conversation"} — no research needed (understood instantly, no model call required)`;
+      routeWhy += ["deep", "exhaustive", "unlimited"].includes(job.preset) ? `. Your "${job.preset}" mode applies to real research questions, not to this` : "";
     } else {
       const cls = await classifyIntent(ctx, job.query, recentTurns, job.preset);
       intent = cls.intent;
@@ -780,10 +843,18 @@ export async function runJob(jobId: string) {
     // ---------- STAGE 1: PLAN ----------
     // Guard: a real research question never researches the literal text of a question
     // about DigDeep itself — this is the backstop for a router that misread a
-    // capability question ("can you make a deep research?") as a research request.
+    // capability or self-machinery question ("can you make a deep research?",
+    // "i mean like brave and those engine not the ai model") as a research request.
     const qLower = job.query.toLowerCase();
-    if (/\b(digdeep|dig deep)\b/.test(qLower) || /\byour (capabilities|features|modes)\b/.test(qLower) || capabilityQuestion(job.query)) {
-      await ctx.emit("info", "Wait — on a closer read, this is really a question about me", "This message asks about my own abilities rather than a research topic, so I am answering it directly instead of researching the literal text. Nothing is lost — give me a real topic and the full pipeline fires.");
+    const selfBackstop = selfKnowledgeTopic(job.query) ?? (capabilityQuestion(job.query) ? ("capabilities" as SelfTopic) : null);
+    if (/\b(digdeep|dig deep)\b/.test(qLower) || /\byour (capabilities|features|modes)\b/.test(qLower) || selfBackstop) {
+      await ctx.emit(
+        "info",
+        "Wait — on a closer read, this is really a question about me",
+        selfBackstop
+          ? `This message asks about my own ${selfTopicWord(selfBackstop)} rather than a research topic, so I am answering it directly from my product spec instead of researching the literal text.`
+          : "This message asks about my own abilities rather than a research topic, so I am answering it directly instead of researching the literal text. Nothing is lost — give me a real topic and the full pipeline fires."
+      );
       await updateJob(jobId, { mode: "chat" });
       await runChatLane(ctx, job, threadContext);
       return;
