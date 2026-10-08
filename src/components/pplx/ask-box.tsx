@@ -67,7 +67,7 @@ export function AskBox({
   placeholder = "Ask anything…",
   mode, onMode, adv, advTouched, onAdv, language, onLanguage, modelPref, onModelPref,
   showThinking, onShowThinking, onManagePool, stopMode = false, onStop, stopping = false,
-  docs, onDocs,
+  docs, onDocs, inputId,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -95,6 +95,8 @@ export function AskBox({
   /** attached ground-truth documents (P2-3) */
   docs?: AttachedDoc[];
   onDocs?: (docs: AttachedDoc[]) => void;
+  /** id for the textarea — enables ⌘K / "/" global focus shortcuts */
+  inputId?: string;
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -138,9 +140,10 @@ export function AskBox({
   };
 
   return (
-    <div className="askbox-focus group relative rounded-[20px] border border-input bg-card shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_-12px_rgba(0,0,0,0.12)] transition-shadow dark:shadow-[0_8px_24px_-12px_rgba(0,0,0,0.6)]">
+    <div className="askbox-focus group relative rounded-[20px] border border-input bg-card shadow-elev-2">
       <Textarea
         ref={taRef}
+        id={inputId}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {
@@ -152,7 +155,7 @@ export function AskBox({
         placeholder={placeholder}
         aria-label="Research question"
         rows={1}
-        className={`resize-none border-0 bg-transparent px-4 pb-1 pt-4 text-[15px] leading-relaxed shadow-none focus-visible:ring-0 ${compact ? "min-h-[46px]" : "min-h-[56px]"}`}
+        className={`resize-none border-0 bg-transparent px-4.5 pb-1 pt-4 text-[16px] leading-relaxed shadow-none focus-visible:ring-0 ${compact ? "min-h-[46px]" : "min-h-[56px]"}`}
       />
 
       {/* attached documents (P2-3) */}
@@ -189,12 +192,12 @@ export function AskBox({
               tabIndex={-1}
             />
             <button
-              className="press-scale flex h-8 w-8 shrink-0 items-center justify-center rounded-[12px] border border-input bg-secondary/60 text-muted-foreground transition-colors hover:text-foreground"
+              className="press-scale flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               onClick={() => fileRef.current?.click()}
               aria-label="Attach documents as ground-truth sources"
               title="Attach .txt / .md documents — they become ground-truth sources for this research"
             >
-              <Paperclip className="h-4 w-4" />
+              <Paperclip className="h-[17px] w-[17px]" />
             </button>
           </>
         )}
@@ -203,11 +206,11 @@ export function AskBox({
         <Popover open={settingsOpen} onOpenChange={setSettingsOpen}>
           <PopoverTrigger asChild>
             <button
-              className="press-scale flex h-8 w-8 shrink-0 items-center justify-center rounded-[12px] border border-input bg-secondary/60 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className={`press-scale flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${advDirty ? "bg-primary/10 text-primary hover:bg-primary/15" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
               aria-label="Advanced research settings"
               title="Advanced settings — unlimited budgets, language"
             >
-              <Settings2 className="h-4 w-4" />
+              <Settings2 className="h-[17px] w-[17px]" />
             </button>
           </PopoverTrigger>
           <PopoverContent align="start" className="glass w-[340px] rounded-[20px] p-4" side="top">
@@ -252,10 +255,10 @@ export function AskBox({
         {/* mode pill (depth selector) */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="press-scale flex h-8 items-center gap-1.5 rounded-[12px] border border-input bg-secondary/60 px-3 text-xs font-medium text-foreground/90 transition-colors hover:bg-muted">
+            <button className="press-scale flex h-8 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
               <Sparkles className="h-3.5 w-3.5 text-primary" />
               {modeLabel}
-              <ChevronDown className="h-3 w-3 opacity-60" />
+              <ChevronDown className="h-3 w-3 opacity-50" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="glass w-72 rounded-[16px]">
@@ -275,24 +278,25 @@ export function AskBox({
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {/* visible thinking pill */}
+        {/* visible thinking toggle */}
         <button
           onClick={() => onShowThinking(!showThinking)}
-          className={`press-scale flex h-8 items-center gap-1.5 rounded-[12px] border px-3 text-xs font-medium transition-colors ${showThinking ? "border-primary/40 bg-primary/10 text-primary" : "border-input bg-secondary/60 text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+          className={`press-scale flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${showThinking ? "bg-primary/10 text-primary hover:bg-primary/15" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
           title="Show the model's raw thinking in the research steps"
+          aria-pressed={showThinking}
+          aria-label="Toggle visible thinking"
         >
-          <BrainCircuit className="h-3.5 w-3.5" />
-          Thinking
+          <BrainCircuit className="h-[17px] w-[17px]" />
         </button>
 
         <div className="ml-auto flex items-center gap-2">
           {/* model chip */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="press-scale hidden h-8 items-center gap-1.5 rounded-[12px] border border-input bg-secondary/60 px-3 text-xs font-medium text-foreground/90 transition-colors hover:bg-muted sm:flex" title="Keyless LLM backend">
-                <span className="h-2 w-2 rounded-full bg-emerald-500 pulse-dot" />
+              <button className="press-scale hidden h-8 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:flex" title="Keyless LLM backend">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 pulse-dot" />
                 {modelPref === "auto" ? "Auto" : modelPref === "glm" ? "GLM Flash" : "Pool"}
-                <ChevronDown className="h-3 w-3 opacity-60" />
+                <ChevronDown className="h-3 w-3 opacity-50" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="glass w-72 rounded-[16px]">
@@ -317,7 +321,7 @@ export function AskBox({
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {/* submit / stop — 44px Apple target */}
+          {/* submit / stop — 44px Apple target, foreground ink like a native compose field */}
           {stopMode && onStop && !canSubmit ? (
             <Button
               size="icon"
@@ -325,7 +329,7 @@ export function AskBox({
               disabled={stopping}
               aria-label="Stop responding"
               title="Stop the running research / response"
-              className="press-scale h-11 w-11 shrink-0 rounded-full bg-foreground text-background shadow-[0_4px_12px_rgba(0,0,0,0.1)] hover:bg-foreground/85"
+              className="press-scale h-11 w-11 shrink-0 rounded-full bg-foreground text-background shadow-elev-2 hover:bg-foreground/85"
             >
               {stopping ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4 fill-current" />}
             </Button>
@@ -349,9 +353,9 @@ export function AskBox({
                 onClick={() => canSubmit && onSubmit()}
                 disabled={!canSubmit}
                 aria-label="Start research"
-                className="press-scale h-11 w-11 shrink-0 rounded-full bg-primary text-primary-foreground shadow-[0_4px_12px_rgba(0,122,255,0.35)] hover:bg-primary/90 disabled:opacity-30 disabled:shadow-none"
+                className="press-scale h-11 w-11 shrink-0 rounded-full bg-foreground text-background shadow-elev-1 transition-all hover:bg-foreground/85 disabled:opacity-25 disabled:shadow-none"
               >
-                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" strokeWidth={2.5} />}
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-[18px] w-[18px]" strokeWidth={2.5} />}
               </Button>
             </>
           )}

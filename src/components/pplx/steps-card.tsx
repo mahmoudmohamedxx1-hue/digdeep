@@ -188,9 +188,9 @@ export function StepsCard({
   };
 
   return (
-    <div className="glass overflow-hidden rounded-[20px]">
+    <div className="overflow-hidden rounded-[20px] border border-input bg-card shadow-elev-1">
       <button
-        className="flex w-full items-center gap-2.5 px-4 py-3 text-left transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]"
+        className="flex w-full items-center gap-2.5 px-4 py-3 text-left transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.03]"
         onClick={() => setOverride(!open)}
         aria-expanded={open}
       >
@@ -207,17 +207,21 @@ export function StepsCard({
             {Math.floor(elapsedMs / 60000)}:{String(Math.floor((elapsedMs % 60000) / 1000)).padStart(2, "0")}
           </span>
         )}
-        <ChevronDown className={`ml-auto h-4 w-4 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-180" : ""}`} />
+        <ChevronDown className={`ml-auto h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-300 ease-apple ${open ? "rotate-180" : ""}`} />
       </button>
 
       {open && (
-        <div ref={bodyRef} className="slim-scroll max-h-[340px] space-y-0.5 overflow-y-auto border-t px-3 py-2.5">
+        <div ref={bodyRef} className="slim-scroll max-h-[340px] overflow-y-auto border-t px-4 py-3">
           {rows.length === 0 && (
-            <p className="flex items-center gap-2 px-2 py-2 text-sm text-muted-foreground">
+            <p className="flex items-center gap-2 px-1 py-2 text-sm text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" /> Starting research…
             </p>
           )}
-          {rows.map((row, i) => {
+          {/* activity timeline — a single rail threads every step */}
+          <div className="relative">
+            <div className="absolute bottom-2 left-[11.5px] top-2 w-px bg-border" aria-hidden />
+            <div className="space-y-1.5">
+              {rows.map((row, i) => {
             if (row.kind === "thought") {
               const g = row.g;
               const isLast = i === rows.length - 1;
@@ -226,12 +230,15 @@ export function StepsCard({
               const showLiveText = live && (showThinking || userExpanded);
               const showDoneText = !live && userExpanded;
               return (
-                <div key={g.thoughtId} className="rounded-lg bg-primary/[0.06] px-2 py-1.5">
-                  <div className="flex items-start gap-2.5">
-                    <span className={`mt-0.5 shrink-0 text-primary ${live ? "pulse-dot" : ""}`}>
-                      <Brain className="h-3.5 w-3.5" />
-                    </span>
-                    <div className="min-w-0 flex-1">
+                <div key={g.thoughtId} className="relative flex gap-3">
+                  <span
+                    className={`z-[1] mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full ring-1 transition-colors ${
+                      live ? "bg-primary/10 text-primary ring-primary/20" : "bg-card text-primary/80 ring-border"
+                    }`}
+                  >
+                    <Brain className={`h-3.5 w-3.5 ${live ? "pulse-dot" : ""}`} />
+                  </span>
+                  <div className="min-w-0 flex-1 pb-0.5">
                       <div className="flex flex-wrap items-baseline gap-x-2">
                         <span className={`text-[13px] leading-snug ${live ? "shimmer-text font-medium" : g.text ? "text-foreground/90" : "text-muted-foreground"}`}>
                           {live ? `${g.label}…` : g.label}
@@ -261,20 +268,27 @@ export function StepsCard({
                           {thoughtDisplay(g.text, 8000)}
                         </div>
                       )}
-                    </div>
                   </div>
                 </div>
               );
             }
             const e = row.e;
             const highlight = e.type === "eta" || e.type === "selfcheck" || e.type === "critique" || e.type === "agent" || e.type === "presearch" || e.type === "learning" || e.type === "walk" || e.type === "curate" || e.type === "verify" || e.type === "contradiction" || e.type === "comprehend" || e.type === "rerank" || e.type === "citecheck" || e.type === "redteam" || e.type === "debate" || e.type === "diversity" || e.type === "score" || e.type === "diff";
+            const isError = e.type === "error";
             return (
-              <div key={e.seq} className={`rounded-lg px-2 py-1.5 ${highlight ? "bg-primary/[0.06]" : ""}`}>
-                <div className="flex items-start gap-2.5">
-                  <span className={`mt-0.5 shrink-0 ${e.type === "error" ? "text-destructive" : highlight ? "text-primary" : "text-muted-foreground"}`}>
-                    {STEP_ICON[e.type] ?? <Info className="h-3.5 w-3.5" />}
-                  </span>
-                  <div className="min-w-0 flex-1">
+              <div key={e.seq} className="relative flex gap-3">
+                <span
+                  className={`z-[1] mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full ring-1 ${
+                    isError
+                      ? "bg-destructive/10 text-destructive ring-destructive/20"
+                      : highlight
+                        ? "bg-primary/10 text-primary ring-primary/20"
+                        : "bg-card text-muted-foreground/80 ring-border"
+                  }`}
+                >
+                  {STEP_ICON[e.type] ?? <Info className="h-3.5 w-3.5" />}
+                </span>
+                <div className="min-w-0 flex-1 pb-0.5">
                     <div className="flex flex-wrap items-baseline gap-x-2">
                       <span className="text-[13px] leading-snug text-foreground/90">{e.title}</span>
                       {e.model && (
@@ -294,9 +308,10 @@ export function StepsCard({
                     )}
                   </div>
                 </div>
-              </div>
             );
           })}
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -332,7 +347,7 @@ export function ChatThinking({
 
   if (live) {
     return (
-      <div className="glass fade-up rounded-[20px] px-4 py-3">
+      <div className="fade-up rounded-[20px] border border-input bg-card px-4 py-3 shadow-elev-1">
         <div className="flex items-center gap-2.5">
           <span className={`shrink-0 text-primary ${last.text ? "" : "pulse-dot"}`}>
             <Brain className="h-4 w-4" />

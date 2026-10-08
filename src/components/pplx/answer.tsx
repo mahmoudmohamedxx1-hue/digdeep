@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import {
-  ArrowUpRight, BadgeCheck, Check, Copy, FileDown, FileText, Gauge, Loader2, RefreshCw,
+  ArrowUpRight, BadgeCheck, Check, Copy, FileDown, FileText, Loader2, RefreshCw,
   RotateCw, Share2, SquarePen, FastForward, XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -84,32 +84,44 @@ function SkipTypingButton({ onClick }: { onClick: () => void }) {
 /** P1-1 — the self-score card: digdeep grades its own report and shows the grade,
  *  honestly, including bad ones. Score color follows Apple system colors. */
 function QualityCard({ quality }: { quality: NonNullable<NonNullable<JobItem["stats"]>["quality"]> }) {
-  const scoreTone = (s: number) => (s >= 7.5 ? "text-[#34c759]" : s >= 5.5 ? "text-[#ff9f0a]" : "text-destructive");
+  const scoreColor = (s: number) => (s >= 7.5 ? "#34c759" : s >= 5.5 ? "#ff9f0a" : undefined);
+  const toneClass = (s: number) => (s >= 7.5 ? "text-[#248a3d] dark:text-[#30d158]" : s >= 5.5 ? "text-[#b25000] dark:text-[#ff9f0a]" : "text-destructive");
   const barTone = (s: number) => (s >= 7.5 ? "bg-[#34c759]" : s >= 5.5 ? "bg-[#ff9f0a]" : "bg-destructive");
+  const r = 19;
+  const circ = 2 * Math.PI * r;
+  const pct = Math.max(0, Math.min(1, quality.overall / 10));
   return (
-    <div className="glass mt-8 rounded-[20px] p-5">
-      <div className="flex items-center gap-3">
-        <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-[12px] bg-primary/10 ${scoreTone(quality.overall)}`}>
-          <Gauge className="h-5 w-5" />
+    <div className="mt-10 rounded-[20px] border border-input bg-card p-5 shadow-elev-1">
+      <div className="flex items-center gap-4">
+        <span className="relative flex h-12 w-12 shrink-0 items-center justify-center" role="img" aria-label={`Overall quality ${quality.overall} out of 10`}>
+          <svg viewBox="0 0 44 44" className="h-12 w-12 -rotate-90">
+            <circle cx="22" cy="22" r={r} fill="none" strokeWidth="4" className="stroke-muted" />
+            <circle
+              cx="22" cy="22" r={r} fill="none" strokeWidth="4" strokeLinecap="round"
+              stroke={scoreColor(quality.overall) ?? "currentColor"}
+              className={scoreColor(quality.overall) ? "" : "stroke-destructive"}
+              strokeDasharray={`${circ * pct} ${circ}`}
+              style={{ transition: "stroke-dasharray 700ms cubic-bezier(0.25,0.1,0.25,1)" }}
+            />
+          </svg>
+          <span className={`absolute text-[15px] font-semibold tabular-nums ${toneClass(quality.overall)}`}>{quality.overall}</span>
         </span>
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold">Report quality — self-scored</p>
-          <p className="text-xs text-muted-foreground">Graded against the success criteria defined before the research started. Honest when bad, on purpose.</p>
+          <p className="mt-0.5 text-xs leading-snug text-muted-foreground">Graded against the success criteria defined before the research started. Honest when bad, on purpose.</p>
         </div>
-        <span className={`shrink-0 text-2xl font-semibold tabular-nums tracking-tight ${scoreTone(quality.overall)}`}>
-          {quality.overall}<span className="text-sm text-muted-foreground">/10</span>
-        </span>
+        <span className={`shrink-0 text-[13px] font-medium tabular-nums text-muted-foreground`}>out of 10</span>
       </div>
       {quality.dims.length > 0 && (
-        <div className="mt-4 space-y-2.5">
+        <div className="mt-5 space-y-3">
           {quality.dims.map((d, i) => (
             <div key={i}>
-              <div className="mb-1 flex items-baseline justify-between gap-2">
+              <div className="mb-1.5 flex items-baseline justify-between gap-2">
                 <span className="text-xs font-medium capitalize">{d.name}</span>
                 <span className="text-xs tabular-nums text-muted-foreground">{d.score.toFixed(1)}</span>
               </div>
-              <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-                <div className={`h-full rounded-full ${barTone(d.score)} ease-apple`} style={{ width: `${Math.max(3, d.score * 10)}%` }} />
+              <div className="h-[5px] overflow-hidden rounded-full bg-muted/70">
+                <div className={`h-full rounded-full ${barTone(d.score)}`} style={{ width: `${Math.max(3, d.score * 10)}%`, transition: "width 700ms cubic-bezier(0.25,0.1,0.25,1)" }} />
               </div>
               {d.note && <p className="mt-1 text-[11px] leading-snug text-muted-foreground">{d.note}</p>}
             </div>
@@ -117,24 +129,24 @@ function QualityCard({ quality }: { quality: NonNullable<NonNullable<JobItem["st
         </div>
       )}
       {quality.criteria.length > 0 && (
-        <div className="mt-4 space-y-1.5 border-t pt-3">
+        <div className="mt-5 space-y-2 border-t border-border/60 pt-4">
           {quality.criteria.map((c, i) => (
-            <div key={i} className="flex items-start gap-2">
+            <div key={i} className="flex items-start gap-2.5">
               {c.met ? (
-                <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#34c759]" />
+                <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#248a3d] dark:text-[#30d158]" />
               ) : (
-                <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#ff9f0a]" />
+                <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#b25000] dark:text-[#ff9f0a]" />
               )}
               <div className="min-w-0">
                 <p className="text-xs leading-snug">{c.criterion}</p>
-                <p className="text-[11px] leading-snug text-muted-foreground">{c.why}</p>
+                <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{c.why}</p>
               </div>
             </div>
           ))}
         </div>
       )}
       {quality.biggestWeakness && (
-        <p className="mt-3 rounded-[12px] bg-muted/60 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+        <p className="mt-4 rounded-[12px] bg-muted/50 px-3.5 py-2.5 text-xs leading-relaxed text-muted-foreground">
           <span className="font-medium text-foreground">Biggest weakness:</span> {quality.biggestWeakness}
         </p>
       )}
@@ -219,12 +231,14 @@ export function AnswerView({
         </div>
         {chatTyping && <div className="mt-3"><SkipTypingButton onClick={skipChat} /></div>}
 
-        <div className="mt-6 flex flex-wrap items-center gap-1.5 border-t pt-4">
-          <Button size="sm" variant="ghost" className="h-8 gap-1.5 text-[13px] text-muted-foreground" onClick={copyReport}>
-            {copied ? <Check className="h-4 w-4 text-primary" /> : <Copy className="h-4 w-4" />} {copied ? "Copied" : "Copy"}
+        <div className="mt-6 flex flex-wrap items-center gap-1 border-t border-border/60 pt-3.5">
+          <Button size="sm" variant="ghost" className="press-scale h-9 w-9 rounded-full p-0 text-muted-foreground hover:text-foreground" onClick={copyReport} title="Copy reply">
+            {copied ? <Check className="h-4 w-4 text-primary" /> : <Copy className="h-4 w-4" />}
+            <span className="sr-only">{copied ? "Copied" : "Copy"}</span>
           </Button>
-          <Button size="sm" variant="ghost" className="h-8 gap-1.5 text-[13px] text-muted-foreground" onClick={share}>
-            <Share2 className="h-4 w-4" /> Share
+          <Button size="sm" variant="ghost" className="press-scale h-9 w-9 rounded-full p-0 text-muted-foreground hover:text-foreground" onClick={share} title="Copy link">
+            <Share2 className="h-4 w-4" />
+            <span className="sr-only">Share</span>
           </Button>
         </div>
 
@@ -257,21 +271,21 @@ export function AnswerView({
     return (
       <div className="fade-up">
         {exec && (
-          <div className="mb-6">
-            <p className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">Executive summary</p>
+          <div className="mb-7">
+            <p className="mb-2.5 text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Executive summary</p>
             <Markdown text={exec} />
           </div>
         )}
         {body && <Markdown text={isQuick ? body.replace(/^##\s.*\n+/, "") : body} />}
         {conclusion && (
-          <div className="mt-8">
-            <p className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">Conclusion</p>
+          <div className="mt-10">
+            <p className="mb-2.5 text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Conclusion</p>
             <Markdown text={conclusion} />
           </div>
         )}
         {diff && (
-          <div className="mt-8">
-            <p className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">What changed since the last run</p>
+          <div className="mt-10">
+            <p className="mb-2.5 text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">What changed since the last run</p>
             <Markdown text={diff} />
           </div>
         )}
@@ -279,27 +293,32 @@ export function AnswerView({
         {/* P1-1 — self-scored quality dashboard (honest when bad) */}
         {quality && !isQuick && <QualityCard quality={quality} />}
 
-        {/* action bar */}
-        <div className="mt-8 flex flex-wrap items-center gap-1.5 border-t pt-4">
-          <Button size="sm" variant="ghost" className="press-scale h-9 gap-1.5 rounded-[12px] text-[13px] text-muted-foreground" onClick={copyReport}>
-            {copied ? <Check className="h-4 w-4 text-primary" /> : <Copy className="h-4 w-4" />} {copied ? "Copied" : "Copy"}
+        {/* action bar — quiet icon row, the content is the star */}
+        <div className="mt-9 flex flex-wrap items-center gap-0.5 border-t border-border/60 pt-3.5">
+          <Button size="sm" variant="ghost" className="press-scale h-9 w-9 rounded-full p-0 text-muted-foreground hover:text-foreground" onClick={copyReport} title="Copy report">
+            {copied ? <Check className="h-4 w-4 text-primary" /> : <Copy className="h-4 w-4" />}
+            <span className="sr-only">{copied ? "Copied" : "Copy"}</span>
           </Button>
-          <a href={`/api/research/${job.id}/export?format=pdf`} target="_blank" rel="noreferrer">
-            <Button size="sm" variant="ghost" className="press-scale h-9 gap-1.5 rounded-[12px] text-[13px] text-muted-foreground">
-              <FileDown className="h-4 w-4" /> PDF
+          <a href={`/api/research/${job.id}/export?format=pdf`} target="_blank" rel="noreferrer" title="Export as PDF">
+            <Button size="sm" variant="ghost" className="press-scale h-9 w-9 rounded-full p-0 text-muted-foreground hover:text-foreground">
+              <FileDown className="h-4 w-4" />
+              <span className="sr-only">PDF</span>
             </Button>
           </a>
-          <a href={`/api/research/${job.id}/export?format=md`} target="_blank" rel="noreferrer">
-            <Button size="sm" variant="ghost" className="press-scale h-9 gap-1.5 rounded-[12px] text-[13px] text-muted-foreground">
-              <FileText className="h-4 w-4" /> Markdown
+          <a href={`/api/research/${job.id}/export?format=md`} target="_blank" rel="noreferrer" title="Export as Markdown">
+            <Button size="sm" variant="ghost" className="press-scale h-9 w-9 rounded-full p-0 text-muted-foreground hover:text-foreground">
+              <FileText className="h-4 w-4" />
+              <span className="sr-only">Markdown</span>
             </Button>
           </a>
-          <Button size="sm" variant="ghost" className="press-scale h-9 gap-1.5 rounded-[12px] text-[13px] text-muted-foreground" onClick={share}>
-            <Share2 className="h-4 w-4" /> Share
+          <Button size="sm" variant="ghost" className="press-scale h-9 w-9 rounded-full p-0 text-muted-foreground hover:text-foreground" onClick={share} title="Copy link">
+            <Share2 className="h-4 w-4" />
+            <span className="sr-only">Share</span>
           </Button>
           {!isQuick && onRerun && (
-            <Button size="sm" variant="ghost" className="press-scale h-9 gap-1.5 rounded-[12px] text-[13px] text-muted-foreground" onClick={onRerun} title="Research this question again — the new report includes a 'what changed' diff against this one">
-              <RotateCw className="h-4 w-4" /> Re-run
+            <Button size="sm" variant="ghost" className="press-scale h-9 w-9 rounded-full p-0 text-muted-foreground hover:text-foreground" onClick={onRerun} title="Research this question again — the new report includes a 'what changed' diff against this one">
+              <RotateCw className="h-4 w-4" />
+              <span className="sr-only">Re-run</span>
             </Button>
           )}
         </div>
@@ -356,16 +375,16 @@ export function AnswerView({
 
         {/* related questions */}
         {related.length > 0 && (
-          <div className="mt-8">
-            <p className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">Related</p>
-            <div className="glass divide-y rounded-[20px]">
+          <div className="mt-10">
+            <p className="mb-2.5 text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Related</p>
+            <div className="divide-y divide-border/60 rounded-[16px] border border-input bg-card shadow-elev-1">
               {related.map((q, i) => (
                 <button
                   key={i}
                   onClick={() => onFollowUp(q)}
-                  className="group flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-medium transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]"
+                  className="group flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-medium transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.03]"
                 >
-                  <SquarePen className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <SquarePen className="h-4 w-4 shrink-0 text-muted-foreground/70" />
                   <span className="min-w-0 flex-1">{q}</span>
                   <ArrowUpRight className="h-4 w-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
                 </button>

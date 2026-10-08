@@ -733,9 +733,25 @@ export default function Home() {
 
   const submitFollowUp = () => startResearch(followQuery, threadId, followDocs);
 
+  // global focus shortcuts: ⌘K/Ctrl+K and "/" jump into the ask box
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      const typing = e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement;
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        (view === "home" ? document.getElementById("ask-input") : document.getElementById("follow-input"))?.focus();
+      } else if (e.key === "/" && !typing) {
+        e.preventDefault();
+        (view === "home" ? document.getElementById("ask-input") : document.getElementById("follow-input"))?.focus();
+      }
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [view]);
+
   // ================= RENDER =================
   return (
-    <div className="flex h-screen overflow-hidden bg-background text-foreground">
+    <div className="app-bg grain flex h-screen overflow-hidden text-foreground">
       {/* ---------- SIDEBAR (Apple translucent rail) ---------- */}
       <aside
         className={`hidden shrink-0 flex-col border-r border-sidebar-border bg-sidebar backdrop-blur-xl transition-[width] duration-300 ease-apple md:flex ${
@@ -745,7 +761,7 @@ export default function Home() {
         <div className={`flex items-center gap-2.5 py-4 ${sidebarOpen ? "px-4" : "justify-center px-2"}`}>
           {sidebarOpen ? (
             <>
-              <LogoMark className="h-7 w-7 shrink-0" />
+              <LogoMark className="h-7 w-7 shrink-0 shadow-elev-1 rounded-[7.5px]" />
               <LogoWord className="text-[15px]" />
               <Button
                 variant="ghost"
@@ -771,7 +787,19 @@ export default function Home() {
             </Button>
           )}
         </div>
-        <nav className={`space-y-1 pt-1 ${sidebarOpen ? "px-3" : "px-1"}`}>
+        {/* new research — the primary action, Perplexity-style */}
+        <div className={sidebarOpen ? "px-3" : "px-1"}>
+          <button
+            onClick={goHome}
+            className={`press-scale flex h-10 items-center gap-2 rounded-[12px] bg-primary text-[13px] font-semibold text-primary-foreground shadow-elev-primary transition-colors hover:bg-primary/90 ${sidebarOpen ? "w-full justify-center" : "mx-auto w-11 justify-center px-0"}`}
+            aria-label="New research"
+            title="New research"
+          >
+            <Plus className="h-4 w-4" strokeWidth={2.5} />
+            {sidebarOpen && <span>New research</span>}
+          </button>
+        </div>
+        <nav className={`space-y-1 pt-3 ${sidebarOpen ? "px-3" : "px-1"}`}>
           <SidebarItem collapsed={!sidebarOpen} icon={<House className="h-4.5 w-4.5" />} label="Home" active={view === "home"} onClick={goHome} />
           <SidebarItem
             collapsed={!sidebarOpen}
@@ -790,10 +818,8 @@ export default function Home() {
             onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
           />
           {sidebarOpen && (
-            <p className="px-3 pt-3 text-[10px] leading-relaxed text-muted-foreground">
-              DigDeep · 100% free · no API keys<br />
-              whole-web search · citation-verified<br />
-              History saved in this browser
+            <p className="px-3 pt-3 text-[10.5px] font-medium text-muted-foreground">
+              Free · no keys · local history
             </p>
           )}
         </div>
@@ -821,15 +847,15 @@ export default function Home() {
         </div>
 
         {view === "home" ? (
-          /* ================= HOME (Apple hero, staggered entrance) ================= */
-          <div className="mx-auto w-full max-w-2xl px-4 pb-24 pt-[12vh]">
-            <div className="rise-in stagger-1 text-center">
-              <h1 className="text-[30px] font-semibold leading-[1.2] tracking-[-0.022em] sm:text-[38px]">
-                Where knowledge begins
+          /* ================= HOME — confident, product-first hero ================= */
+          <div className="mx-auto w-full max-w-2xl px-4 pb-24 pt-[13vh]">
+            <div className="rise-in stagger-1 flex flex-col items-center text-center">
+              <LogoMark className="h-14 w-14 rounded-[16px] shadow-elev-3" />
+              <h1 className="mt-6 text-balance text-[32px] font-semibold leading-[1.12] tracking-[-0.025em] sm:text-[40px]">
+                What do you want to know?
               </h1>
-              <p className="mx-auto mt-3 max-w-lg text-center text-[14px] leading-relaxed text-muted-foreground">
-                DigDeep searches the whole web, reads the sources, cross-checks every claim and citation — and shows
-                you its thinking the whole way down.
+              <p className="mt-3 max-w-md text-pretty text-[15px] leading-relaxed text-muted-foreground">
+                Deep research that shows its work — every claim cited, every citation audited.
               </p>
             </div>
 
@@ -855,12 +881,15 @@ export default function Home() {
                 onManagePool={() => { loadPool(); setPoolOpen(true); }}
                 docs={docs}
                 onDocs={setDocs}
+                inputId="ask-input"
               />
             </div>
 
-            <p className="rise-in stagger-3 mt-3.5 text-center text-[11.5px] leading-relaxed text-muted-foreground">
-              Smart routing: “hii” gets an instant chat, simple questions get a quick cited answer, real questions get
-              full deep research · citation integrity audited · unlimited mode available
+            <p className="rise-in stagger-3 mt-3.5 flex items-center justify-center gap-2 text-center text-[11px] text-muted-foreground">
+              <span className="kbd">↵</span> research
+              <span className="opacity-40">·</span>
+              <span className="kbd">⇧↵</span> new line
+              <span className="hidden sm:inline"><span className="opacity-40">·</span> <span className="kbd">⌘K</span> focus</span>
             </p>
 
             {/* recent threads — iOS inset grouped list */}
@@ -885,30 +914,32 @@ export default function Home() {
               </section>
             )}
 
-            {/* discover / trending — Apple cards */}
+            {/* discover / trending — editorial numbered list, not a card wall */}
             <section className="rise-in stagger-5 mt-12" id="discover">
               <div className="mb-2.5 flex items-center gap-1.5 px-1">
-                <TrendingUp className="h-4 w-4 text-primary" />
-                <h2 className="text-[15px] font-semibold">Trending now</h2>
+                <TrendingUp className="h-3.5 w-3.5 text-primary" />
+                <h2 className="text-[12px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">Trending on the web</h2>
               </div>
               {trending.length === 0 ? (
-                <div className="grid gap-3 sm:grid-cols-3">
-                  {[...Array(6)].map((_, i) => <div key={i} className="skeleton-line h-[96px] rounded-[16px]" />)}
+                <div className="space-y-2">
+                  {[...Array(5)].map((_, i) => <div key={i} className="skeleton-line h-[45px] rounded-[14px]" />)}
                 </div>
               ) : (
-                <div className="grid gap-3 sm:grid-cols-3">
-                  {trending.map((t) => (
+                <div className="divide-y divide-border/60 rounded-[16px] border border-input bg-card shadow-elev-1">
+                  {trending.slice(0, 5).map((t, i) => (
                     <button
                       key={t.url}
-                      onClick={() => { setQuery(t.title); window.scrollTo({ top: 0, behavior: "smooth" }); }}
-                      className="hover-lift flex h-[96px] flex-col justify-between rounded-[16px] border border-input bg-card p-3.5 text-left"
+                      onClick={() => { setQuery(t.title); document.getElementById("ask-input")?.focus(); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+                      className="group flex w-full items-baseline gap-3.5 px-4 py-[13px] text-left transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.03]"
                       title={`Research: ${t.title}`}
                     >
-                      <p className="line-clamp-2 text-[13px] font-medium leading-snug">{t.title}</p>
-                      <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                      <span className="w-4 shrink-0 text-[13px] font-semibold tabular-nums text-muted-foreground/60">{i + 1}</span>
+                      <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{t.title}</span>
+                      <span className="hidden shrink-0 items-center gap-1.5 text-[11px] text-foreground/60 dark:text-foreground/55 sm:flex">
                         <span className="truncate">{t.domain}</span>
-                        <span className="opacity-50">· ▲ {t.points}</span>
-                      </p>
+                        <span className="opacity-50">▲ {t.points}</span>
+                      </span>
+                      <ArrowUpRight className="h-3.5 w-3.5 shrink-0 self-center text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
                     </button>
                   ))}
                 </div>
@@ -986,8 +1017,8 @@ export default function Home() {
               )}
             </div>
 
-            {/* follow-up input (pinned bottom — Apple glass) */}
-            <div className="glass-nav sticky bottom-0 z-20">
+            {/* follow-up input (pinned bottom — Apple dock) */}
+            <div className="glass-dock sticky bottom-0 z-20">
               <div className="mx-auto w-full max-w-[768px] px-4 py-3">
                 <AskBox
                   value={followQuery}
@@ -1013,10 +1044,8 @@ export default function Home() {
                   stopMode={anyActive}
                   onStop={stopAllActive}
                   stopping={stoppingAll}
+                  inputId="follow-input"
                 />
-                <p className="mt-2 text-center text-[10.5px] text-muted-foreground">
-                  Follow-ups stay in this thread — DigDeep routes each message automatically: chat, quick answer, or deep research · history is saved in this browser
-                </p>
               </div>
             </div>
           </div>
@@ -1026,7 +1055,7 @@ export default function Home() {
         {view === "thread" && (
           <Button
             size="icon"
-            className="press-scale fixed bottom-24 right-6 z-20 hidden h-12 w-12 rounded-full bg-primary text-primary-foreground shadow-[0_8px_24px_rgba(0,122,255,0.4)] hover:bg-primary/90 md:flex"
+            className="press-scale fixed bottom-24 right-6 z-20 hidden h-12 w-12 rounded-full bg-primary text-primary-foreground shadow-elev-primary hover:bg-primary/90 md:flex"
             onClick={goHome}
             aria-label="New research"
             title="New research"
