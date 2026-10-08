@@ -8,7 +8,7 @@ import {
   ShieldQuestion, Swords, Target,
 } from "lucide-react";
 import type { EventItem } from "@/components/research/types";
-import { CountUp, FadeIn } from "@/components/magic";
+import { BorderBeam, CountUp, FadeIn } from "@/components/magic";
 
 const STEP_ICON: Record<string, React.ReactNode> = {
   think: <Brain className="h-3.5 w-3.5" />,
@@ -189,7 +189,10 @@ export function StepsCard({
   };
 
   return (
-    <div className="surface-quiet overflow-hidden rounded-[20px]">
+    <div className="surface-quiet relative overflow-hidden rounded-[20px]">
+      {/* while the agent works, a comet of light orbits the card —
+          the interface quietly saying "alive" the whole run */}
+      {active && <BorderBeam duration={9} />}
       <button
         className="flex w-full items-center gap-2.5 px-4 py-3 text-left transition-colors hover:bg-accent"
         onClick={() => setOverride(!open)}
@@ -198,7 +201,7 @@ export function StepsCard({
         {active ? (
           <span className="pplx-dot h-2 w-2 shrink-0 rounded-full bg-primary" aria-hidden />
         ) : (
-          <CheckCircle2 className="h-4 w-4 shrink-0 text-primary" />
+          <CheckCircle2 className="check-pop h-4 w-4 shrink-0 text-primary" />
         )}
         <span className={active ? "shimmer-text min-w-0 truncate text-sm font-medium" : "min-w-0 truncate text-sm font-medium text-foreground"}>
           {active

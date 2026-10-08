@@ -634,3 +634,90 @@
 .dark .composer-glow {
   background: radial-gradient(58% 90% at 50% 22%, color-mix(in oklab, var(--primary) 26%, transparent), transparent 72%);
 }
+
+/* ==================================================================
+   MAGIC 2.0 — the alive-interface layer: border beams, hero star
+   dust + dot grid, decode text, tilt, completion pops.
+   All compositor-friendly; the reduced-motion block above neutralizes
+   every animation here (JS primitives no-op separately).
+   ================================================================== */
+
+/* ---------- BorderBeam (21st.dev) — a comet orbiting the border ring ---------- */
+@property --beam-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+:root {
+  --beam-a: #7c3aed;
+  --beam-b: #64a7ff;
+}
+.dark {
+  --beam-a: #a78bfa;
+  --beam-b: #64a7ff;
+}
+.border-beam {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: var(--beam-thickness, 1.5px);
+  pointer-events: none;
+  z-index: 3;
+  overflow: hidden;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+.border-beam::before {
+  content: "";
+  position: absolute;
+  inset: -120%;
+  background: conic-gradient(
+    from var(--beam-angle),
+    transparent 0deg,
+    transparent 296deg,
+    color-mix(in oklab, var(--beam-a) 52%, transparent) 318deg,
+    var(--beam-b) 342deg,
+    transparent 358deg,
+    transparent 360deg
+  );
+  animation-name: beam-orbit;
+  animation-duration: var(--beam-dur, 6s);
+  animation-delay: var(--beam-delay, 0s);
+  animation-direction: var(--beam-dir, normal);
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+@keyframes beam-orbit {
+  to { --beam-angle: 360deg; }
+}
+
+/* ---------- Hero dot grid — engineered paper under the aurora ---------- */
+.dot-grid {
+  position: absolute;
+  pointer-events: none;
+  background-image: radial-gradient(color-mix(in oklab, var(--foreground) 10%, transparent) 1px, transparent 1.35px);
+  background-size: 22px 22px;
+  -webkit-mask-image: radial-gradient(68% 74% at 50% 30%, #000 0%, transparent 80%);
+  mask-image: radial-gradient(68% 74% at 50% 30%, #000 0%, transparent 80%);
+}
+.dark .dot-grid {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.14) 1px, transparent 1.35px);
+}
+
+/* ---------- Completion pop — overshoot spring for done-states ---------- */
+@keyframes check-pop {
+  0% { transform: scale(0.4); opacity: 0; }
+  60% { transform: scale(1.18); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.check-pop {
+  animation: check-pop 380ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+/* ---------- Decode text — the scramble primitive keeps layout stable;
+     glyph noise uses tabular figures so width jitter stays minimal ---------- */
+.scramble {
+  font-variant-numeric: tabular-nums;
+}

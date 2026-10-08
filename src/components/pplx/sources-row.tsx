@@ -5,7 +5,7 @@ import { Globe } from "lucide-react";
 import { CountUp, FadeIn } from "@/components/magic";
 import type { SourceItem } from "@/components/research/types";
 
-function Favicon({ domain, className = "h-4 w-4" }: { domain: string; className?: string }) {
+function FaviconInner({ domain, className = "h-4 w-4" }: { domain: string; className?: string }) {
   const [err, setErr] = useState(false);
   if (err || !domain) return <Globe className={`${className} text-muted-foreground`} />;
   return (
@@ -20,6 +20,9 @@ function Favicon({ domain, className = "h-4 w-4" }: { domain: string; className?
     />
   );
 }
+
+/** Exported for reuse (Discover cards show the source site's mark). */
+export const Favicon = FaviconInner;
 
 /** Perplexity-style source chips — overlapping favicon circles that peek at the evidence. */
 export function SourcesRow({ sources }: { sources: SourceItem[] }) {

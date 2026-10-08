@@ -1,13 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BadgeCheck, Check, Copy, FileDown, FileText, RefreshCw,
   RotateCw, Share2, SquarePen, FastForward, XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/research/markdown";
-import { CountUp } from "@/components/magic";
+import { BorderBeam, CountUp, burstConfetti } from "@/components/magic";
 import { useTyper } from "@/hooks/use-typer";
 import type { SourceItem, SectionItem, JobItem } from "@/components/research/types";
 import { fmtElapsed } from "@/components/research/types";
@@ -83,8 +83,34 @@ function SkipTypingButton({ onClick }: { onClick: () => void }) {
 }
 
 /** P1-1 — the self-score card: digdeep grades its own report and shows the grade,
- *  honestly, including bad ones. Score color follows Apple system colors. */
-function QualityCard({ quality }: { quality: NonNullable<NonNullable<JobItem["stats"]>["quality"]> }) {
+ *  honestly, including bad ones. Score color follows Apple system colors.
+ *  When the run was observed live and the grade is strong (≥ 8), the score
+ *  ring gets a traveling beam and one small confetti burst — the reward for
+ *  a long research run well done. */
+function QualityCard({ quality, celebrate = false }: { quality: NonNullable<NonNullable<JobItem["stats"]>["quality"]>; celebrate?: boolean }) {
+  const [beam, setBeam] = useState(true);
+  const scoreRef = useRef<HTMLSpanElement>(null);
+  const firedRef = useRef(false);
+
+  // the beam orbits for the first moments, then hands the stage to the content
+  useEffect(() => {
+    const t = setTimeout(() => setBeam(false), 2800);
+    return () => clearTimeout(t);
+  }, []);
+
+  // the reward moment — after the ring has drawn itself in
+  useEffect(() => {
+    if (!celebrate || firedRef.current) return;
+    firedRef.current = true;
+    const t = setTimeout(() => {
+      const el = scoreRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      burstConfetti({ x: r.left + r.width / 2, y: r.top + r.height / 2, count: 88, duration: 1600 });
+    }, 780);
+    return () => clearTimeout(t);
+  }, [celebrate]);
+
   const scoreColor = (s: number) => (s >= 7.5 ? "#34c759" : s >= 5.5 ? "#ff9f0a" : undefined);
   const toneClass = (s: number) => (s >= 7.5 ? "text-[#248a3d] dark:text-[#30d158]" : s >= 5.5 ? "text-[#b25000] dark:text-[#ff9f0a]" : "text-destructive");
   const barTone = (s: number) => (s >= 7.5 ? "bg-[#34c759]" : s >= 5.5 ? "bg-[#ff9f0a]" : "bg-destructive");
@@ -92,9 +118,10 @@ function QualityCard({ quality }: { quality: NonNullable<NonNullable<JobItem["st
   const circ = 2 * Math.PI * r;
   const pct = Math.max(0, Math.min(1, quality.overall / 10));
   return (
-    <div className="surface-quiet mt-10 rounded-[20px] p-5">
+    <div className="surface-quiet relative mt-10 rounded-[20px] p-5">
+      {beam && <BorderBeam duration={5} />}
       <div className="flex items-center gap-4">
-        <span className="relative flex h-12 w-12 shrink-0 items-center justify-center" role="img" aria-label={`Overall quality ${quality.overall} out of 10`}>
+        <span ref={scoreRef} className="relative flex h-12 w-12 shrink-0 items-center justify-center" role="img" aria-label={`Overall quality ${quality.overall} out of 10`}>
           <svg viewBox="0 0 44 44" className="h-12 w-12 -rotate-90">
             <circle cx="22" cy="22" r={r} fill="none" strokeWidth="4" className="stroke-muted" />
             <circle
@@ -297,7 +324,9 @@ export function AnswerView({
         )}
 
         {/* P1-1 — self-scored quality dashboard (honest when bad) */}
-        {quality && !isQuick && <QualityCard quality={quality} />}
+        {quality && !isQuick && (
+          <QualityCard quality={quality} celebrate={animate && quality.overall >= 8} />
+        )}
 
         {/* action bar — quiet icon row, the content is the star */}
         <div className="mt-9 flex flex-wrap items-center gap-0.5 border-t border-border/60 pt-3.5">

@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Slider } from "@/components/ui/slider";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Magnet } from "@/components/magic";
+import { BorderBeam, Magnet, RotatingText } from "@/components/magic";
 import type { AdvParams, AttachedDoc } from "@/components/research/types";
 
 export const MODES = [
@@ -72,7 +72,7 @@ export function AskBox({
   placeholder = "Ask anything…",
   mode, onMode, adv, advTouched, onAdv, language, onLanguage, modelPref, onModelPref,
   showThinking, onShowThinking, onManagePool, stopMode = false, onStop, stopping = false,
-  docs, onDocs, inputId,
+  docs, onDocs, inputId, placeholderStream,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -102,6 +102,10 @@ export function AskBox({
   onDocs?: (docs: AttachedDoc[]) => void;
   /** id for the textarea — enables ⌘K / "/" global focus shortcuts */
   inputId?: string;
+  /** when set (and the box is empty) the placeholder becomes a rotating
+   *  decode animation through example questions — the idle box keeps
+   *  demonstrating what it can do */
+  placeholderStream?: string[];
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -144,8 +148,13 @@ export function AskBox({
     if (fileRef.current) fileRef.current.value = "";
   };
 
+  const streaming = !!placeholderStream && placeholderStream.length > 0;
+  const idle = value.length === 0;
+
   return (
     <div className="composer-focus group relative rounded-[28px] border border-input bg-card shadow-elev-1">
+      {/* a run is active in this thread → the composer wears a working halo */}
+      {stopMode && <BorderBeam duration={7} />}
       <Textarea
         ref={taRef}
         id={inputId}
@@ -157,11 +166,21 @@ export function AskBox({
             if (canSubmit) onSubmit();
           }
         }}
-        placeholder={placeholder}
+        placeholder={streaming ? "" : placeholder}
         aria-label="Research question"
         rows={1}
         className={`resize-none border-0 bg-transparent px-5 pb-1.5 pt-4 text-[16px] leading-[1.6] shadow-none focus-visible:ring-0 placeholder:text-muted-foreground ${compact ? "min-h-[52px]" : "min-h-[64px]"}`}
       />
+      {/* rotating idle placeholder — decodes through example questions;
+          purely decorative (aria-hidden), the field's label carries meaning */}
+      {streaming && idle && (
+        <div
+          aria-hidden
+          className={`pointer-events-none absolute left-5 w-[calc(100%-40px)] text-[16px] leading-[1.6] text-muted-foreground/90 ${compact ? "top-[15px]" : "top-[17px]"}`}
+        >
+          <RotatingText phrases={placeholderStream as string[]} intervalMs={3800} charDelay={15} />
+        </div>
+      )}
 
       {/* attached documents (P2-3) */}
       {attached.length > 0 && (

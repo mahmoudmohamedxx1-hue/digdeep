@@ -11,3 +11,8 @@ export { SpotlightCard } from "./spotlight-card";
 export { StaggerIn, FadeIn } from "./animated-list";
 export { AuroraHero } from "./aurora-hero";
 export { Magnet } from "./magnet";
+export { BorderBeam } from "./border-beam";
+export { ScrambleText, RotatingText } from "./scramble";
+export { Particles } from "./particles";
+export { Tilt } from "./tilt";
+export { burstConfetti } from "./confetti";

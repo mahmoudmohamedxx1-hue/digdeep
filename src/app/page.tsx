@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import { useTheme } from "next-themes";
 import type { LucideIcon } from "lucide-react";
 import {
   ArrowLeft, ArrowUpRight, BadgeCheck, ChevronDown, Compass, Gauge, House, LibraryBig, Loader2,
-  Moon, PanelLeftClose, PanelLeftOpen, Plus, Scale, Search as SearchIcon, Settings2, ShieldCheck,
-  Sparkles, Sun, Trash2, TrendingUp, Wifi, WifiOff,
+  MessageSquare, Moon, PanelLeftClose, PanelLeftOpen, Plus, Scale, Search as SearchIcon, Settings2,
+  ShieldCheck, Sparkles, Sun, Trash2, TrendingUp, Wifi, WifiOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,9 +18,9 @@ import { CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, C
 import { toast } from "@/hooks/use-toast";
 import { LogoMark, LogoWord } from "@/components/pplx/logo";
 import { AskBox, MODE_PARAMS, MODES } from "@/components/pplx/ask-box";
-import { AuroraHero, ShinyText, SpotlightCard, SplitText, StaggerIn } from "@/components/magic";
+import { AuroraHero, CountUp, Particles, ScrambleText, ShinyText, SpotlightCard, SplitText, StaggerIn, Tilt } from "@/components/magic";
 import { ThreadTurn } from "@/components/pplx/turn";
-import { SourcesPanel } from "@/components/pplx/sources-row";
+import { Favicon, SourcesPanel } from "@/components/pplx/sources-row";
 import type { AdvParams, AttachedDoc, HistoryItem, PoolEndpointUi, SearchSettingsUi, Turn } from "@/components/research/types";
 import { ACTIVE_STATUSES, fmtElapsed } from "@/components/research/types";
 import { saveTurn, getTurn, getThreadTurns, listHistory, deleteTurn, deleteThread, clearAll, orphanTurn } from "@/lib/idb-store";
@@ -32,6 +33,17 @@ const SUGGESTIONS: { icon: LucideIcon; label: string }[] = [
   { icon: Scale, label: "Is Rust replacing C++ yet?" },
   { icon: ShieldCheck, label: "What breaks if TLS PKI rotates?" },
   { icon: Sparkles, label: "What's new in deep research?" },
+];
+
+/** Idle-placeholder rotation — the empty composer keeps demonstrating
+ *  what it can do (first phrase is the classic default). */
+const EXAMPLE_STREAM = [
+  "Ask anything…",
+  "Is Rust actually replacing C++ in production?",
+  "What really broke the last time a root CA rotated?",
+  "How honest are AI citations, honestly?",
+  "Are small modular reactor economics finally working?",
+  "What's new in deep research engines?",
 ];
 
 /** Time-aware greeting — the room always knows what time it is. */
@@ -966,10 +978,21 @@ export default function Home() {
           </div>
         </div>
 
-        {view === "home" ? (
+        <MotionConfig reducedMotion="user">
+          <AnimatePresence mode="wait" initial={false}>
+            {view === "home" && (
           /* ================= HOME — aurora hero, composer is the star ================= */
-          <div className="relative mx-auto w-full max-w-[768px] px-4 pb-24 pt-[12vh] sm:pt-[15vh]">
+          <motion.div
+            key="home"
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10, transition: { duration: 0.16 } }}
+            transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+            className="relative mx-auto w-full max-w-[768px] px-4 pb-24 pt-[12vh] sm:pt-[15vh]"
+          >
+            <div aria-hidden className="dot-grid inset-x-0 top-0 h-[460px]" />
             <AuroraHero />
+            <Particles className="absolute inset-x-0 top-0 h-[440px] w-full" />
             <div className="relative z-10 flex flex-col items-center text-center">
               <span className="badge-aurora rise-in h-8 items-center gap-1.5 rounded-full px-3.5 text-[11.5px] font-medium text-foreground/85">
                 <Sparkles className="h-3 w-3 shrink-0 text-primary" />
@@ -1007,6 +1030,7 @@ export default function Home() {
                 docs={docs}
                 onDocs={setDocs}
                 inputId="ask-input"
+                placeholderStream={EXAMPLE_STREAM}
               />
               <p className="rise-in relative z-10 mt-3.5 text-center text-[12.5px] font-medium leading-relaxed [animation-delay:560ms]">
                 <ShinyText>Free &amp; keyless · every claim cited · every citation audited · honest quality scores</ShinyText>
@@ -1029,46 +1053,75 @@ export default function Home() {
                 </StaggerIn>
               ))}
             </div>
-          </div>
-        ) : view === "discover" ? (
+          </motion.div>
+            )}
+            {view === "discover" && (
           /* ================= DISCOVER — the web, editorially ================= */
-          <div className="mx-auto w-full max-w-2xl px-4 pb-24 pt-12">
+          <motion.div
+            key="discover"
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10, transition: { duration: 0.16 } }}
+            transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+            className="mx-auto w-full max-w-2xl px-4 pb-24 pt-12"
+          >
             <div className="flex items-center gap-2">
               <TrendingUp className="h-4 w-4 text-primary" />
-              <h1 className="text-[22px] font-semibold tracking-[-0.02em]">Discover</h1>
+              <h1 className="text-[22px] font-semibold tracking-[-0.02em]">
+                <ScrambleText charDelay={42}>Discover</ScrambleText>
+              </h1>
             </div>
             <p className="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">
-              What the web is talking about right now — tap a line to turn it into a proper research question.
+              What the web is talking about right now — tap a card to turn it into a proper research question.
             </p>
             {trending.length === 0 ? (
-              <div className="mt-6 space-y-2">
-                {[...Array(8)].map((_, i) => <div key={i} className="skeleton-line h-[45px] rounded-[14px]" />)}
+              <div className="mt-6 space-y-2.5">
+                {[...Array(6)].map((_, i) => <div key={i} className="skeleton-line h-[92px] rounded-[18px]" />)}
               </div>
             ) : (
-              <div className="mt-6 divide-y divide-border/70 overflow-hidden rounded-[20px] border border-border/80 bg-card shadow-elev-1">
+              <div className="mt-6 space-y-2.5">
                 {trending.slice(0, 10).map((t, i) => (
-                  <StaggerIn key={t.url} index={i} y={8}>
-                    <button
-                      onClick={() => { setQuery(t.title); setView("home"); }}
-                      className="group flex w-full items-center gap-3.5 px-4 py-3 text-left transition-colors hover:bg-accent"
-                      title={`Research: ${t.title}`}
-                    >
-                      <span className="w-4 shrink-0 text-[13px] font-semibold tabular-nums text-muted-foreground/50">{i + 1}</span>
-                      <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{t.title}</span>
-                      <span className="hidden shrink-0 items-center gap-1.5 text-[11px] tabular-nums text-muted-foreground sm:flex">
-                        <span className="truncate">{t.domain}</span>
-                        <span className="opacity-50">▲ {t.points}</span>
-                      </span>
-                      <ArrowUpRight className="h-3.5 w-3.5 shrink-0 self-center text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
-                    </button>
+                  <StaggerIn key={t.url} index={i} y={10}>
+                    <Tilt max={4} perspective={800} className="block">
+                      <button
+                        onClick={() => { setQuery(t.title); setView("home"); }}
+                        className="surface-card hover-lift group flex w-full items-start gap-3.5 rounded-[18px] p-4 text-left transition-colors hover:border-primary/30"
+                        title={`Research: ${t.title}`}
+                      >
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[10px] bg-muted text-[12px] font-semibold tabular-nums text-muted-foreground">
+                          {i + 1}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block line-clamp-2 text-[14px] font-medium leading-snug">{t.title}</span>
+                          <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] tabular-nums text-muted-foreground">
+                            <span className="inline-flex items-center gap-1.5">
+                              <Favicon domain={t.domain} className="h-3.5 w-3.5" />
+                              <span className="max-w-[180px] truncate">{t.domain}</span>
+                            </span>
+                            <span className="inline-flex items-center gap-1 opacity-80">
+                              <MessageSquare className="h-3 w-3" /> {t.comments}
+                            </span>
+                            <span className="opacity-60">▲ {t.points}</span>
+                          </span>
+                        </span>
+                        <ArrowUpRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground opacity-0 -translate-x-1 translate-y-1 transition-all duration-200 group-hover:translate-x-0 group-hover:translate-y-0 group-hover:opacity-100 group-hover:text-primary" />
+                      </button>
+                    </Tilt>
                   </StaggerIn>
                 ))}
               </div>
             )}
-          </div>
-        ) : (
+          </motion.div>
+            )}
+            {view === "thread" && (
           /* ================= THREAD ================= */
-          <div>
+          <motion.div
+            key="thread"
+            initial={{ opacity: 0, y: 18 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8, transition: { duration: 0.15 } }}
+            transition={{ duration: 0.34, ease: [0.22, 1, 0.36, 1] }}
+          >
             {/* jump to latest — appears when you scroll up mid-stream (ChatGPT behavior) */}
             {showJump && view === "thread" && (
               <button
@@ -1086,7 +1139,7 @@ export default function Home() {
                 <ArrowLeft className="h-4 w-4" />
               </Button>
               <p className="min-w-0 flex-1 truncate px-2 text-center text-[13px] font-medium text-foreground/85">
-                {turns[0]?.job?.query ?? "Research thread"}
+                <ScrambleText charDelay={22}>{turns[0]?.job?.query ?? "Research thread"}</ScrambleText>
               </p>
               <span className="mr-1 hidden shrink-0 rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium capitalize text-muted-foreground lg:inline-flex">
                 {lastTurn?.job?.mode === "chat" ? "chat" : lastTurn?.job?.mode === "quick" ? "quick answer" : (lastTurn?.job?.preset ?? mode)}
@@ -1114,7 +1167,14 @@ export default function Home() {
               {lastTurn && (
                 <aside className="sticky top-6 hidden h-fit w-[300px] shrink-0 space-y-6 xl:block">
                   <div>
-                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">Thread</p>
+                    <p className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">
+                      {anyActive && (
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold normal-case tracking-normal text-primary">
+                          <span className="pplx-dot h-1.5 w-1.5 rounded-full bg-primary" aria-hidden /> live
+                        </span>
+                      )}
+                      Thread
+                    </p>
                     <div className="flex flex-wrap gap-1.5">
                       <span className="rounded-lg bg-muted px-2.5 py-1 text-[11px] font-medium capitalize text-muted-foreground">
                         {lastTurn.job?.mode === "chat" ? "chat" : lastTurn.job?.mode === "quick" ? "quick answer" : (lastTurn.job?.preset ?? mode)}
@@ -1150,7 +1210,9 @@ export default function Home() {
 
                   {lastTurn.sources.length > 0 && (
                     <div className="max-h-[520px] overflow-hidden">
-                      <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">Sources · {lastTurn.sources.length}</p>
+                      <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">
+                        Sources · <CountUp to={lastTurn.sources.length} duration={0.8} />
+                      </p>
                       <div className="slim-scroll max-h-[460px] space-y-2 overflow-y-auto pr-1">
                         <SourcesPanel sources={lastTurn.sources} />
                       </div>
@@ -1191,8 +1253,10 @@ export default function Home() {
                 />
               </div>
             </div>
-          </div>
-        )}
+          </motion.div>
+            )}
+          </AnimatePresence>
+        </MotionConfig>
 
       </main>
 
@@ -1255,7 +1319,26 @@ export default function Home() {
             </p>
           </SheetHeader>
           <div className="slim-scroll mt-2 max-h-[calc(100vh-130px)] space-y-2 overflow-y-auto px-4 pb-6">
-            {history.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">Nothing here yet — ask something and it will be saved locally.</p>}
+            {history.length === 0 && (
+              <div className="flex flex-col items-center gap-3.5 py-14 text-center">
+                <span className="flex h-14 w-14 items-center justify-center rounded-[18px] bg-primary/10 text-primary">
+                  <Compass className="h-7 w-7" strokeWidth={1.8} />
+                </span>
+                <div>
+                  <p className="text-sm font-semibold">Nothing dug yet</p>
+                  <p className="mx-auto mt-1.5 max-w-[270px] text-[12px] leading-relaxed text-muted-foreground">
+                    Threads you start are saved here in this browser — reports, sources and thinking included.
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  className="press-scale rounded-full"
+                  onClick={() => { setHistoryOpen(false); goHome(); setTimeout(() => document.getElementById("ask-input")?.focus(), 80); }}
+                >
+                  Start your first research
+                </Button>
+              </div>
+            )}
             {history.map((h) => (
               <div key={h.id} className="group relative flex items-start gap-2 rounded-[16px] border border-input bg-card p-3.5">
                 <button onClick={() => openFromHistory(h)} className="min-w-0 flex-1 text-left">
