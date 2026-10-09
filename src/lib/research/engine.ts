@@ -758,7 +758,11 @@ export async function runJob(jobId: string) {
     // research until the clock runs out, then write the best report the
     // gathered evidence supports — and say so honestly in the event stream.
     const SERVERLESS = !!process.env.VERCEL;
-    const SERVERLESS_CAP_MS = Math.max(60_000, Number(process.env.DIGDEEP_SERVERLESS_BUDGET_MS) || 240_000);
+    // 200s engine budget + ~100s write reserve = fits the 300s Hobby function cap:
+    // the post-research tail (critique → section drafts → exec summary/conclusion →
+    // assembly) needs ~2 min of its own; a 240s budget left the writer starting with
+    // seconds to live and runs died at 95% with the report unwritten.
+    const SERVERLESS_CAP_MS = Math.max(60_000, Number(process.env.DIGDEEP_SERVERLESS_BUDGET_MS) || 200_000);
     const rawBudgetMs = unlimited ? Infinity : Math.max(3, job.maxMinutes) * 60_000;
     const budgetMs = SERVERLESS ? Math.min(rawBudgetMs, SERVERLESS_CAP_MS) : rawBudgetMs;
     const budgetMinutes = budgetMs === Infinity ? -1 : Math.max(1, Math.floor(budgetMs / 60_000));
@@ -1855,8 +1859,10 @@ export async function runJob(jobId: string) {
     const drafts = draftsArr.join("\n\n");
     await updateJob(jobId, { stage: "Writing executive summary & conclusion", progress: 95 });
     const [execR, concR, titleR, relatedR] = await Promise.allSettled([
-      ctx.llm([{ role: "user", content: execSummaryPrompt(job.query, drafts, job.language, job.preset) }], "exec-summary", false),
-      ctx.llm([{ role: "user", content: conclusionPrompt(job.query, drafts, job.language) }], "conclusion", false),
+      // bounded: on a capped serverless run the tail must not ride patient cooldown
+      // waits — a missed summary degrades honestly, a frozen function loses the report
+      ctx.llm([{ role: "user", content: execSummaryPrompt(job.query, drafts, job.language, job.preset) }], "exec-summary", false, undefined, { patient: false, timeoutMs: 60_000 }),
+      ctx.llm([{ role: "user", content: conclusionPrompt(job.query, drafts, job.language) }], "conclusion", false, undefined, { patient: false, timeoutMs: 60_000 }),
       ctx.llm([{ role: "user", content: titlePrompt(job.query, plan.restate, job.language) }], "title", false, 60, { patient: false, timeoutMs: 60_000 }),
       ctx.llm([{ role: "user", content: relatedPrompt(job.query, finalSections.map((s) => s.title), job.language) }], "related", false, 300, { patient: false, timeoutMs: 60_000 }),
     ]);
@@ -1927,7 +1933,7 @@ export async function runJob(jobId: string) {
     // A re-run of the same question in the same thread gets an honest
     // "What changed since the last run" section — nothing invented.
     let diffMd = "";
-    if (prevReportMd && prevQuery) {
+    if (prevReportMd && prevQuery && !ctx.outOfTime) {
       const normTokens = (s: string) =>
         new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 2));
       const A = normTokens(prevQuery);
@@ -1960,12 +1966,13 @@ export async function runJob(jobId: string) {
     // digdeep grades its own report against the comprehension pass's success
     // criteria on four dimensions, and publishes the score — including bad ones.
     let quality: { overall: number; dims: { name: string; score: number; note: string }[]; criteria: { criterion: string; met: boolean; why: string }[]; biggestWeakness: string } | null = null;
+    if (!ctx.outOfTime) {
     try {
       const scoreRes = await ctx.llmLive(
         [{ role: "user", content: qualityScorePrompt(job.query, comprehensionCriteria, reportMd, job.language) }],
         "score",
         "Grading my own report",
-        { wantThinking: true, maxTokens: 900 }
+        { wantThinking: true, maxTokens: 900, fast: { patient: false, timeoutMs: 45_000 } }
       );
       const q = extractJson(scoreRes.text);
       if (q && typeof q.overall === "number") {
@@ -1992,6 +1999,7 @@ export async function runJob(jobId: string) {
         );
       }
     } catch { /* the score is an enhancement — its absence is not fatal */ }
+    }
 
     const stats = {
       durationMs,
