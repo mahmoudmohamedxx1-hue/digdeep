@@ -159,3 +159,23 @@ export function LogoWord({ className = "" }: { className?: string }) {
     </span>
   );
 }
+
+/** Mark + wordmark as one tight unit — a 6px gap (optically the space inside
+ *  a letter) so the pair reads as a single brand object, never two widgets
+ *  that happen to sit near each other. Used by every header surface. */
+export function LogoLockup({
+  markClass = "h-7 w-7",
+  textClass = "text-[15px]",
+  className = "",
+}: {
+  markClass?: string;
+  textClass?: string;
+  className?: string;
+}) {
+  return (
+    <span className={`inline-flex items-center gap-1.5 ${className}`}>
+      <LogoMark className={`${markClass} shrink-0`} />
+      <LogoWord className={textClass} />
+    </span>
+  );
+}

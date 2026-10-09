@@ -7,7 +7,7 @@ import { MotionConfig } from "framer-motion";
 import { useTheme } from "next-themes";
 import {
   ArrowLeft, Compass, Gauge, House, LibraryBig, Loader2, Menu, Moon, PanelLeftClose,
-  PanelLeftOpen, Plus, Search as SearchIcon, Settings2, ShieldCheck, Sun, Trash2, Wifi, WifiOff,
+  Plus, Search as SearchIcon, Settings2, ShieldCheck, Sun, Trash2, Wifi, WifiOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,11 +16,11 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator, CommandShortcut } from "@/components/ui/command";
 import { toast } from "@/hooks/use-toast";
-import { LogoMark, LogoWord } from "@/components/pplx/logo";
+import { LogoLockup, LogoMark } from "@/components/pplx/logo";
 import { MODES } from "@/components/pplx/ask-box";
 import { StaggerIn } from "@/components/magic";
 import { JobSignals } from "@/components/app/job-signals";
-import type { HistoryItem, PoolEndpointUi, SearchSettingsUi } from "@/components/research/types";
+import type { HistoryItem, PoolEndpointUi, SearchSettingsUi, Turn } from "@/components/research/types";
 import { useSettings, useHistory, refreshHistory } from "@/lib/store";
 import { getThreadTurns, getTurn, deleteThread, deleteTurn, saveTurn } from "@/lib/idb-store";
 import { ToastAction } from "@/components/ui/toast";
@@ -48,7 +48,7 @@ function SidebarItem({
   collapsed?: boolean;
   href?: string;
 }) {
-  const cls = `press-scale ${collapsed ? "mx-auto flex h-11 w-11 justify-center" : "flex h-11 w-full items-center gap-3 px-3 text-sm font-medium"} items-center rounded-[10px] transition-colors ${
+  const cls = `press-scale ${collapsed ? "mx-auto flex h-10 w-10 justify-center" : "flex h-11 w-full items-center gap-3 px-3 text-sm font-medium"} items-center rounded-[10px] transition-colors ${
     active ? "bg-accent text-foreground" : "text-foreground/70 hover:bg-accent/70 hover:text-foreground"
   }`;
   const inner = (
@@ -83,9 +83,9 @@ function Recents({ onNavigate }: { onNavigate: (h: HistoryItem) => void }) {
   const remove = async (h: HistoryItem) => {
     // capture BEFORE deleting: whole threads via getThreadTurns, single turns
     // via getTurn — so Undo can put the exact records back
-    const captured = h.threadId
+    const captured: Turn[] = h.threadId
       ? await getThreadTurns(h.threadId)
-      : [(await getTurn(h.id))].filter(Boolean);
+      : [(await getTurn(h.id))].filter((t): t is Turn => t != null);
     if (h.threadId) await deleteThread(h.threadId);
     else await deleteTurn(h.id);
     await refreshHistory();
@@ -110,7 +110,7 @@ function Recents({ onNavigate }: { onNavigate: (h: HistoryItem) => void }) {
 
   if (grouped.length === 0) {
     return (
-      <p className="px-4 py-3 text-[12px] leading-relaxed text-muted-foreground">
+      <p className="px-3 py-3 text-[12px] leading-relaxed text-muted-foreground">
         No threads yet — everything you ask is saved here, in this browser.
       </p>
     );
@@ -119,7 +119,7 @@ function Recents({ onNavigate }: { onNavigate: (h: HistoryItem) => void }) {
     <>
       {grouped.map((g) => (
         <div key={g.label} className="mb-0.5">
-          <p className="px-4 pb-0.5 pt-2 text-[11px] font-medium text-muted-foreground/70">{g.label}</p>
+          <p className="px-3 pb-0.5 pt-2 text-[11px] font-medium text-muted-foreground/70">{g.label}</p>
           {g.items.map((h) => {
             const active = pathname.startsWith("/r/") && h.threadId != null && pathname === `/r/${h.threadId}`;
             return (
@@ -128,7 +128,7 @@ function Recents({ onNavigate }: { onNavigate: (h: HistoryItem) => void }) {
                   <button
                     onClick={() => onNavigate(h)}
                     title={h.query}
-                    className={`flex h-8 w-full items-center gap-2.5 rounded-[10px] pr-9 text-left text-[13px] transition-colors ${
+                    className={`flex h-8 w-full items-center gap-2.5 rounded-[10px] pl-3 pr-9 text-left text-[13px] transition-colors ${
                       active ? "bg-accent font-medium text-foreground" : "text-foreground/75 hover:bg-accent/70 hover:text-foreground"
                     }`}
                   >
@@ -540,11 +540,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
             sidebarOpen ? "w-[240px]" : "w-[64px]"
           }`}
         >
-          <div className={`flex items-center gap-2.5 py-3.5 ${sidebarOpen ? "px-4" : "justify-center px-2"}`}>
+          <div className={`flex items-center py-3.5 ${sidebarOpen ? "px-3" : "justify-center px-2"}`}>
             {sidebarOpen ? (
               <>
-                <LogoMark className="h-7 w-7 shrink-0" />
-                <LogoWord className="text-[15px]" />
+                <LogoLockup markClass="h-7 w-7" textClass="text-[15px]" />
                 <Button
                   variant="ghost"
                   size="icon"
@@ -557,22 +556,24 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 </Button>
               </>
             ) : (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="press-scale h-11 w-11 shrink-0 rounded-[12px] text-muted-foreground hover:text-foreground"
+              <button
                 onClick={toggleSidebar}
+                className="press-scale mx-auto flex h-10 w-10 items-center justify-center rounded-[10px] text-foreground transition-colors hover:bg-accent/70"
                 aria-label="Expand sidebar"
                 title="Expand sidebar"
               >
-                <PanelLeftOpen className="h-[18px] w-[18px]" />
-              </Button>
+                <LogoMark className="h-7 w-7" />
+              </button>
             )}
           </div>
           <div className={sidebarOpen ? "px-3" : "px-1"}>
             <Link
               href="/"
-              className={`press-scale flex h-10 items-center gap-2 rounded-[10px] bg-foreground text-[13px] font-semibold text-background shadow-elev-2 transition-colors hover:bg-foreground/85 ${sidebarOpen ? "w-full justify-center" : "mx-auto w-11 justify-center px-0"}`}
+              className={`press-scale flex h-10 items-center gap-2 rounded-[10px] text-[13px] font-semibold transition-colors ${
+                sidebarOpen
+                  ? "w-full justify-center bg-foreground text-background shadow-elev-2 hover:bg-foreground/85"
+                  : "mx-auto w-10 justify-center px-0 text-foreground/70 hover:bg-accent/70 hover:text-foreground"
+              }`}
               aria-label="New research"
               title="New research"
             >
@@ -587,15 +588,18 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </nav>
 
           {sidebarOpen && (
-            <div className="no-scrollbar mt-3.5 min-h-0 flex-1 overflow-y-auto pb-1">
-              <p className="px-4 pb-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">Recents</p>
-              <Recents onNavigate={openFromHistory} />
-              {history.length > 14 && (
-                <Link href="/library" className="mt-1 block px-4 py-1 text-xs text-primary hover:underline">
-                  View all in Library →
-                </Link>
-              )}
-            </div>
+            <>
+              <div aria-hidden className="mt-3 shrink-0 border-t border-sidebar-border" />
+              <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-3 pb-1 pt-0.5">
+                <p className="px-3 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">Recents</p>
+                <Recents onNavigate={openFromHistory} />
+                {history.length > 14 && (
+                  <Link href="/library" className="mt-1 block px-3 py-1 text-xs text-primary hover:underline">
+                    View all in Library →
+                  </Link>
+                )}
+              </div>
+            </>
           )}
           <div className={`mt-auto space-y-1 border-t border-sidebar-border pb-4 pt-3 ${sidebarOpen ? "px-3" : "px-1"}`}>
             <SidebarItem collapsed={!sidebarOpen} icon={<SearchIcon className="h-[18px] w-[18px]" />} label="Backends & search" onClick={() => { loadPool(); setPoolOpen(true); }} />
@@ -621,9 +625,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
                   <ArrowLeft className="h-4 w-4" />
                 </button>
               ) : (
-                <Link href="/" className="flex items-center gap-2 px-1" aria-label="DigDeep home">
-                  <LogoMark className="h-6 w-6" />
-                  <LogoWord className="text-sm" />
+                <Link href="/" className="px-0" aria-label="DigDeep home">
+                  <LogoLockup markClass="h-6 w-6" textClass="text-sm" />
                 </Link>
               )}
               {isThread && <p className="min-w-0 flex-1 truncate px-1 text-[13px] font-medium">Research thread</p>}
@@ -644,10 +647,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
         {/* ---------- MOBILE NAV SHEET ---------- */}
         <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
           <SheetContent side="left" className="glass w-[300px] overflow-y-auto rounded-r-[20px] p-0 sm:rounded-none">
-            <SheetHeader className="border-b border-border/60 px-4 pb-3">
-              <SheetTitle className="flex items-center gap-2.5">
-                <LogoMark className="h-6 w-6" />
-                <LogoWord />
+            <SheetHeader className="border-b border-border/60 px-3 pb-3">
+              <SheetTitle>
+                <LogoLockup markClass="h-6 w-6" textClass="text-[15px]" />
               </SheetTitle>
             </SheetHeader>
             <div className="space-y-1 p-3">
@@ -665,7 +667,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
               <SidebarItem icon={<LibraryBig className="h-[18px] w-[18px]" />} label="Library" active={pathname === "/library"} href="/library" onClick={() => setMobileNavOpen(false)} />
             </nav>
             <div className="mt-4 px-3">
-              <p className="px-1 pb-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">Recents</p>
+              <p className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">Recents</p>
               <Recents onNavigate={openFromHistory} />
             </div>
             <div className="mt-6 space-y-1 border-t border-border/60 p-3">

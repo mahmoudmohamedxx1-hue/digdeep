@@ -1,5 +1,26 @@
 # Changelog
 
+## v2.0.1 — sidebar, lockup & quiet scrollbars (2026-10-10)
+
+- **Tight brand lockup.** The ring mark and "DigDeep" wordmark now sit 6px
+  apart (was 10) as one unit — new `LogoLockup` used by the sidebar header,
+  the mobile top bar and the nav sheet, so the pair is identical everywhere.
+- **Sidebar on one grid.** Recents rows were flush against the sidebar's left
+  edge (status dot at x=0) while group labels sat at 16px and nav icons at
+  24px — three competing axes. Now everything shares one grid: pills at
+  12px margins, icons/dots/headings on the 24px axis. Added a hairline
+  divider above Recents (symmetric with the footer), and the delete button
+  sits inside the row's rounded pill.
+- **Collapsed rail.** The 64px rail now anchors on the animated ring logo
+  (click to expand) followed by uniform 40px ghost tiles — no more chunky
+  solid pill next to bare icons.
+- **Hidden scrollbars everywhere.** `slim-scroll` (a visible 5px bar in
+  Chrome, a full default bar in Firefox) is gone: every scrollable surface —
+  main, sidebar, dialogs, sheets, code blocks — scrolls without painting a
+  bar. Wheel, trackpad, touch and keyboard scrolling are untouched.
+- **Fixed a null-safety type error** in the recents delete-with-undo capture
+  path (pre-existing since v2.0, surfaced by `tsc --noEmit`).
+
 ## v2.0 — the claim-verification upgrade (2026-10-10)
 
 Four phases, four commits, each independently reviewable. The product promise
