@@ -15,7 +15,10 @@
     "db:push": "prisma db push --accept-data-loss",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
-    "db:reset": "prisma migrate reset"
+    "db:reset": "prisma migrate reset",
+    "pg:start": "bun scripts/pg-dev.ts",
+    "pg:stop": "bun scripts/pg-dev.ts stop",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -88,11 +91,13 @@
     "zustand": "^5.0.6"
   },
   "devDependencies": {
+    "@embedded-postgres/linux-x64": "^18.4.0-beta.17",
     "@tailwindcss/postcss": "^4",
     "@types/pdfkit": "^0.17.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "bun-types": "^1.3.4",
+    "embedded-postgres": "^18.4.0-beta.17",
     "eslint": "^9",
     "eslint-config-next": "^16.1.1",
     "tailwindcss": "^4",

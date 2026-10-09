@@ -5,7 +5,7 @@
 [![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=nextdotjs)](https://nextjs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-38BDF8?logo=tailwindcss&logoColor=white)](https://tailwindcss.com)
-[![Prisma](https://img.shields.io/badge/Prisma-SQLite-2D3748?logo=prisma)](https://www.prisma.io)
+[![Prisma](https://img.shields.io/badge/Prisma-PostgreSQL-2D3748?logo=prisma)](https://www.prisma.io)
 [![Routing tests](https://img.shields.io/badge/routing_tests-67%2F67-brightgreen)](#testing--benchmarks)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -83,7 +83,7 @@ Questions about digdeep itself ("what engines do you have?", "how does your rese
 
 ### Local-first, bring-your-own-key optional
 
-- Threads live in **IndexedDB in your browser**; jobs, sources, and events in server-side SQLite
+- Threads live in **IndexedDB in your browser**; jobs, sources, and events in server-side PostgreSQL
 - Default model chain: **GLM-5.3-Flash → GLM-4.5-Flash** (z.ai SDK) with keyless failover to **LLM7** and **Pollinations**, behind a health/circuit-breaker layer
 - **BYOK frontier synthesis** — plug your own OpenAI / Gemini / DeepSeek / Groq key and it is used *only* for report-writing steps, with the free chain as failover; add any OpenAI-compatible endpoint in Settings → Backends
 
@@ -157,7 +157,7 @@ scripts/
 docs/screenshots/                   # the images in this README
 ```
 
-**Tech stack:** Next.js 16 (App Router) · TypeScript (strict) · Tailwind CSS 4 · shadcn/ui · Prisma + SQLite · SSE streaming · IndexedDB · z-ai-web-dev-sdk (GLM)
+**Tech stack:** Next.js 16 (App Router) · TypeScript (strict) · Tailwind CSS 4 · shadcn/ui · Prisma + PostgreSQL · SSE streaming · IndexedDB · z-ai-web-dev-sdk (GLM)
 
 ## Quickstart
 
@@ -167,10 +167,13 @@ Prerequisites: [Bun](https://bun.sh) 1.1+ (recommended; `bun.lock` is committed)
 git clone https://github.com/mahmoudmohamedxx1-hue/digdeep.git
 cd digdeep
 bun install
-cp .env.example .env      # local SQLite path — no API keys needed
+cp .env.example .env      # local Postgres URL — no API keys needed
+bun run pg:start          # boot the bundled dev Postgres on :5433 (no install needed)
 bun run db:push           # create the database schema
 bun run dev               # http://localhost:3000
 ```
+
+The dev database is a **self-contained embedded PostgreSQL** (no system install, no Docker) that stores its cluster in `db/pgdata/` — the same provider as production, so what you test locally is what runs on Vercel. `bun run pg:stop` shuts it down.
 
 **About the model backends.** The default chain works out of the box anywhere the z.ai SDK is available. Everywhere else, digdeep automatically fails over to keyless public endpoints (LLM7, Pollinations) — and you can register **any OpenAI-compatible endpoint** (with or without an API key) under Settings → Backends, including BYOK presets for OpenAI, Gemini, DeepSeek, and Groq. No key is ever required to use the app.
 
@@ -180,11 +183,25 @@ bun run dev               # http://localhost:3000
 bun run build && bun start
 ```
 
+## Deploying to Vercel (PostgreSQL)
+
+digdeep runs serverlessly on Vercel with a Vercel Postgres database:
+
+1. **Create the database** — in your Vercel project, open **Storage → Create Database → Postgres** and link it to the project.
+2. **Push the schema once** from your machine (or the Vercel CLI):
+   ```bash
+   DATABASE_URL="<your pooled connection string>" bun run db:push
+   ```
+   The pooled URL (the one ending in `?pgbouncer=true&connection_limit=1`) is the right one for serverless.
+3. **Nothing else to configure** — when you deploy, Vercel injects `POSTGRES_URL` / `POSTGRES_PRISMA_URL` automatically and digdeep picks them up (`DATABASE_URL` also works if you prefer to set it explicitly). `prisma generate` runs automatically on every deploy via the `postinstall` script.
+
+The database stores research jobs, activity events, sources, sections, and settings — so deep links (`/r/<id>`) keep working across restarts and deployments.
+
 ## Configuration
 
 | Setting | Where | Notes |
 |---|---|---|
-| `DATABASE_URL` | `.env` | SQLite file path (Prisma) |
+| `DATABASE_URL` | `.env` | PostgreSQL connection string (Prisma); Vercel's `POSTGRES_URL` / `POSTGRES_PRISMA_URL` are picked up automatically |
 | Research preset | Ask box | quick · standard · deep · exhaustive · custom · unlimited |
 | Search engines | Settings → Search | Toggle any of the 13 engines; add SearXNG instances |
 | Brave / Google CSE keys | Settings → Search | Optional; free tiers supported |

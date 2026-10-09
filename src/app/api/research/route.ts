@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
         stage: "Queued",
       },
     });
-    // fire-and-forget background run (survives page reloads; state persisted in SQLite)
+    // fire-and-forget background run (survives page reloads; state persisted in PostgreSQL)
     void runJob(job.id).catch((e) => console.error("[engine]", job.id, e));
     return NextResponse.json({ id: job.id, threadId: job.threadId });
   } catch (err) {

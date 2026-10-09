@@ -75,3 +75,11 @@ scripts/*
 !scripts/bench/
 scripts/bench/*
 !scripts/bench/questions.jsonl
+
+# local embedded postgres (dev) — never commit clusters or logs
+db/pgdata/
+db/*.log
+db/pg.pid
+db/.pgpw
+!scripts/pg-dev.ts
+!scripts/pg-smoke.ts
