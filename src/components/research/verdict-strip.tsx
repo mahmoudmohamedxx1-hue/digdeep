@@ -231,7 +231,7 @@ export function VerdictStrip({ job }: { job: JobItem }) {
         className="grid transition-[grid-template-rows] duration-300 ease-apple"
         style={{ gridTemplateRows: open ? "1fr" : "0fr" }}
         aria-hidden={!open}
-        {...(open ? {} : { inert: true as unknown as React.HTMLAttributes<HTMLDivElement> })}
+        {...(open ? {} : { inert: true })}
       >
         <div className="overflow-hidden">
           <ExpandedCard stats={stats} quality={quality} />

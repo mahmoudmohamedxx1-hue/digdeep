@@ -100,6 +100,9 @@ export interface JobItem {
   createdAt: string;
   startedAt?: string | null;
   completedAt?: string | null;
+  /** true when this turn was opened from a shared read-only snapshot, not a run in this browser */
+  sharedSnapshot?: boolean;
+  sharedAt?: string | null;
 }
 
 export interface HistoryItem {
@@ -114,6 +117,8 @@ export interface HistoryItem {
   createdAt: string;
   completedAt?: string | null;
   modelPref: string;
+  /** Phase 2 — one-line verdict summary for Library rows */
+  verdict?: { fully: number; of: number; integrity?: number } | null;
 }
 
 export interface PoolEndpointUi {

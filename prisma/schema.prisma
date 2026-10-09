@@ -93,3 +93,22 @@ model Setting {
   key   String   @id
   value String
 }
+
+// Read-only share snapshots — keyless sharing that survives server restarts.
+// Created from a completed job; the report + sources travel together so the
+// evidence panel works for viewers who never ran the research.
+model SharedReport {
+  id        String   @id // short public share id (code-assigned, "s-<base62>")
+  jobId     String   @unique
+  threadId  String?
+  query     String
+  mode      String   @default("research")
+  language  String   @default("English")
+  preset    String   @default("standard")
+  reportMd  String
+  stats     String? // JSON — includes the claim-check ledger
+  sources   String // JSON [{url,domain,title,snippet,sectionTitle}]
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}

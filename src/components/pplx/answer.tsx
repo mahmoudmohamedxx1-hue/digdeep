@@ -8,6 +8,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/research/markdown";
 import { useTyper } from "@/hooks/use-typer";
+import { toast } from "@/hooks/use-toast";
 import type { SourceItem, SectionItem, JobItem } from "@/components/research/types";
 import { fmtElapsed, ACTIVE_STATUSES } from "@/components/research/types";
 import { VerdictStrip } from "@/components/research/verdict-strip";
@@ -99,7 +100,7 @@ function ProvenanceDisclosure({ job }: { job: JobItem }) {
         className="grid transition-[grid-template-rows] duration-300 ease-apple"
         style={{ gridTemplateRows: open ? "1fr" : "0fr" }}
         aria-hidden={!open}
-        {...(open ? {} : { inert: true as unknown as React.HTMLAttributes<HTMLDivElement> })}
+        {...(open ? {} : { inert: true })}
       >
         <div className="overflow-hidden">
           <div className="space-y-3 border-x border-b border-border/70 bg-card px-4 py-3.5 text-[11.5px] leading-relaxed text-muted-foreground">
@@ -136,6 +137,62 @@ function ProvenanceDisclosure({ job }: { job: JobItem }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/** Share — saves a read-only snapshot on the server and copies a link that
+ *  opens for anyone, in any browser. Falls back to copying the current URL
+ *  when already on a shared snapshot. Never pretends: failures say what happened. */
+async function saveShareLink(job: JobItem): Promise<string | { error: string }> {
+  if (job.sharedSnapshot) return window.location.href; // already a share link
+  try {
+    const r = await fetch(`/api/research/${job.id}/share`, { method: "POST" });
+    const d = await r.json();
+    if (r.ok && d.shareId) return `${window.location.origin}/r/${d.shareId}`;
+    return { error: d.error ?? "Could not save the snapshot." };
+  } catch {
+    return { error: navigator.onLine ? "The server didn't respond — try again in a moment." : "You're offline — sharing needs a connection. Reconnect and try again." };
+  }
+}
+
+function ShareButton({ job, compact }: { job: JobItem; compact?: boolean }) {
+  const [state, setState] = useState<"idle" | "saving" | "done">("idle");
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      className="press-scale h-9 w-9 rounded-full p-0 text-muted-foreground hover:text-foreground"
+      disabled={state === "saving"}
+      title={job.sharedSnapshot ? "Copy this snapshot's link" : "Save a read-only snapshot and copy the link — anyone can open it"}
+      onClick={async () => {
+        if (state === "saving") return;
+        setState("saving");
+        const res = await saveShareLink(job);
+        if (typeof res === "string") {
+          try {
+            await navigator.clipboard.writeText(res);
+          } catch { /* clipboard blocked — still report success with the link shown */ }
+          setState("done");
+          toast({
+            title: "Share link copied",
+            description: typeof res === "string" ? res : undefined,
+          });
+          setTimeout(() => setState("idle"), 2400);
+        } else {
+          setState("idle");
+          toast({ title: "Could not share", description: res.error, variant: "destructive" });
+        }
+      }}
+    >
+      {state === "done" ? (
+        <Check className={compact ? "h-4 w-4 text-primary" : "h-4 w-4 text-primary"} />
+      ) : state === "saving" ? (
+        <RefreshCw className="h-4 w-4 animate-spin" />
+      ) : (
+        <Share2 className="h-4 w-4" />
+      )}
+      <span className="sr-only">{state === "saving" ? "Saving snapshot" : "Share report"}</span>
+    </Button>
   );
 }
 
@@ -182,12 +239,6 @@ export function AnswerView({
     } catch { /* ignore */ }
   };
 
-  const share = async () => {
-    try {
-      await navigator.clipboard.writeText(window.location.href);
-    } catch { /* ignore */ }
-  };
-
   // ---------- FAILED ----------
   if (job.status === "failed") {
     return <FailureCard job={job} onRetry={onRetry} isChat={isChat} />;
@@ -226,10 +277,7 @@ export function AnswerView({
             {copied ? <Check className="h-4 w-4 text-primary" /> : <Copy className="h-4 w-4" />}
             <span className="sr-only">{copied ? "Copied" : "Copy"}</span>
           </Button>
-          <Button size="sm" variant="ghost" className="press-scale h-9 w-9 rounded-full p-0 text-muted-foreground hover:text-foreground" onClick={share} title="Copy link">
-            <Share2 className="h-4 w-4" />
-            <span className="sr-only">Share</span>
-          </Button>
+          <ShareButton job={job} compact />
         </div>
         <ProvenanceDisclosure job={job} />
       </div>
@@ -300,23 +348,24 @@ export function AnswerView({
             {copied ? <Check className="h-4 w-4 text-primary" /> : <Copy className="h-4 w-4" />}
             <span className="sr-only">{copied ? "Copied" : "Copy"}</span>
           </Button>
-          <a href={`/api/research/${job.id}/export?format=pdf`} target="_blank" rel="noreferrer" title="Export as PDF">
-            <Button size="sm" variant="ghost" className="press-scale h-9 w-9 rounded-full p-0 text-muted-foreground hover:text-foreground">
-              <FileDown className="h-4 w-4" />
-              <span className="sr-only">PDF</span>
-            </Button>
-          </a>
-          <a href={`/api/research/${job.id}/export?format=md`} target="_blank" rel="noreferrer" title="Export as Markdown">
-            <Button size="sm" variant="ghost" className="press-scale h-9 w-9 rounded-full p-0 text-muted-foreground hover:text-foreground">
-              <FileText className="h-4 w-4" />
-              <span className="sr-only">Markdown</span>
-            </Button>
-          </a>
-          <Button size="sm" variant="ghost" className="press-scale h-9 w-9 rounded-full p-0 text-muted-foreground hover:text-foreground" onClick={share} title="Copy link">
-            <Share2 className="h-4 w-4" />
-            <span className="sr-only">Share</span>
-          </Button>
-          {!isQuick && onRerun && (
+          {!job.sharedSnapshot && (
+            <>
+              <a href={`/api/research/${job.id}/export?format=pdf`} target="_blank" rel="noreferrer" title="Export as PDF">
+                <Button size="sm" variant="ghost" className="press-scale h-9 w-9 rounded-full p-0 text-muted-foreground hover:text-foreground">
+                  <FileDown className="h-4 w-4" />
+                  <span className="sr-only">PDF</span>
+                </Button>
+              </a>
+              <a href={`/api/research/${job.id}/export?format=md`} target="_blank" rel="noreferrer" title="Export as Markdown">
+                <Button size="sm" variant="ghost" className="press-scale h-9 w-9 rounded-full p-0 text-muted-foreground hover:text-foreground">
+                  <FileText className="h-4 w-4" />
+                  <span className="sr-only">Markdown</span>
+                </Button>
+              </a>
+            </>
+          )}
+          <ShareButton job={job} />
+          {!isQuick && onRerun && !job.sharedSnapshot && (
             <Button size="sm" variant="ghost" className="press-scale h-9 w-9 rounded-full p-0 text-muted-foreground hover:text-foreground" onClick={onRerun} title="Research this question again — the new report includes a 'what changed' diff against this one">
               <RotateCw className="h-4 w-4" />
               <span className="sr-only">Re-run</span>

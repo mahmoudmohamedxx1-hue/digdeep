@@ -9,6 +9,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Favicon } from "@/components/pplx/sources-row";
 import { StaggerIn } from "@/components/magic";
+import { useOnline } from "@/hooks/use-online";
 
 interface TrendingItem {
   title: string;
@@ -75,6 +76,7 @@ const TECH_ICON = Globe;
 
 export default function DiscoverPage() {
   const router = useRouter();
+  const online = useOnline();
   const [items, setItems] = useState<TrendingItem[] | null>(null); // null = loading
   const [failed, setFailed] = useState(false);
   const [tab, setTab] = useState<string>("all");
@@ -172,9 +174,11 @@ export default function DiscoverPage() {
             <Compass className="h-7 w-7" strokeWidth={1.8} />
           </span>
           <div>
-            <p className="text-sm font-semibold">Couldn&apos;t load what&apos;s trending</p>
+            <p className="text-sm font-semibold">{online ? "Couldn't load what's trending" : "You're offline"}</p>
             <p className="mx-auto mt-1.5 max-w-[320px] text-[12px] leading-relaxed text-muted-foreground">
-              The trending feed (Hacker News front page) didn&apos;t answer. It might be rate-limiting us — retry in a moment.
+              {online
+                ? "The trending feed (Hacker News front page) didn't answer. It might be rate-limiting us — retry in a moment."
+                : "The trending feed needs a connection. Your saved threads stay available — reconnect and retry."}
             </p>
           </div>
           <Button size="sm" variant="outline" className="press-scale gap-1.5 rounded-full" onClick={() => void load()}>

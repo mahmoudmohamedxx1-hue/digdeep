@@ -16,9 +16,16 @@ export default function LibraryPage() {
   const { history } = useHistory();
   const [q, setQ] = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
+  const [loaded, setLoaded] = useState(false); // false = first load in flight
 
   useEffect(() => {
-    void refreshHistory();
+    let alive = true;
+    refreshHistory().finally(() => {
+      if (alive) setLoaded(true);
+    });
+    return () => {
+      alive = false;
+    };
   }, []);
 
   const filtered = useMemo(() => {
@@ -72,8 +79,22 @@ export default function LibraryPage() {
         </div>
       )}
 
+      {/* loading skeletons — never flash the empty state while IndexedDB reads */}
+      {!loaded && (
+        <div className="mt-6 space-y-2" aria-label="Loading your threads" role="status">
+          {[...Array(5)].map((_, i) => (
+            <div key={i} className="surface-card flex items-start gap-2 rounded-[16px] p-3.5">
+              <div className="flex-1 space-y-2">
+                <div className={`skeleton-line h-4 rounded-full ${i % 3 === 0 ? "w-3/4" : "w-2/3"}`} />
+                <div className="skeleton-line h-3 w-1/3 rounded-full" />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* designed empty state */}
-      {history.length === 0 && (
+      {loaded && history.length === 0 && (
         <div className="mt-12 flex flex-col items-center gap-4 py-16 text-center">
           <span className="flex h-16 w-16 items-center justify-center rounded-[20px] bg-primary/10 text-primary">
             <Compass className="h-8 w-8" strokeWidth={1.8} />
@@ -91,7 +112,7 @@ export default function LibraryPage() {
       )}
 
       {/* no search hits */}
-      {history.length > 0 && filtered.length === 0 && (
+      {loaded && history.length > 0 && filtered.length === 0 && (
         <div className="mt-12 flex flex-col items-center gap-3 py-12 text-center">
           <span className="flex h-12 w-12 items-center justify-center rounded-[16px] bg-muted text-muted-foreground">
             <Search className="h-6 w-6" strokeWidth={1.8} />
@@ -102,6 +123,7 @@ export default function LibraryPage() {
       )}
 
       {/* time-grouped threads */}
+      {loaded && (
       <div className="mt-6 space-y-6">
         {grouped.map((g) => (
           <section key={g.label} aria-label={g.label}>
@@ -135,8 +157,9 @@ export default function LibraryPage() {
           </section>
         ))}
       </div>
+      )}
 
-      {history.length > 0 && (
+      {loaded && history.length > 0 && (
         <Button
           variant="outline"
           className={`press-scale mt-8 w-full gap-2 rounded-[12px] ${confirmClear ? "border-destructive/50 text-destructive hover:text-destructive" : "text-destructive hover:text-destructive"}`}

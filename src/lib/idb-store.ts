@@ -13,9 +13,20 @@
 import type { EventItem, SourceItem, SectionItem, JobItem, HistoryItem, Turn } from "@/components/research/types";
 
 const DB_NAME = "digdeep";
-const DB_VERSION = 1;
+const DB_VERSION = 2; // v2 (2026-10): turn-record normalization + meta store — see MIGRATIONS below
 const TURNS = "turns"; // keyPath: jobId — full turn snapshots
 const THREADS = "threads"; // keyPath: threadId — thread metadata
+const META = "meta"; // keyPath: key — schema markers ("schema" → 2)
+
+/**
+ * MIGRATIONS ( IndexedDB `digdeep` )
+ * v1 → v2 (2026-10): every existing turn record is normalized in place —
+ *   `events`/`sources`/`sections` guaranteed arrays, `job.threadId` guaranteed
+ *   present (null when the run had no thread), `savedAt` backfilled from
+ *   `job.createdAt` when missing. A `meta` store is added and stamped with
+ *   `schema: 2`. No record is dropped or rewritten beyond these defaults —
+ *   threads survive the upgrade untouched.
+ */
 
 interface StoredTurn {
   jobId: string;
@@ -47,8 +58,10 @@ function openDb(): Promise<IDBDatabase> {
       return;
     }
     const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
+    req.onupgradeneeded = (ev) => {
       const db = req.result;
+      const tx = req.transaction;
+      const fromV = (ev as IDBVersionChangeEvent).oldVersion ?? 0;
       if (!db.objectStoreNames.contains(TURNS)) {
         const s = db.createObjectStore(TURNS, { keyPath: "jobId" });
         s.createIndex("threadId", "threadId");
@@ -56,6 +69,40 @@ function openDb(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(THREADS)) {
         db.createObjectStore(THREADS, { keyPath: "threadId" });
+      }
+      if (!db.objectStoreNames.contains(META)) {
+        db.createObjectStore(META, { keyPath: "key" });
+      }
+      // v1 → v2: normalize every existing turn record in place (arrays, threadId,
+      // savedAt) so all readers can rely on shape. Safe: adds defaults only.
+      if (tx && fromV === 1) {
+        try {
+          const store = tx.objectStore(TURNS);
+          const cursorReq = store.openCursor();
+          cursorReq.onsuccess = () => {
+            const cursor = cursorReq.result;
+            if (cursor) {
+              const rec = cursor.value as Partial<StoredTurn> & { job?: Partial<StoredTurn["job"]> & { threadId?: string | null; createdAt?: string | number | Date } };
+              let changed = false;
+              const next: StoredTurn = rec as StoredTurn;
+              if (!Array.isArray(next.events)) { next.events = []; changed = true; }
+              if (!Array.isArray(next.sources)) { next.sources = []; changed = true; }
+              if (!Array.isArray(next.sections)) { next.sections = []; changed = true; }
+              if (next.job) {
+                if (next.job.threadId === undefined) { next.job.threadId = null; changed = true; }
+              }
+              if (next.threadId === undefined) { next.threadId = next.job?.threadId ?? null; changed = true; }
+              if (typeof next.savedAt !== "number") {
+                const c = next.job?.createdAt;
+                next.savedAt = c ? new Date(c).getTime() || Date.now() : Date.now();
+                changed = true;
+              }
+              if (changed) cursor.update(next);
+              cursor.continue();
+            }
+          };
+          tx.objectStore(META).put({ key: "schema", value: 2, migratedAt: Date.now() });
+        } catch { /* normalization is best-effort — records stay readable either way */ }
       }
     };
     req.onsuccess = () => resolve(req.result);

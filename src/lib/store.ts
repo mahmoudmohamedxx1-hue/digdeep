@@ -53,6 +53,22 @@ export const useSettings = create<SettingsState>()(
     }),
     {
       name: "digdeep-settings",
+      version: 2,
+      /** v0/v1 (unversioned) → v2: backfill any missing adv keys so older
+       *  localStorage never breaks a newer UI. Nothing is discarded. */
+      migrate: (persisted, _version) => {
+        const p = (persisted ?? {}) as Partial<SettingsState>;
+        const adv = { ...MODE_PARAMS[p.mode ?? "standard"], ...(p.adv ?? {}) };
+        return {
+          mode: p.mode ?? "standard",
+          language: p.language ?? "English",
+          modelPref: p.modelPref ?? "auto",
+          adv,
+          advTouched: p.advTouched ?? false,
+          showThinking: p.showThinking ?? true,
+          sidebarOpen: p.sidebarOpen ?? true,
+        } as SettingsState;
+      },
       partialize: (s) => ({
         mode: s.mode,
         language: s.language,

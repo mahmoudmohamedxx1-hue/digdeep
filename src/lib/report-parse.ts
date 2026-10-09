@@ -13,6 +13,24 @@ export interface ParsedReport {
   refs: ReportRef[];
 }
 
+/** One `References` line → a ref ("n. title — *domain* — url"). Shared by every parser. */
+export function parseRefLine(line: string): ReportRef | null {
+  const m = line.trim().match(/^(\d+)\.\s(.+?)\s+—\s+\*(.+?)\*\s+—\s+(\S+)$/);
+  return m ? { n: Number(m[1]), title: m[2], domain: m[3], url: m[4] } : null;
+}
+
+/** All refs from the `## References` block of a report (server-safe, pure). */
+export function extractRefsBlock(md: string): ReportRef[] {
+  const idx = md.indexOf("## References");
+  if (idx < 0) return [];
+  const out: ReportRef[] = [];
+  for (const line of md.slice(idx).split("\n")) {
+    const r = parseRefLine(line);
+    if (r) out.push(r);
+  }
+  return out;
+}
+
 /** Parse the final research report markdown into structured parts. */
 export function parseReport(md: string): ParsedReport {
   const lines = md.split("\n");
@@ -33,8 +51,8 @@ export function parseReport(md: string): ParsedReport {
     if (mode === "meta") continue;
     if (mode === "title") continue;
     if (mode === "refs") {
-      const m = line.trim().match(/^(\d+)\.\s(.+?)\s+—\s+\*(.+?)\*\s+—\s+(\S+)$/);
-      if (m) refs.push({ n: Number(m[1]), title: m[2], domain: m[3], url: m[4] });
+      const r = parseRefLine(line);
+      if (r) refs.push(r);
       continue;
     }
     if (/^##\s/.test(line)) { mode = "body"; bodyLines.push(line); continue; }
@@ -58,13 +76,7 @@ export function parseAnswer(md: string, mode?: string): ParsedReport {
   if (!md.includes("## Executive Summary")) {
     const idx = md.indexOf("## References");
     const body = (idx >= 0 ? md.slice(0, idx) : md).trim();
-    const refs: ReportRef[] = [];
-    if (idx >= 0) {
-      for (const line of md.slice(idx).split("\n")) {
-        const m = line.trim().match(/^(\d+)\.\s(.+?)\s+—\s+\*(.+?)\*\s+—\s+(\S+)$/);
-        if (m) refs.push({ n: Number(m[1]), title: m[2], domain: m[3], url: m[4] });
-      }
-    }
+    const refs = extractRefsBlock(md);
     return { exec: "", body, conclusion: "", diff: "", refs };
   }
   return parseReport(md);

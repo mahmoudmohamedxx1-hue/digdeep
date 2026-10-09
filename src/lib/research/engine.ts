@@ -1865,7 +1865,7 @@ export async function runJob(jobId: string) {
             `Citation audit: ${totalCites} citations checked — ${citeStats.integrity}% integrity`,
             `${weak.length} citation${weak.length > 1 ? "s were" : " was"} flagged as weakly anchored (the claim sentence barely overlaps the cited source). ${citeStats.repaired} re-anchored to the right source, ${citeStats.dropped} removed as unsupported, the rest verified. Where the others are confident, digdeep is correct.`,
             crRes.model,
-            { totalCites, flagged: weak.length, ...citeStats }
+            { totalCites, flaggedWeak: weak.length, ...citeStats }
           );
         } catch (citeErr) {
           await ctx.emit("info", `Citation audit flagged ${weak.length} weak citation${weak.length > 1 ? "s" : ""} but the repair pass is unavailable`, citeErr instanceof Error ? citeErr.message.slice(0, 200) : undefined);
@@ -1876,7 +1876,7 @@ export async function runJob(jobId: string) {
           `Citation audit: ${totalCites} citations, all well-anchored`,
           "Every claim sentence in the drafts lexically matches the source it cites — no mis-anchored citations detected by the pre-screen.",
           undefined,
-          { totalCites, flagged: 0, ...citeStats }
+          { totalCites, ...citeStats }
         );
       }
     }
