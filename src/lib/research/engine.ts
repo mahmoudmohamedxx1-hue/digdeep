@@ -139,25 +139,36 @@ class Ctx {
   llmBlackoutUntil = 0;
   deadline: number; // Infinity when unlimited
   hasTimeBudget: boolean;
+  /** Absolute wall-clock death time of the serverless function (Infinity elsewhere).
+   *  Every patient LLM ride is clamped against it and enhancement stages skip fast
+   *  when squeezed — the platform freezes the function mid-flight at maxDuration,
+   * so the #1 duty near the end is PERSISTING the report, never more LLM calls. */
+  hardStop: number;
   anyUnlimited: boolean;
   unlimitedRounds: boolean;
   unlimitedSources: boolean;
   startedAt = Date.now();
   aspectTimes: number[] = [];
 
-  constructor(jobId: string, pref: ModelPref, startSeq: number, opts: { maxMinutes: number; depth: number; maxSources: number; anyUnlimited: boolean }) {
+  constructor(jobId: string, pref: ModelPref, startSeq: number, opts: { maxMinutes: number; depth: number; maxSources: number; anyUnlimited: boolean; hardStopMs?: number }) {
     this.jobId = jobId;
     this.pref = pref;
     this.seq = startSeq;
     this.anyUnlimited = opts.anyUnlimited;
     this.hasTimeBudget = opts.maxMinutes > 0;
     this.deadline = this.hasTimeBudget ? Date.now() + Math.max(3, opts.maxMinutes) * 60_000 : Infinity;
+    this.hardStop = Date.now() + (opts.hardStopMs ?? Number.POSITIVE_INFINITY);
     this.unlimitedRounds = opts.depth < 0;
     this.unlimitedSources = opts.maxSources < 0;
   }
 
   get timeLeft() {
     return this.deadline - Date.now();
+  }
+
+  /** wall-clock ms until the platform freezes this function (Infinity off-serverless) */
+  get hardLeft() {
+    return this.hardStop - Date.now();
   }
 
   /** true when out of time; always false in unlimited mode */
@@ -196,6 +207,7 @@ class Ctx {
     fast?: { patient?: boolean; timeoutMs?: number },
     systemOverride?: string
   ): Promise<LlmResult> {
+    if (this.hardLeft < 15_000) throw new Error("hard stop — the serverless function clock expired before this step could run");
     const sys = systemOverride
       ? systemOverride
       : this.rolePrompt
@@ -204,10 +216,11 @@ class Ctx {
     // circuit breaker: while blacked out, degrade fast instead of riding 40 rounds per step
     const opts = fast ?? (Date.now() < this.llmBlackoutUntil ? { patient: false as const, timeoutMs: 45_000 } : undefined);
     // Budgeted runs: bound every step's patient ride to a quarter of the remaining budget
-    // (1–8 min) so one throttled step can never eat the whole clock. Unlimited runs ride free.
+    // (1–8 min) so one throttled step can never eat the whole clock — and never past the
+    // function's hard death time (hardLeft is Infinity off-serverless). Unlimited runs ride free.
     const rideBudget =
       this.hasTimeBudget && opts?.patient !== false
-        ? Math.min(Math.max(Math.round(this.timeLeft * 0.25), 60_000), 8 * 60_000)
+        ? Math.min(Math.max(Math.round(this.timeLeft * 0.25), 60_000), 8 * 60_000, Math.max(5_000, this.hardLeft - 10_000))
         : undefined;
     // Heartbeat: an LLM call can sit in patient retries for many minutes under rate limiting.
     // Keep touching updatedAt so the staleness watchdog never mistakes a throttled-but-alive
@@ -268,6 +281,7 @@ class Ctx {
       system?: string;
     }
   ): Promise<LlmResult> {
+    if (this.hardLeft < 15_000) throw new Error("hard stop — the serverless function clock expired before this step could run");
     const wantThinking = o?.wantThinking ?? false;
     const streamTo = o?.streamTo;
     const thoughtId = `th${++this.thoughtN}`;
@@ -331,7 +345,7 @@ class Ctx {
     const opts = o?.fast ?? (blackedOut ? { patient: false as const, timeoutMs: 45_000 } : undefined);
     const rideBudget =
       this.hasTimeBudget && opts?.patient !== false
-        ? Math.min(Math.max(Math.round(this.timeLeft * 0.25), 60_000), 8 * 60_000)
+        ? Math.min(Math.max(Math.round(this.timeLeft * 0.25), 60_000), 8 * 60_000, Math.max(5_000, this.hardLeft - 10_000))
         : undefined;
     const beat = setInterval(() => {
       db.researchJob.update({ where: { id: this.jobId }, data: { updatedAt: new Date() } }).catch(() => {});
@@ -773,6 +787,9 @@ export async function runJob(jobId: string) {
       depth: job.depth,
       maxSources: job.maxSources,
       anyUnlimited: unlimited,
+      // the platform freezes the function at maxDuration (300s Hobby) — leave a
+      // safety margin so the final report write always makes it to the database
+      ...(SERVERLESS ? { hardStopMs: 280_000 } : {}),
     });
 
     if (SERVERLESS && rawBudgetMs > SERVERLESS_CAP_MS) {
@@ -1733,20 +1750,28 @@ export async function runJob(jobId: string) {
       const srcs = sourcesUsed.slice(0, 60);
       let draftText = "";
       let draftModel: string | undefined;
+      if (ctx.hardLeft < 20_000) {
+        // the function is seconds from freezing — publish the verified research notes
+        // directly instead of gambling them on one more LLM round trip
+        await ctx.emit("info", `Clock nearly out — publishing the verified research notes for “${sec.title}” directly`, "The findings were already synthesized from the sources read; only the prose rewrite is skipped.");
+        draftText = sec.findings || "_Insufficient evidence was gathered for this section._";
+      } else {
       try {
         // the section streams into the UI as it is written — the user literally watches
-        // the report being typed, one section at a time
+        // the report being typed, one section at a time. Bounded by the hard clock: a
+        // stalled draft falls back to findings instead of freezing the whole report.
         const draftRes = await ctx.llmLive(
           [{ role: "user", content: draftSectionPrompt(job.query, sec.title, sec.question, sec.findings ?? "(no findings — rely on general knowledge and clearly mark it as background)", srcs, words, job.language, evidenceNotesFor(sec.title), adversarialNotesFor(sec.title)) }],
           "draft",
           `Writing: ${sec.title}`,
-          { streamTo: sec.id }
+          { streamTo: sec.id, fast: { patient: false, timeoutMs: Math.min(60_000, Math.max(20_000, ctx.hardLeft - 15_000)) } }
         );
         draftText = draftRes.text;
         draftModel = draftRes.model;
       } catch (err) {
         await ctx.emit("info", `Draft step failed for “${sec.title}” — using verified research notes directly`, err instanceof Error ? err.message.slice(0, 300) : undefined);
         draftText = sec.findings || "_Insufficient evidence was gathered for this section._";
+      }
       }
       draftsArr.push(draftText);
       await db.researchSection.update({ where: { id: sec.id }, data: { draftMd: draftText } });
@@ -1860,11 +1885,12 @@ export async function runJob(jobId: string) {
     await updateJob(jobId, { stage: "Writing executive summary & conclusion", progress: 95 });
     const [execR, concR, titleR, relatedR] = await Promise.allSettled([
       // bounded: on a capped serverless run the tail must not ride patient cooldown
-      // waits — a missed summary degrades honestly, a frozen function loses the report
-      ctx.llm([{ role: "user", content: execSummaryPrompt(job.query, drafts, job.language, job.preset) }], "exec-summary", false, undefined, { patient: false, timeoutMs: 60_000 }),
-      ctx.llm([{ role: "user", content: conclusionPrompt(job.query, drafts, job.language) }], "conclusion", false, undefined, { patient: false, timeoutMs: 60_000 }),
-      ctx.llm([{ role: "user", content: titlePrompt(job.query, plan.restate, job.language) }], "title", false, 60, { patient: false, timeoutMs: 60_000 }),
-      ctx.llm([{ role: "user", content: relatedPrompt(job.query, finalSections.map((s) => s.title), job.language) }], "related", false, 300, { patient: false, timeoutMs: 60_000 }),
+      // waits — a missed summary degrades honestly, a frozen function loses the report.
+      // Clamped to the hard clock so even a late-starting tail still persists.
+      ctx.llm([{ role: "user", content: execSummaryPrompt(job.query, drafts, job.language, job.preset) }], "exec-summary", false, undefined, { patient: false, timeoutMs: Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
+      ctx.llm([{ role: "user", content: conclusionPrompt(job.query, drafts, job.language) }], "conclusion", false, undefined, { patient: false, timeoutMs: Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
+      ctx.llm([{ role: "user", content: titlePrompt(job.query, plan.restate, job.language) }], "title", false, 60, { patient: false, timeoutMs: Math.min(60_000, Math.max(10_000, ctx.hardLeft - 20_000)) }),
+      ctx.llm([{ role: "user", content: relatedPrompt(job.query, finalSections.map((s) => s.title), job.language) }], "related", false, 300, { patient: false, timeoutMs: Math.min(60_000, Math.max(10_000, ctx.hardLeft - 20_000)) }),
     ]);
     const execText = execR.status === "fulfilled" ? execR.value.text : "*(Executive summary unavailable — LLM backends were exhausted; see section content below.)*";
     const concText = concR.status === "fulfilled" ? concR.value.text : "";
@@ -1886,14 +1912,18 @@ export async function runJob(jobId: string) {
         ...ctx.contradictions.map((c) => `- **${c.claim}** — ${c.positions}`),
         ...contestedClaims.filter((c) => !ctx.contradictions.some((x) => x.claim === c.claim)).map((c) => `- **${c.claim}** — graded ${c.grade}${c.verified ? `, cross-check ${c.verified}` : ""}`),
       ].join("\n");
-      try {
-        const disR = await ctx.llm(
-          [{ role: "user", content: disagreementsPrompt(job.query, ctx.contradictions, contestedClaims.map((c) => ({ claim: c.claim, basis: c.basis })), refuted, job.language) }],
-          "disagreements", false, 700, { patient: false, timeoutMs: 90_000 }
-        );
-        disagreementsMd = disR.text.trim();
-      } catch {
-        disagreementsMd = rawList; // honest raw list beats silently dropping the disagreements
+      if (ctx.hardLeft >= 100_000) {
+        try {
+          const disR = await ctx.llm(
+            [{ role: "user", content: disagreementsPrompt(job.query, ctx.contradictions, contestedClaims.map((c) => ({ claim: c.claim, basis: c.basis })), refuted, job.language) }],
+            "disagreements", false, 700, { patient: false, timeoutMs: Math.min(90_000, Math.max(15_000, ctx.hardLeft - 40_000)) }
+          );
+          disagreementsMd = disR.text.trim();
+        } catch {
+          disagreementsMd = rawList; // honest raw list beats silently dropping the disagreements
+        }
+      } else {
+        disagreementsMd = rawList; // clock-squeezed — the honest raw list now beats a stalled LLM pass
       }
       await ctx.emit("draft", "“Where sources disagree” section written", `${ctx.contradictions.length} contradiction(s), ${contestedClaims.length} contested claim(s), ${refuted.length} refuted on cross-check — surfaced instead of averaged away.`, undefined, { contradictions: ctx.contradictions.length, contested: contestedClaims.length, refuted: refuted.length });
     }
@@ -1966,7 +1996,7 @@ export async function runJob(jobId: string) {
     // digdeep grades its own report against the comprehension pass's success
     // criteria on four dimensions, and publishes the score — including bad ones.
     let quality: { overall: number; dims: { name: string; score: number; note: string }[]; criteria: { criterion: string; met: boolean; why: string }[]; biggestWeakness: string } | null = null;
-    if (!ctx.outOfTime) {
+    if (!ctx.outOfTime && ctx.hardLeft >= 50_000) {
     try {
       const scoreRes = await ctx.llmLive(
         [{ role: "user", content: qualityScorePrompt(job.query, comprehensionCriteria, reportMd, job.language) }],
