@@ -4,9 +4,11 @@
  * Favicon state manager — Claude-style page-level status in the tab icon:
  *  - working: green dot pulsing while a research run is live
  *  - done:    fixed blue dot once it finishes (until you focus the tab)
- *  - idle:    the plain app mark
+ *  - idle:    the plain brand emblem
  * Frames are canvas-drawn PNG data URLs (works in every browser, unlike
  * animated SVG favicons), swapped on the <link rel="icon"> Next.js emits.
+ * The idle icon is the real /brand/mark.png whenever it has loaded; before
+ * that (or if it fails) a simple canvas-drawn emblem stands in.
  */
 
 type FaviconState = "idle" | "working" | "done";
@@ -20,6 +22,9 @@ let doneResetTimer: ReturnType<typeof setTimeout> | null = null;
 const WORK_COLOR = "#30d158"; // system green
 const DONE_COLOR = "#0a84ff"; // system blue
 
+const CANVAS_PX = 64; // retina-crisp favicon frames
+const MARK_SRC = "/brand/mark.png";
+
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.beginPath();
   ctx.moveTo(x + r, y);
@@ -30,40 +35,66 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.closePath();
 }
 
+/** The brand emblem image, loaded once. `null` until decoded (or forever if it fails). */
+let markImg: HTMLImageElement | null = null;
+let markRequested = false;
+
+function requestMark() {
+  if (markRequested || typeof window === "undefined") return;
+  markRequested = true;
+  const img = new Image();
+  img.decoding = "async";
+  img.onload = () => {
+    markImg = img;
+    framesReady = false; // rebuild frames with the real emblem on next use
+    if (initialized) ensureFrames();
+    // re-assert current state so an in-flight pulse picks up the new frames
+    if (currentState === "working") {
+      apply(pulseFrame === 1 ? frameWorkOn : frameWorkOff);
+    } else if (currentState === "done") {
+      apply(frameDone);
+    }
+  };
+  img.src = MARK_SRC;
+}
+
 /** Draw the app mark + optional status dot, return as PNG data URL. */
 function drawIcon(opts: { dotColor?: string; dotAlpha?: number } = {}): string {
   const c = document.createElement("canvas");
-  c.width = 32;
-  c.height = 32;
+  c.width = CANVAS_PX;
+  c.height = CANVAS_PX;
   const ctx = c.getContext("2d");
   if (!ctx) return "";
-  // mark background — violet gradient, 23% radius
-  const g = ctx.createLinearGradient(0, 0, 32, 32);
-  g.addColorStop(0, "#C4B5FD");
-  g.addColorStop(0.5, "#7C3AED");
-  g.addColorStop(1, "#5B21B6");
-  ctx.fillStyle = g;
-  roundRect(ctx, 0.5, 0.5, 31, 31, 7.5);
-  ctx.fill();
-  // the strata
-  ctx.fillStyle = "rgba(255,255,255,0.94)";
-  roundRect(ctx, 8, 8.5, 16, 3.2, 1.6);
-  ctx.fill();
-  ctx.fillStyle = "rgba(255,255,255,0.72)";
-  roundRect(ctx, 8, 14.4, 11, 3.2, 1.6);
-  ctx.fill();
-  ctx.fillStyle = "rgba(255,255,255,0.96)";
-  ctx.beginPath();
-  ctx.arc(10.4, 23.4, 2.6, 0, Math.PI * 2);
-  ctx.fill();
-  // status dot — top-right badge with a white ring
+
+  if (markImg && markImg.naturalWidth > 0) {
+    // the real brand emblem (rounded corners baked into the PNG)
+    ctx.drawImage(markImg, 0, 0, CANVAS_PX, CANVAS_PX);
+  } else {
+    // stand-in until the emblem loads: dark tile + concentric topographic arcs
+    ctx.fillStyle = "#232227";
+    roundRect(ctx, 0.5, 0.5, CANVAS_PX - 1, CANVAS_PX - 1, 15);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.85)";
+    ctx.lineWidth = 3;
+    for (const r of [26, 19, 12]) {
+      ctx.beginPath();
+      ctx.arc(30, 32, r, Math.PI * 0.15, Math.PI * 1.55);
+      ctx.stroke();
+    }
+    ctx.fillStyle = "#8B5CF6";
+    ctx.beginPath();
+    ctx.arc(24, 44, 5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // status dot — bottom-right badge with a white ring
   if (opts.dotColor) {
     ctx.globalAlpha = opts.dotAlpha ?? 1;
     ctx.beginPath();
-    ctx.arc(25.5, 25.5, 4.6, 0, Math.PI * 2);
+    ctx.arc(51, 51, 9.2, 0, Math.PI * 2);
     ctx.fillStyle = opts.dotColor;
     ctx.fill();
-    ctx.lineWidth = 1.6;
+    ctx.lineWidth = 3.2;
     ctx.strokeStyle = "rgba(255,255,255,0.95)";
     ctx.stroke();
     ctx.globalAlpha = 1;
@@ -112,6 +143,7 @@ function ensureFrames() {
 export function initFaviconManager() {
   if (initialized || typeof window === "undefined") return;
   initialized = true;
+  requestMark();
   const first = iconLinks()[0];
   if (first) originalHref = first.href;
   ensureFrames();
@@ -146,6 +178,6 @@ export function setFaviconState(next: FaviconState) {
     ensureFrames();
     apply(frameDone);
   } else {
-    apply(originalHref ?? "/icon.svg");
+    apply(originalHref ?? MARK_SRC);
   }
 }

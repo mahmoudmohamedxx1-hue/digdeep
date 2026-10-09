@@ -1,28 +1,35 @@
 "use client";
 
 /**
- * App mark for DigDeep — "the dig": three strata that narrow as they go
- * deeper (dig past the surface layer), with a bright core at the bottom —
- * the answer you came back up with. Geometric, ownable, and deliberately
- * nothing like any framework logo.
+ * App mark for DigDeep — the topographic "D" emblem: concentric contour lines
+ * narrowing toward a glowing core, animated as a slow breathing loop (the
+ * dig that never stops going deeper). Rendered from an optimized animated
+ * WebP baked from the brand animation; the static PNG stands in if the
+ * animation cannot load. The wordmark keeps "Dig" light and "Deep" violet,
+ * matching the brand sheet.
  */
+
+/** Animated brand emblem. Sized by `className` (default matches the old SVG mark). */
 export function LogoMark({ className = "h-7 w-7" }: { className?: string }) {
   return (
-    <svg viewBox="0 0 32 32" className={`${className} shrink-0`} aria-hidden="true">
-      <defs>
-        <linearGradient id="dd-mark" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#C4B5FD" />
-          <stop offset="0.5" stopColor="#7C3AED" />
-          <stop offset="1" stopColor="#5B21B6" />
-        </linearGradient>
-      </defs>
-      <rect width="32" height="32" rx="7.5" fill="url(#dd-mark)" />
-      {/* the strata — each layer shorter, the dig narrowing toward the find */}
-      <rect x="8" y="8.5" width="16" height="3.2" rx="1.6" fill="#fff" fillOpacity="0.94" />
-      <rect x="8" y="14.4" width="11" height="3.2" rx="1.6" fill="#fff" fillOpacity="0.72" />
-      {/* the core — what the dig was for */}
-      <circle cx="10.4" cy="23.4" r="2.6" fill="#fff" fillOpacity="0.96" />
-    </svg>
+    <span
+      className={`${className} relative inline-block shrink-0 select-none overflow-hidden rounded-[7.5px] bg-[#232227]`}
+      aria-hidden="true"
+    >
+      <img
+        src="/brand/logo-anim.webp"
+        alt=""
+        draggable={false}
+        decoding="async"
+        className="h-full w-full object-cover"
+        onError={(e) => {
+          // graceful stand-in if the animation fails to load (ancient browser / corrupt file)
+          const img = e.currentTarget;
+          img.onerror = null;
+          img.src = "/brand/mark.png";
+        }}
+      />
+    </span>
   );
 }
 
