@@ -7,7 +7,7 @@ import { MotionConfig } from "framer-motion";
 import { useTheme } from "next-themes";
 import {
   ArrowLeft, Compass, Gauge, House, LibraryBig, Loader2, Menu, Moon, PanelLeftClose,
-  Plus, Search as SearchIcon, Settings2, ShieldCheck, Sun, Trash2, Wifi, WifiOff,
+  Plus, Settings, Settings2, Sun, Trash2, Wifi, WifiOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -160,8 +160,8 @@ const BYOK_PRESETS: { label: string; baseUrl: string; model: string }[] = [
   { label: "Groq", baseUrl: "https://api.groq.com/openai/v1/chat/completions", model: "llama-3.3-70b-versatile" },
 ];
 
-function BackendsDialog({
-  open, onOpenChange, endpoints, setEndpoints, searchSettings, setSearchSettings, onSave, savingPool, savingSearch, testEndpoint, testing, saveSearch,
+function SettingsDialog({
+  open, onOpenChange, endpoints, setEndpoints, searchSettings, setSearchSettings, onSave, savingPool, savingSearch, testEndpoint, testing, saveSearch, theme, setTheme, mounted,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -175,19 +175,44 @@ function BackendsDialog({
   testEndpoint: (ep: PoolEndpointUi) => void;
   testing: string | null;
   saveSearch: () => void;
+  theme: string | undefined;
+  setTheme: (t: string) => void;
+  mounted: boolean;
 }) {
   const [newInstance, setNewInstance] = useState("");
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="glass max-h-[85vh] overflow-y-auto rounded-[20px] sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><Settings2 className="h-4 w-4 text-primary" /> Backends &amp; web search</DialogTitle>
+          <DialogTitle className="flex items-center gap-2"><Settings2 className="h-4 w-4 text-primary" /> Settings</DialogTitle>
           <DialogDescription>
-            Keyless LLM failover chain, optional frontier keys, and the general-web search layer. Everything
+            Appearance, and the research backends — the keyless LLM failover chain,
+            optional frontier keys, and the general-web search layer. Everything
             defaults to free and keyless — keys are optional upgrades.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-5">
+          {/* ---------- Appearance ---------- */}
+          <div className="rounded-[16px] border p-4">
+            <p className="mb-2 text-xs font-semibold text-muted-foreground">Appearance</p>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground/80">
+                  {mounted && theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                </span>
+                <div>
+                  <p className="text-xs font-medium">Dark mode</p>
+                  <p className="text-[11px] text-muted-foreground">Low-light theme across the app</p>
+                </div>
+              </div>
+              <Switch
+                checked={mounted ? theme === "dark" : false}
+                onCheckedChange={(v) => setTheme(v ? "dark" : "light")}
+                aria-label="Dark mode"
+              />
+            </div>
+          </div>
+
           <div className="rounded-[16px] border p-4">
             <p className="mb-2 text-xs font-semibold text-muted-foreground">Always-on keyless chain (auto mode order)</p>
             <div className="space-y-1.5 text-xs">
@@ -404,7 +429,7 @@ function BackendsDialog({
 
 /**
  * The app shell — sidebar (desktop), menu button + sheet nav (mobile),
- * ⌘K palette, backends dialog and the global job signals. Wraps every page.
+ * ⌘K palette, settings dialog and the global job signals. Wraps every page.
  */
 export function Shell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -415,7 +440,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [poolOpen, setPoolOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [customEndpoints, setCustomEndpoints] = useState<PoolEndpointUi[]>([]);
   const [searchSettings, setSearchSettings] = useState<SearchSettingsUi | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
@@ -444,6 +469,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
       }
     } catch { /* ignore */ }
   }, []);
+  const openSettings = useCallback(() => {
+    loadPool();
+    setSettingsOpen(true);
+  }, [loadPool]);
 
   const testEndpoint = async (ep: PoolEndpointUi) => {
     setTesting(ep.baseUrl);
@@ -508,15 +537,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("keydown", h);
   }, []);
 
-  // pages open the shared backends dialog through this event
+  // pages open the shared settings dialog through this event (composer's
+  // "backends & web search" button and friends)
   useEffect(() => {
-    const h = () => {
-      loadPool();
-      setPoolOpen(true);
-    };
-    window.addEventListener("digdeep:open-backends", h);
-    return () => window.removeEventListener("digdeep:open-backends", h);
-  }, [loadPool]);
+    const h = () => openSettings();
+    window.addEventListener("digdeep:open-settings", h);
+    return () => window.removeEventListener("digdeep:open-settings", h);
+  }, [openSettings]);
 
   const openFromHistory = (h: HistoryItem) => {
     setMobileNavOpen(false);
@@ -602,13 +629,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             </>
           )}
           <div className={`mt-auto space-y-1 border-t border-sidebar-border pb-4 pt-3 ${sidebarOpen ? "px-3" : "px-1"}`}>
-            <SidebarItem collapsed={!sidebarOpen} icon={<SearchIcon className="h-[18px] w-[18px]" />} label="Backends & search" onClick={() => { loadPool(); setPoolOpen(true); }} />
-            <SidebarItem
-              collapsed={!sidebarOpen}
-              icon={mounted && theme === "dark" ? <Sun className="h-[18px] w-[18px]" /> : <Moon className="h-[18px] w-[18px]" />}
-              label={mounted && theme === "dark" ? "Light mode" : "Dark mode"}
-              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            />
+            <SidebarItem collapsed={!sidebarOpen} icon={<Settings className="h-[18px] w-[18px]" />} label="Settings" onClick={openSettings} />
           </div>
         </aside>
 
@@ -634,9 +655,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
               <div className="flex items-center gap-0.5">
                 <Button variant="ghost" size="icon" className="press-scale h-9 w-9 rounded-[12px]" onClick={() => router.push("/library")} aria-label="Library">
                   <LibraryBig className="h-4 w-4" />
-                </Button>
-                <Button variant="ghost" size="icon" className="press-scale h-9 w-9 rounded-[12px]" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} aria-label="Toggle theme">
-                  {mounted && theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
                 </Button>
               </div>
             </div>
@@ -671,12 +689,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
               <Recents onNavigate={openFromHistory} />
             </div>
             <div className="mt-6 space-y-1 border-t border-border/60 p-3">
-              <SidebarItem icon={<SearchIcon className="h-[18px] w-[18px]" />} label="Backends & search" onClick={() => { setMobileNavOpen(false); loadPool(); setPoolOpen(true); }} />
-              <SidebarItem
-                icon={mounted && theme === "dark" ? <Sun className="h-[18px] w-[18px]" /> : <Moon className="h-[18px] w-[18px]" />}
-                label={mounted && theme === "dark" ? "Light mode" : "Dark mode"}
-                onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-              />
+              <SidebarItem icon={<Settings className="h-[18px] w-[18px]" />} label="Settings" onClick={() => { setMobileNavOpen(false); openSettings(); }} />
             </div>
           </SheetContent>
         </Sheet>
@@ -700,8 +713,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
                 {mounted && theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
                 {mounted && theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
               </CommandItem>
-              <CommandItem onSelect={() => { setPaletteOpen(false); loadPool(); setPoolOpen(true); }}>
-                <SearchIcon className="h-4 w-4" /> Backends &amp; web search
+              <CommandItem onSelect={() => { setPaletteOpen(false); openSettings(); }}>
+                <Settings2 className="h-4 w-4" /> Settings — backends, search &amp; theme
               </CommandItem>
             </CommandGroup>
             <CommandSeparator />
@@ -730,10 +743,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </CommandList>
         </CommandDialog>
 
-        {/* ---------- BACKENDS & SEARCH DIALOG ---------- */}
-        <BackendsDialog
-          open={poolOpen}
-          onOpenChange={setPoolOpen}
+        {/* ---------- SETTINGS DIALOG (appearance + backends + search) ---------- */}
+        <SettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
           endpoints={customEndpoints}
           setEndpoints={setCustomEndpoints}
           searchSettings={searchSettings}
@@ -744,6 +757,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
           testEndpoint={testEndpoint}
           testing={testing}
           saveSearch={saveSearch}
+          theme={theme}
+          setTheme={setTheme}
+          mounted={mounted}
         />
 
         {/* favicon states + browser notifications — mounted once, route-proof */}

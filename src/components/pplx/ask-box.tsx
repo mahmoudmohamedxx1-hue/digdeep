@@ -343,7 +343,7 @@ export function AskBox({
                 onClick={() => { setSettingsOpen(false); onManagePool(); }}
                 className="flex w-full items-center justify-center gap-1.5 rounded-[12px] border border-dashed py-2 text-[12px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary"
               >
-                <Plus className="h-3.5 w-3.5" /> Manage backends &amp; web search
+                <Settings2 className="h-3.5 w-3.5" /> Settings — backends &amp; web search
               </button>
 
               <p className="text-[11px] leading-relaxed text-muted-foreground">

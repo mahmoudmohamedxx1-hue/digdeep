@@ -1,5 +1,20 @@
 # Changelog
 
+## v2.0.2 — Settings dialog & the original emblem back (2026-10-10)
+
+- **Your logo, restored.** The header mark is once again the uploaded
+  topographic "D" emblem — the tight transparent animated WebP (128 frames)
+  with the light-mode drop shadow — not the SVG ring that replaced it in
+  v2.0's Phase 3. Same for the favicon (dark badge + emblem + status dots:
+  green flash while researching, blue when done) and the notification icon.
+  The 6px lockup gap and all-wordmark typography from v2.0.1 are kept.
+- **One Settings dialog.** "Backends & search" and "Dark mode" are no longer
+  loose sidebar footer items: a single **Settings** entry (gear) opens a
+  dialog with an **Appearance** section (dark-mode switch) above the keyless
+  chain, custom endpoints (BYOK) and the web-search layer. Reachable from
+  the sidebar (open and collapsed), the mobile menu, the ⌘K palette, and
+  the composer's settings popover (`digdeep:open-settings` event).
+
 ## v2.0.1 — sidebar, lockup & quiet scrollbars (2026-10-10)
 
 - **Tight brand lockup.** The ring mark and "DigDeep" wordmark now sit 6px

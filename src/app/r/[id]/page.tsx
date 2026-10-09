@@ -619,7 +619,7 @@ export default function ThreadPage() {
               onModelPref={settings.setModelPref}
               showThinking={settings.showThinking}
               onShowThinking={settings.setShowThinking}
-              onManagePool={() => window.dispatchEvent(new CustomEvent("digdeep:open-backends"))}
+              onManagePool={() => window.dispatchEvent(new CustomEvent("digdeep:open-settings"))}
               docs={followDocs}
               onDocs={setFollowDocs}
               stopMode={anyActive}

@@ -118,7 +118,7 @@ export default function HomePage() {
           onModelPref={settings.setModelPref}
           showThinking={settings.showThinking}
           onShowThinking={settings.setShowThinking}
-          onManagePool={() => window.dispatchEvent(new CustomEvent("digdeep:open-backends"))}
+          onManagePool={() => window.dispatchEvent(new CustomEvent("digdeep:open-settings"))}
           docs={docs}
           onDocs={setDocs}
           inputId="ask-input"
