@@ -2068,17 +2068,20 @@ function fallbackPlan(query: string, breadth: number): ResearchPlan {
   };
 }
 
-/** Watchdog: mark jobs that stopped updating (e.g. server restart) as failed.
- *  12-min threshold: LLM calls heartbeat every 60s while alive, so a truly stale job
- *  means the process died mid-run (search/read stretches never exceed a few minutes). */
+/** Watchdog: mark jobs that stopped updating (e.g. server restart or serverless
+ *  deploy cutover) as failed, so the UI can offer a retry instead of spinning. */
 export async function markStaleJobs() {
+  // 5-min threshold: LLM calls heartbeat updatedAt every 60s, and search/read
+  // stretches are bounded by per-fetch timeouts — so a live engine never goes
+  // 5 minutes without a touch. Anything older is dead (serverless deploy
+  // cutover, restart, crash) and is failed fast so the UI's retry appears.
   const stale = await db.researchJob.findMany({
-    where: { status: { in: ["queued", "planning", "researching", "critiquing", "synthesizing"] }, updatedAt: { lt: new Date(Date.now() - 12 * 60_000) } },
+    where: { status: { in: ["queued", "planning", "researching", "critiquing", "synthesizing"] }, updatedAt: { lt: new Date(Date.now() - 5 * 60_000) } },
     select: { id: true },
   });
   for (const j of stale) {
     if (activeJobs.has(j.id)) continue;
-    await db.researchJob.update({ where: { id: j.id }, data: { status: "failed", stage: "Interrupted", error: "Job stalled or was interrupted (e.g. server restart). Start a new research run.", completedAt: new Date() } });
-    await db.activityEvent.create({ data: { jobId: j.id, type: "error", title: "Job interrupted", detail: "The research process was interrupted. Please start a new run.", seq: 9_999_998 } }).catch(() => {});
+    await db.researchJob.update({ where: { id: j.id }, data: { status: "failed", stage: "Interrupted", error: "Job stalled or was interrupted (e.g. a redeploy or server restart). Start a new research run or tap Retry.", completedAt: new Date() } });
+    await db.activityEvent.create({ data: { jobId: j.id, type: "error", title: "Job interrupted", detail: "The research process was interrupted. Please start a new run or tap Retry.", seq: 9_999_998 } }).catch(() => {});
   }
 }
