@@ -276,12 +276,23 @@ export function AnswerView({
         </div>
         {chatTyping && <div className="mt-3"><SkipTypingButton onClick={skipChat} /></div>}
 
-        <div className="mt-6 flex flex-wrap items-center gap-1 border-t border-border/60 pt-3.5">
+        <div className="mt-6 flex flex-wrap items-center gap-0.5 border-t border-border/60 pt-3.5">
           <Button size="sm" variant="ghost" className="press-scale h-9 w-9 rounded-full p-0 text-muted-foreground hover:text-foreground" onClick={copyReport} title="Copy reply">
             {copied ? <Check className="h-4 w-4 text-primary" /> : <Copy className="h-4 w-4" />}
             <span className="sr-only">{copied ? "Copied" : "Copy"}</span>
           </Button>
+          {!job.sharedSnapshot && onRetry && (
+            <Button size="sm" variant="ghost" className="press-scale h-9 w-9 rounded-full p-0 text-muted-foreground hover:text-foreground" onClick={onRetry} title="Regenerate this reply">
+              <RotateCw className="h-4 w-4" />
+              <span className="sr-only">Regenerate</span>
+            </Button>
+          )}
           <ShareButton job={job} compact />
+          {job.completedAt && (
+            <span className="ml-auto self-center pr-1.5 text-[10.5px] tabular-nums text-muted-foreground/70">
+              {new Date(job.completedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </span>
+          )}
         </div>
         <ProvenanceDisclosure job={job} />
       </div>
@@ -377,6 +388,11 @@ export function AnswerView({
               <RotateCw className="h-4 w-4" />
               <span className="sr-only">Re-run</span>
             </Button>
+          )}
+          {job.completedAt && (
+            <span className="ml-auto self-center pr-1.5 text-[10.5px] tabular-nums text-muted-foreground/70">
+              {new Date(job.completedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </span>
           )}
         </div>
 

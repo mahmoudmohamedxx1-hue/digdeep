@@ -5,7 +5,7 @@ import {
   AlertTriangle, ArrowDownWideNarrow, BadgeCheck, Bot, Brain, CheckCircle2, ChevronDown,
   Clock, FileText, FlaskConical, Footprints, Gauge, GitCompare, Info, Lightbulb,
   ListChecks, Loader2, MessagesSquare, PenLine, PieChart, Scale, Search, ShieldCheck,
-  ShieldQuestion, Swords, Target,
+  ShieldQuestion, Square, Swords, Target,
 } from "lucide-react";
 import type { EventItem } from "@/components/research/types";
 import { BorderBeam, CountUp, FadeIn } from "@/components/magic";
@@ -154,7 +154,7 @@ function isDegrade(e: EventItem): boolean {
 }
 
 export function StepsCard({
-  events, active, stage, progress, elapsedMs, showThinking, now,
+  events, active, stage, progress, elapsedMs, showThinking, now, onStop,
 }: {
   events: EventItem[];
   active: boolean;
@@ -164,6 +164,8 @@ export function StepsCard({
   elapsedMs: number;
   showThinking: boolean;
   now: number;
+  /** stop control rendered inline in the header while the run is live */
+  onStop?: () => void;
 }) {
   // derived: open while running, collapsed when done — unless the user overrides
   const [override, setOverride] = useState<boolean | null>(null);
@@ -223,6 +225,19 @@ export function StepsCard({
               <>Research process · <CountUp to={rows.length} duration={0.5} /> steps</>
             )}
         </span>
+        {active && onStop && (
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={(e) => { e.stopPropagation(); onStop(); }}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); e.preventDefault(); onStop(); } }}
+            className="press-scale inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-border/70 bg-card px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+            aria-label="Stop the research"
+            title="Stop the run — the agent halts at its next checkpoint"
+          >
+            <Square className="h-2.5 w-2.5 fill-current" /> Stop
+          </span>
+        )}
         {active && (
           <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
             {Math.floor(elapsedMs / 60000)}:{String(Math.floor((elapsedMs % 60000) / 1000)).padStart(2, "0")}
@@ -369,12 +384,14 @@ export function StepsCard({
  *  no thinking events.
  *  ------------------------------------------------------------------ */
 export function ChatThinking({
-  events, active, showThinking, now,
+  events, active, showThinking, now, onStop,
 }: {
   events: EventItem[];
   active: boolean;
   showThinking: boolean;
   now: number;
+  /** stop control rendered at the end of the live strip */
+  onStop?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const groups = useMemo(
@@ -401,6 +418,16 @@ export function ChatThinking({
             <span className="rounded-full bg-primary/10 px-1.5 py-px text-[10px] font-medium tabular-nums text-primary">
               {last.text.length.toLocaleString()} chars
             </span>
+          )}
+          {onStop && (
+            <button
+              onClick={onStop}
+              className="press-scale ml-1 inline-flex h-6 shrink-0 items-center gap-1 rounded-full border border-border/70 bg-card px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+              aria-label="Stop the reply"
+              title="Stop — the agent halts at its next checkpoint"
+            >
+              <Square className="h-2.5 w-2.5 fill-current" /> Stop
+            </button>
           )}
           <span className="ml-auto shrink-0 text-[10px] tabular-nums text-muted-foreground">{timeAgo(last.ts, now)}</span>
         </div>

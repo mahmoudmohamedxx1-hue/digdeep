@@ -39,7 +39,7 @@ const STATUS_DOT: Record<string, string> = {
 };
 
 function SidebarItem({
-  icon, label, active, onClick, collapsed, href,
+  icon, label, active, onClick, collapsed, href, compact,
 }: {
   icon: React.ReactNode;
   label: string;
@@ -47,8 +47,10 @@ function SidebarItem({
   onClick: () => void;
   collapsed?: boolean;
   href?: string;
+  /** compact — the dense 36px desktop-sidebar rows (the mobile sheet keeps the 44px touch size) */
+  compact?: boolean;
 }) {
-  const cls = `press-scale ${collapsed ? "mx-auto flex h-10 w-10 justify-center" : "flex h-11 w-full items-center gap-3 px-3 text-sm font-medium"} items-center rounded-[10px] transition-colors ${
+  const cls = `press-scale ${collapsed ? "mx-auto flex h-10 w-10 justify-center" : `flex w-full items-center gap-2.5 px-3 ${compact ? "h-9 text-[13px]" : "h-11 text-sm"} font-medium`} items-center rounded-[10px] transition-colors ${
     active ? "bg-accent text-foreground" : "text-foreground/70 hover:bg-accent/70 hover:text-foreground"
   }`;
   const inner = (
@@ -73,7 +75,7 @@ function SidebarItem({
 
 /** Recents list — shared by the desktop rail and the mobile nav sheet.
  *  Rows are Today/Earlier groups, active row highlighted, delete with undo. */
-function Recents({ onNavigate }: { onNavigate: (h: HistoryItem) => void }) {
+function Recents({ onNavigate, dense = false, touch = false }: { onNavigate: (h: HistoryItem) => void; dense?: boolean; touch?: boolean }) {
   const { history } = useHistory();
   const grouped = useMemo(() => groupHistory(history), [history]);
   const pathname = usePathname();
@@ -119,7 +121,7 @@ function Recents({ onNavigate }: { onNavigate: (h: HistoryItem) => void }) {
     <>
       {grouped.map((g) => (
         <div key={g.label} className="mb-0.5">
-          <p className="px-3 pb-0.5 pt-2 text-[11px] font-medium text-muted-foreground/70">{g.label}</p>
+          <p className="px-3 pb-0.5 pt-1.5 text-[11px] font-medium text-muted-foreground/70">{g.label}</p>
           {g.items.map((h) => {
             const active = pathname.startsWith("/r/") && h.threadId != null && pathname === `/r/${h.threadId}`;
             return (
@@ -128,7 +130,7 @@ function Recents({ onNavigate }: { onNavigate: (h: HistoryItem) => void }) {
                   <button
                     onClick={() => onNavigate(h)}
                     title={h.query}
-                    className={`flex h-8 w-full items-center gap-2.5 rounded-[10px] pl-3 pr-9 text-left text-[13px] transition-colors ${
+                    className={`flex w-full items-center ${dense ? "h-7 gap-2 text-[12.5px]" : "h-8 gap-2.5 text-[13px]"} rounded-[10px] pl-3 pr-9 text-left transition-colors ${
                       active ? "bg-accent font-medium text-foreground" : "text-foreground/75 hover:bg-accent/70 hover:text-foreground"
                     }`}
                   >
@@ -139,7 +141,9 @@ function Recents({ onNavigate }: { onNavigate: (h: HistoryItem) => void }) {
                     onClick={() => void remove(h)}
                     aria-label={`Delete "${h.query.slice(0, 40)}" from this browser (undoable)`}
                     title="Delete from this browser — undo available"
-                    className="absolute right-1 top-1/2 -translate-y-1/2 flex h-8 w-8 items-center justify-center rounded-[10px] text-muted-foreground/0 transition-colors hover:bg-destructive/10 hover:text-destructive group-hover/row:text-muted-foreground/70 focus-visible:text-destructive"
+                    className={`absolute right-1 top-1/2 -translate-y-1/2 flex h-8 w-8 items-center justify-center rounded-[10px] transition-colors hover:bg-destructive/10 hover:text-destructive ${
+                      touch ? "text-muted-foreground/60" : "text-muted-foreground/0 group-hover/row:text-muted-foreground/70"
+                    } focus-visible:text-destructive`}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
@@ -567,7 +571,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             sidebarOpen ? "w-[240px]" : "w-[64px]"
           }`}
         >
-          <div className={`flex items-center py-3.5 ${sidebarOpen ? "px-3" : "justify-center px-2"}`}>
+          <div className={`flex items-center py-2.5 ${sidebarOpen ? "px-3" : "justify-center px-2"}`}>
             {sidebarOpen ? (
               <>
                 <LogoLockup markClass="h-7 w-7" textClass="text-[15px]" />
@@ -596,10 +600,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <div className={sidebarOpen ? "px-3" : "px-1"}>
             <Link
               href="/"
-              className={`press-scale flex h-10 items-center gap-2 rounded-[10px] text-[13px] font-semibold transition-colors ${
+              className={`press-scale flex items-center gap-2 rounded-[10px] text-[13px] font-semibold transition-colors ${
                 sidebarOpen
-                  ? "w-full justify-center bg-foreground text-background shadow-elev-2 hover:bg-foreground/85"
-                  : "mx-auto w-10 justify-center px-0 text-foreground/70 hover:bg-accent/70 hover:text-foreground"
+                  ? "h-9 w-full justify-center bg-foreground text-background shadow-elev-2 hover:bg-foreground/85"
+                  : "mx-auto h-10 w-10 justify-center px-0 text-foreground/70 hover:bg-accent/70 hover:text-foreground"
               }`}
               aria-label="New research"
               title="New research"
@@ -608,18 +612,18 @@ export function Shell({ children }: { children: React.ReactNode }) {
               {sidebarOpen && <span>New research</span>}
             </Link>
           </div>
-          <nav className={`space-y-1 pt-2.5 ${sidebarOpen ? "px-3" : "px-1"}`} aria-label="Main">
-            <SidebarItem collapsed={!sidebarOpen} icon={<House className="h-[18px] w-[18px]" />} label="Home" active={pathname === "/"} href="/" onClick={() => {}} />
-            <SidebarItem collapsed={!sidebarOpen} icon={<Compass className="h-[18px] w-[18px]" />} label="Discover" active={pathname === "/discover"} href="/discover" onClick={() => {}} />
-            <SidebarItem collapsed={!sidebarOpen} icon={<LibraryBig className="h-[18px] w-[18px]" />} label="Library" active={pathname === "/library"} href="/library" onClick={() => {}} />
+          <nav className={`space-y-0.5 pt-1.5 ${sidebarOpen ? "px-3" : "px-1"}`} aria-label="Main">
+            <SidebarItem compact collapsed={!sidebarOpen} icon={<House className="h-4 w-4" />} label="Home" active={pathname === "/"} href="/" onClick={() => {}} />
+            <SidebarItem compact collapsed={!sidebarOpen} icon={<Compass className="h-4 w-4" />} label="Discover" active={pathname === "/discover"} href="/discover" onClick={() => {}} />
+            <SidebarItem compact collapsed={!sidebarOpen} icon={<LibraryBig className="h-4 w-4" />} label="Library" active={pathname === "/library"} href="/library" onClick={() => {}} />
           </nav>
 
           {sidebarOpen && (
             <>
-              <div aria-hidden className="mt-3 shrink-0 border-t border-sidebar-border" />
+              <div aria-hidden className="mt-1.5 shrink-0 border-t border-sidebar-border" />
               <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-3 pb-1 pt-0.5">
-                <p className="px-3 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">Recents</p>
-                <Recents onNavigate={openFromHistory} />
+                <p className="px-3 pb-0.5 pt-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">Recents</p>
+                <Recents onNavigate={openFromHistory} dense />
                 {history.length > 14 && (
                   <Link href="/library" className="mt-1 block px-3 py-1 text-xs text-primary hover:underline">
                     View all in Library →
@@ -628,8 +632,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
               </div>
             </>
           )}
-          <div className={`mt-auto space-y-1 border-t border-sidebar-border pb-4 pt-3 ${sidebarOpen ? "px-3" : "px-1"}`}>
-            <SidebarItem collapsed={!sidebarOpen} icon={<Settings className="h-[18px] w-[18px]" />} label="Settings" onClick={openSettings} />
+          <div className={`mt-auto space-y-1 border-t border-sidebar-border pb-2.5 pt-1.5 ${sidebarOpen ? "px-3" : "px-1"}`}>
+            <SidebarItem compact collapsed={!sidebarOpen} icon={<Settings className="h-4 w-4" />} label="Settings" onClick={openSettings} />
           </div>
         </aside>
 
@@ -684,11 +688,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
               <SidebarItem icon={<Compass className="h-[18px] w-[18px]" />} label="Discover" active={pathname === "/discover"} href="/discover" onClick={() => setMobileNavOpen(false)} />
               <SidebarItem icon={<LibraryBig className="h-[18px] w-[18px]" />} label="Library" active={pathname === "/library"} href="/library" onClick={() => setMobileNavOpen(false)} />
             </nav>
-            <div className="mt-4 px-3">
-              <p className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">Recents</p>
-              <Recents onNavigate={openFromHistory} />
+            <div className="mt-3 px-3">
+              <p className="px-3 pb-1 pt-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">Recents</p>
+              <Recents onNavigate={openFromHistory} touch />
             </div>
-            <div className="mt-6 space-y-1 border-t border-border/60 p-3">
+            <div className="mt-4 space-y-1 border-t border-border/60 p-3">
               <SidebarItem icon={<Settings className="h-[18px] w-[18px]" />} label="Settings" onClick={() => { setMobileNavOpen(false); openSettings(); }} />
             </div>
           </SheetContent>

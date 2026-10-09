@@ -23,6 +23,21 @@ import { useSettings, refreshHistory } from "@/lib/store";
 import { parseAnswer, extractHeadings } from "@/lib/report-parse";
 import { toast } from "@/hooks/use-toast";
 
+/** Day bucket for the chat-flow date separators (Today / Yesterday / weekday / date). */
+function dayKey(iso: string): string {
+  return new Date(iso).toDateString();
+}
+function dayLabel(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.floor((startOf(now) - startOf(d)) / 86_400_000);
+  if (diff <= 0) return "Today";
+  if (diff === 1) return "Yesterday";
+  if (diff < 7) return d.toLocaleDateString(undefined, { weekday: "long" });
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 export default function ThreadPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -514,24 +529,39 @@ export default function ThreadPage() {
       )}
 
       <div className="mx-auto flex w-full max-w-[1140px] justify-center gap-7 px-4 pb-40 pt-5 sm:pt-6">
-        {/* turns */}
-        <div className="mx-auto w-full max-w-[768px] space-y-10">
-          {turns.map((t) => (
-            <ThreadTurn
-              key={t.jobId}
-              turn={t}
-              showThinking={settings.showThinking}
-              now={now}
-              elapsedMs={turnElapsed(t)}
-              onStop={() => void stopJob(t.jobId)}
-              onRetry={() => void retryJob(t.jobId)}
-              onFollowUp={(q) => void startFollowUpFrom(q)}
-              onRerun={(q) => void startFollowUpFrom(q)}
-              animate={ACTIVE_STATUSES.includes(t.job?.status ?? "") || !t.job}
-              onSelectClaim={selectClaim}
-              selectedClaimId={sel?.check.id}
-            />
-          ))}
+        {/* turns — one chat flow; date separators mark day boundaries */}
+        <div className="mx-auto w-full max-w-[768px] space-y-8">
+          {turns.map((t, i) => {
+            const day = t.job?.createdAt ? dayKey(t.job.createdAt) : null;
+            const prevDay = i > 0 && turns[i - 1].job?.createdAt ? dayKey(turns[i - 1].job!.createdAt!) : null;
+            const newDay = i > 0 && day != null && day !== prevDay;
+            return (
+              <div key={t.jobId}>
+                {newDay && (
+                  <div className="mb-7 flex items-center gap-3" aria-hidden="true">
+                    <span className="h-px flex-1 bg-border/70" />
+                    <span className="text-[10.5px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
+                      {dayLabel(t.job!.createdAt!)}
+                    </span>
+                    <span className="h-px flex-1 bg-border/70" />
+                  </div>
+                )}
+                <ThreadTurn
+                  turn={t}
+                  showThinking={settings.showThinking}
+                  now={now}
+                  elapsedMs={turnElapsed(t)}
+                  onStop={() => void stopJob(t.jobId)}
+                  onRetry={() => void retryJob(t.jobId)}
+                  onFollowUp={(q) => void startFollowUpFrom(q)}
+                  onRerun={(q) => void startFollowUpFrom(q)}
+                  animate={ACTIVE_STATUSES.includes(t.job?.status ?? "") || !t.job}
+                  onSelectClaim={selectClaim}
+                  selectedClaimId={sel?.check.id}
+                />
+              </div>
+            );
+          })}
         </div>
 
         {/* right rail (xl) — claim evidence FIRST, then sources, then TOC */}

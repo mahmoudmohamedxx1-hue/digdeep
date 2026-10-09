@@ -1,5 +1,28 @@
 # Changelog
 
+## v2.0.3 — more Recents, denser sidebar, chattier threads (2026-10-10)
+
+- **Half the chrome above Recents, twice the list.** Everything above the
+  Recents list shrank (header 60→52px, New research 40→36px, nav rows
+  44→36px, divider 12→6px, footer 73→53px) and recent rows went 32→28px —
+  the visible-threads area grew from ~13-14 to ~19-20 rows at 900px tall,
+  while the v2.0.1 alignment grid is untouched (dots and nav icons still
+  on the 24px axis). The mobile nav sheet keeps its 44px touch rows and
+  now shows each row's delete button always (hover never happens on
+  touch — it was invisible on phones).
+- **Chat flow, not document flow.** Threads read like a chat now: quiet
+  date separators (Today / Yesterday / weekday / date) between turns from
+  different days, a timestamp + copy button under every user question
+  (hover-reveal on desktop, always on phones), and a completion timestamp
+  at the right end of every action bar. Chat replies gained a
+  **Regenerate** button next to copy/share.
+- **Stop moved into the live status.** The Stop control no longer floats
+  as its own right-aligned row above the answer — it's a compact pill
+  inside the StepsCard header (next to the elapsed timer) and the chat
+  thinking strip, exactly where the live status is. Verified live on a
+  real run: clicking it halts the agent at its next checkpoint.
+- Turn spacing tightened (40→32px) — the date separators carry the rhythm.
+
 ## v2.0.2 — Settings dialog & the original emblem back (2026-10-10)
 
 - **Your logo, restored.** The header mark is once again the uploaded
