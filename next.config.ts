@@ -7,6 +7,8 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: true,
   },
   reactStrictMode: false,
+  // hide the Next.js dev badge — it covered the Dark mode toggle
+  devIndicators: false,
 };
 
 export default nextConfig;

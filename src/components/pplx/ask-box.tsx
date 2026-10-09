@@ -1,13 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, ChevronDown, FileText, Gauge, Infinity as InfinityIcon, Loader2, Plus, Settings2, Square, X, BrainCircuit } from "lucide-react";
+import { ArrowUp, ChevronDown, FileText, Gauge, Infinity as InfinityIcon, Loader2, Paperclip, Plus, Settings2, Square, X, BrainCircuit } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Slider } from "@/components/ui/slider";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { BorderBeam, Magnet, RotatingText } from "@/components/magic";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { AdvParams, AttachedDoc } from "@/components/research/types";
 
 export const MODES = [
@@ -27,6 +26,7 @@ export const MODE_PARAMS: Record<string, AdvParams> = {
 
 const LANGUAGES = ["English", "Arabic", "Chinese", "Spanish", "French", "German"];
 const MAX_DOC_CHARS = 120_000;
+const MAX_DOCS = 4;
 
 function AdvRow({
   label, value, min, max, unit, onChange,
@@ -67,6 +67,30 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   return <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">{children}</p>;
 }
 
+/** The idle placeholder rotator — a plain, quiet text swap (no scramble glyphs). */
+function IdlePlaceholder({ phrases, compact }: { phrases: string[]; compact: boolean }) {
+  const [idx, setIdx] = useState(0);
+  const [visible, setVisible] = useState(true);
+  useEffect(() => {
+    const iv = setInterval(() => {
+      setVisible(false);
+      setTimeout(() => {
+        setIdx((i) => (i + 1) % phrases.length);
+        setVisible(true);
+      }, 260);
+    }, 3800);
+    return () => clearInterval(iv);
+  }, [phrases.length]);
+  return (
+    <div
+      aria-hidden
+      className={`pointer-events-none absolute left-5 w-[calc(100%-40px)] truncate text-[16px] leading-[1.6] text-muted-foreground/90 transition-opacity duration-250 ${compact ? "top-[15px]" : "top-[17px]"} ${visible ? "opacity-100" : "opacity-0"}`}
+    >
+      {phrases[idx]}
+    </div>
+  );
+}
+
 export function AskBox({
   value, onChange, onSubmit, busy = false, compact = false, autoFocus = false,
   placeholder = "Ask anything…",
@@ -93,18 +117,12 @@ export function AskBox({
   showThinking: boolean;
   onShowThinking: (b: boolean) => void;
   onManagePool: () => void;
-  /** when true (a run is active in this thread) the submit button becomes a Stop button */
   stopMode?: boolean;
   onStop?: () => void;
   stopping?: boolean;
-  /** attached ground-truth documents (P2-3) */
   docs?: AttachedDoc[];
   onDocs?: (docs: AttachedDoc[]) => void;
-  /** id for the textarea — enables ⌘K / "/" global focus shortcuts */
   inputId?: string;
-  /** when set (and the box is empty) the placeholder becomes a rotating
-   *  decode animation through example questions — the idle box keeps
-   *  demonstrating what it can do */
   placeholderStream?: string[];
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -135,8 +153,8 @@ export function AskBox({
   const readFiles = async (files: FileList | null) => {
     if (!files || !onDocs) return;
     const next: AttachedDoc[] = [...attached];
-    for (const f of Array.from(files).slice(0, 4)) {
-      if (next.length >= 4) break;
+    for (const f of Array.from(files).slice(0, MAX_DOCS)) {
+      if (next.length >= MAX_DOCS) break;
       if (f.size > 2_000_000) continue; // 2MB safety cap per file
       try {
         const text = await f.text();
@@ -144,7 +162,7 @@ export function AskBox({
         next.push({ name: f.name.slice(0, 120), text: text.slice(0, MAX_DOC_CHARS) });
       } catch { /* unreadable file is skipped */ }
     }
-    onDocs(next.slice(0, 4));
+    onDocs(next.slice(0, MAX_DOCS));
     if (fileRef.current) fileRef.current.value = "";
   };
 
@@ -153,15 +171,16 @@ export function AskBox({
 
   return (
     <div className="composer-focus group relative rounded-[28px] border border-input bg-card shadow-elev-1">
-      {/* a run is active in this thread → the composer wears a working halo */}
-      {stopMode && <BorderBeam duration={7} />}
       <Textarea
         ref={taRef}
         id={inputId}
         value={value}
+        dir="auto"
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
+          // IME-safe: Enter that confirms a composition (Japanese/Chinese/Korean
+          // input, Arabic transliteration IMEs) must never submit the question
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
             if (canSubmit) onSubmit();
           }
@@ -171,20 +190,11 @@ export function AskBox({
         rows={1}
         className={`resize-none border-0 bg-transparent px-5 pb-1.5 pt-4 text-[16px] leading-[1.6] shadow-none focus-visible:ring-0 placeholder:text-muted-foreground ${compact ? "min-h-[52px]" : "min-h-[64px]"}`}
       />
-      {/* rotating idle placeholder — decodes through example questions;
-          purely decorative (aria-hidden), the field's label carries meaning */}
-      {streaming && idle && (
-        <div
-          aria-hidden
-          className={`pointer-events-none absolute left-5 w-[calc(100%-40px)] text-[16px] leading-[1.6] text-muted-foreground/90 ${compact ? "top-[15px]" : "top-[17px]"}`}
-        >
-          <RotatingText phrases={placeholderStream as string[]} intervalMs={3800} charDelay={15} />
-        </div>
-      )}
+      {streaming && idle && <IdlePlaceholder phrases={placeholderStream as string[]} compact={compact} />}
 
-      {/* attached documents (P2-3) */}
+      {/* attached documents (P2-3) — removable chips + a visible limit */}
       {attached.length > 0 && (
-        <div className="flex flex-wrap gap-2 px-5 pb-1 pt-1">
+        <div className="flex flex-wrap items-center gap-2 px-5 pb-1 pt-1">
           {attached.map((d, i) => (
             <span key={i} className="flex h-8 items-center gap-1.5 rounded-full bg-secondary px-2.5 text-xs font-medium">
               <FileText className="h-3.5 w-3.5 text-primary" />
@@ -198,10 +208,13 @@ export function AskBox({
               </button>
             </span>
           ))}
+          <span className="text-[10.5px] tabular-nums text-muted-foreground" aria-live="polite">
+            {attached.length} of {MAX_DOCS}
+          </span>
         </div>
       )}
 
-      {/* toolbar — tools left, action right (ChatGPT/Claude composer anatomy) */}
+      {/* toolbar — tools left, action right */}
       <div className="flex items-center gap-1.5 px-3 pb-3 pt-1.5">
         {/* attach documents */}
         {onDocs && (
@@ -222,7 +235,7 @@ export function AskBox({
               aria-label="Attach documents as ground-truth sources"
               title="Attach .txt / .md documents — they become ground-truth sources for this research"
             >
-              <Plus className="h-[18px] w-[18px]" strokeWidth={2.2} />
+              {attached.length > 0 ? <Paperclip className="h-[17px] w-[17px] text-primary" strokeWidth={2.1} /> : <Plus className="h-[18px] w-[18px]" strokeWidth={2.2} />}
             </button>
           </>
         )}
@@ -342,13 +355,43 @@ export function AskBox({
         </Popover>
 
         <div className="ml-auto flex items-center gap-1.5">
-          {/* depth pill — grouped with the action cluster for visual balance */}
+          {/* depth selector — labeled pill on sm+, icon button on phones so the
+              mode is always reachable from the composer */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="press-scale hidden h-9 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:flex">
+              <button
+                className="press-scale hidden h-9 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:flex"
+                aria-label={`Research depth: ${modeLabel}`}
+              >
                 <Gauge className="h-4 w-4 text-primary/70" />
                 {modeLabel}
                 <ChevronDown className="h-3 w-3 opacity-50" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="glass w-72 rounded-[18px]">
+              <DropdownMenuLabel className="text-xs text-muted-foreground">Research depth</DropdownMenuLabel>
+              {MODES.map((m) => (
+                <DropdownMenuItem key={m.id} onClick={() => onMode(m.id)} className={`gap-2 rounded-[10px] ${mode === m.id ? "bg-primary/10" : ""}`}>
+                  <span className="flex min-w-0 flex-col">
+                    <span className="flex items-center gap-1.5 text-sm font-medium">
+                      {m.id === "unlimited" && <InfinityIcon className="h-3.5 w-3.5 text-primary" />}
+                      {m.label}
+                      <span className="text-[10px] font-normal text-muted-foreground">{m.hint}</span>
+                    </span>
+                    <span className="text-[11px] text-muted-foreground">{m.desc}</span>
+                  </span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          {/* compact icon-only trigger on phones */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                className="press-scale flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:hidden"
+                aria-label={`Research depth: ${modeLabel}`}
+              >
+                <Gauge className="h-[18px] w-[18px] text-primary/70" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="glass w-72 rounded-[18px]">
@@ -394,23 +437,20 @@ export function AskBox({
                   {stopping ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-3 w-3.5 fill-current" />}
                 </Button>
               )}
-              <Magnet className="shrink-0" maxPull={3} pad={22}>
-                <Button
-                  size="icon"
-                  onClick={() => canSubmit && onSubmit()}
-                  disabled={!canSubmit}
-                  aria-label="Start research"
-                  className={`press-scale spring-pop relative h-9 w-9 shrink-0 overflow-hidden rounded-full border-0 transition-all duration-200 ${
-                    canSubmit
-                      ? "bg-foreground text-background shadow-elev-2 hover:bg-foreground/85"
-                      : "bg-transparent text-muted-foreground/60 hover:bg-muted/60"
-                  }`}
-                  style={{ transitionTimingFunction: "cubic-bezier(0.25,0.1,0.25,1)" }}
-                >
-                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-[18px] w-[18px]" strokeWidth={2.5} />}
-                  {canSubmit && !busy && <span className="btn-sheen" aria-hidden />}
-                </Button>
-              </Magnet>
+              <Button
+                size="icon"
+                onClick={() => canSubmit && onSubmit()}
+                disabled={!canSubmit}
+                aria-label="Start research"
+                className={`press-scale spring-pop relative h-9 w-9 shrink-0 overflow-hidden rounded-full border-0 transition-all duration-200 ${
+                  canSubmit
+                    ? "bg-foreground text-background shadow-elev-2 hover:bg-foreground/85"
+                    : "bg-transparent text-muted-foreground/60 hover:bg-muted/60"
+                }`}
+                style={{ transitionTimingFunction: "cubic-bezier(0.25,0.1,0.25,1)" }}
+              >
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-[18px] w-[18px]" strokeWidth={2.5} />}
+              </Button>
             </>
           )}
         </div>

@@ -1,18 +1,15 @@
 /**
- * magic — premium motion & interaction primitives adapted from the best
- * open-source component libraries (21st.dev + ReactBits patterns), built on
- * the framer-motion already in the tree. Every component is reduced-motion
- * safe and degrades gracefully without JS-driven hover (touch).
+ * magic — the restrained motion kit.
+ *
+ * Motion diet: the interface keeps exactly one signature moment — the live
+ * "thinking" pulse (BorderBeam orbiting the active steps card) plus the
+ * composer's focus glow. Particles, Scramble, Tilt, Magnet, ShinyText,
+ * SplitText and the confetti burst were removed on purpose: motion that
+ * draws attention to itself is motion that distracts from the research.
+ * Every survivor is reduced-motion safe.
  */
-export { SplitText } from "./split-text";
 export { CountUp } from "./count-up";
-export { ShinyText } from "./shiny-text";
 export { SpotlightCard } from "./spotlight-card";
 export { StaggerIn, FadeIn } from "./animated-list";
 export { AuroraHero } from "./aurora-hero";
-export { Magnet } from "./magnet";
 export { BorderBeam } from "./border-beam";
-export { ScrambleText, RotatingText } from "./scramble";
-export { Particles } from "./particles";
-export { Tilt } from "./tilt";
-export { burstConfetti } from "./confetti";

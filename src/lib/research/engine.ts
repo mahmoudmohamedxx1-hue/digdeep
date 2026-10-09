@@ -603,6 +603,8 @@ async function runChatLane(
     llmCalls: fallback ? 0 : 1,
     byModel: { [replyModel]: { calls: 1, totalMs: durationMs } },
     reportWords: reply.split(/\s+/).length,
+    // visible degradation: this chat reply came from the built-in script, not a model
+    ...(fallback ? { throttledFallback: true } : {}),
     finishedAt: new Date().toISOString(),
   };
   await updateJob(ctx.jobId, {
@@ -1728,7 +1730,9 @@ export async function runJob(jobId: string) {
     // checked against the text that was ACTUALLY read from that source. A lexical
     // overlap scan flags weak anchors; a batched judge repairs (re-anchor) or drops
     // them. The integrity percentage is published in the stats — honestly.
-    const citeStats = { checked: 0, repaired: 0, dropped: 0, integrity: 100 as number };
+    const citeStats: { checked: number; repaired: number; dropped: number; integrity: number; reanchoredTo: number[]; droppedNs: number[]; flagged: number[] } = {
+      checked: 0, repaired: 0, dropped: 0, integrity: 100 as number, reanchoredTo: [], droppedNs: [], flagged: [],
+    };
     if (ctx.sourceTexts.size > 0 && !ctx.outOfTime) {
       const CITE_STOP = new Set(["about", "after", "again", "their", "there", "these", "those", "which", "while", "would", "could", "should", "other", "because", "being", "under", "between", "through", "during", "before", "above", "below", "further", "once", "where", "both", "each", "more", "most", "some", "such", "only", "same", "than", "very", "just", "also", "into", "over", "have", "this", "that", "from", "they", "been", "were", "when", "what", "will", "your", "them", "then", "many", "much", "since", "based", "including", "according", "reported", "argues", "suggests", "compared", "largely", "several", "various", "important", "significant", "currently", "recently", "however", "therefore", "whereas", "although", "despite", "across", "within", "without", "toward", "among"]);
       const supportTokens = (t: string) =>
@@ -1785,12 +1789,15 @@ export async function runJob(jobId: string) {
             const sec = finalSections.find((s) => s.id === w.secId);
             if (!sec || !sec.draftMd) continue;
             citeStats.checked++;
+            citeStats.flagged.push(w.n);
             if (String(v.verdict) === "wrong-source" && Number(v.use) > 0 && sourcesUsed.some((s) => s.n === Number(v.use))) {
               sec.draftMd = sec.draftMd.split(`[${w.n}]`).join(`[${Number(v.use)}]`);
               citeStats.repaired++;
+              citeStats.reanchoredTo.push(Number(v.use));
             } else if (String(v.verdict) === "unsupported") {
               sec.draftMd = sec.draftMd.split(`[${w.n}]`).join("");
               citeStats.dropped++;
+              citeStats.droppedNs.push(w.n);
             }
             if (sec.draftMd !== draftsArr[finalSections.indexOf(sec)]) {
               draftsArr[finalSections.indexOf(sec)] = sec.draftMd;
@@ -1980,6 +1987,13 @@ export async function runJob(jobId: string) {
       citationsChecked: citeStats.checked,
       citationsRepaired: citeStats.repaired,
       citationsDropped: citeStats.dropped,
+      // per-citation audit trail (P0-4): which sources received re-anchored citations,
+      // which citation numbers were dropped as unsupported, which were flagged weak
+      citationAudit: {
+        reanchoredTo: [...new Set(citeStats.reanchoredTo)],
+        dropped: [...new Set(citeStats.droppedNs)],
+        flagged: [...new Set(citeStats.flagged)],
+      },
       reranked: ctx.rerankRuns,
       parallelAspects: concurrency,
       redTeamAttacks: redTeamAttacks.length,

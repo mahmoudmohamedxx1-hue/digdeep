@@ -74,6 +74,11 @@ export interface JobItem {
     citationsChecked?: number;
     citationsRepaired?: number;
     citationsDropped?: number;
+    /** per-citation audit trail — which sources received re-anchored citations,
+     *  which citation numbers were dropped as unsupported, which were flagged weak */
+    citationAudit?: { reanchoredTo?: number[]; dropped?: number[]; flagged?: number[] };
+    /** chat lane: reply came from the built-in script because every model was throttled */
+    throttledFallback?: boolean;
     // P0-2 / P0-3
     parallelAspects?: number;
     reranked?: number;

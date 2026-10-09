@@ -175,17 +175,10 @@
     var(--background);
 }
 
-/* ---------- Film grain — the texture hand-made interfaces have ---------- */
-.grain::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
-  opacity: 0.022;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'%3E%3C/svg%3E");
-}
-.dark .grain::after { opacity: 0.035; }
+/* ---------- Film grain — REMOVED (motion/perf diet): a full-screen fixed
+   SVG-turbulence layer at 2% opacity cost paint on weak devices for
+   an effect nobody could see. Kept as a no-op so old class usages are harmless. ---------- */
+.grain::after { content: none; }
 
 /* ---------- Elevation utilities ---------- */
 .shadow-elev-1 { box-shadow: var(--elev-1); }
@@ -269,8 +262,9 @@
 .hover-lift {
   transition: transform 300ms cubic-bezier(0.25, 0.1, 0.25, 1), box-shadow 300ms cubic-bezier(0.25, 0.1, 0.25, 1);
 }
+/* translate + shadow only — scaling softened text and shifted layout under the cursor */
 .hover-lift:hover {
-  transform: scale(1.02);
+  transform: translateY(-1px);
   box-shadow: 0 8px 24px rgba(26, 27, 30, 0.09);
 }
 .dark .hover-lift:hover {
@@ -457,7 +451,70 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
+}
+
+/* ---------- accessibility: visible keyboard focus everywhere ----------
+   :focus-visible only — pointer users never see a ring they didn't ask for. */
+:where(a, button, [role="button"], [role="switch"], [role="tab"], summary, select, input, textarea, [tabindex]):focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--primary) 78%, transparent);
+  outline-offset: 2px;
+}
+
+/* ==================================================================
+   READING LAYER — the report body reads like a well-set book:
+   serif at a ~68-character measure, generous leading, sans headings.
+   ================================================================== */
+.report-prose {
+  font-family: var(--font-serif);
+  font-size: 17.5px;
+  line-height: 1.72;
+  max-width: 68ch;
+  letter-spacing: 0.002em;
+}
+.report-prose p, .report-prose li {
+  text-wrap: pretty;
+}
+/* headings stay sans — the editorial contrast of a broadsheet */
+.report-prose :is(h1, h2, h3, h4) {
+  font-family: var(--font-sans);
+  letter-spacing: -0.02em;
+}
+
+/* ---------- inline citation chips ---------- */
+.cite-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  margin: 0 1px;
+  border-radius: 999px;
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--primary);
+  background: color-mix(in oklab, var(--primary) 12%, transparent);
+  text-decoration: none;
+  vertical-align: 0.12em;
+  transition: background 160ms cubic-bezier(0.25,0.1,0.25,1), color 160ms cubic-bezier(0.25,0.1,0.25,1);
+  cursor: pointer;
+}
+.cite-chip:hover, .cite-chip:focus-visible {
+  background: color-mix(in oklab, var(--primary) 26%, transparent);
+}
+.cite-chip[data-audit="reanchored"] {
+  color: #b25000;
+  background: color-mix(in oklab, #ff9f0a 16%, transparent);
+}
+.cite-chip[data-audit="reanchored"]:hover {
+  background: color-mix(in oklab, #ff9f0a 30%, transparent);
+}
+.dark .cite-chip[data-audit="reanchored"] {
+  color: #ffb340;
 }
 
 /* ==================================================================

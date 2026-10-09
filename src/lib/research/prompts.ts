@@ -566,10 +566,12 @@ export function execSummaryPrompt(query: string, drafts: string, language: strin
 Section drafts (in order):
 ${drafts.slice(0, 14000)}
 
-Write the report's EXECUTIVE SUMMARY in ${language}:
-- ${preset === "exhaustive" || preset === "deep" ? "200-300" : "120-200"} words, plain paragraphs (no headings, no bullets, no citations).
-- Lead with the single most important takeaway, then the key findings (with concrete numbers where available), then implications.
-- Write in ${language}.`;
+Write the report's EXECUTIVE SUMMARY in ${language}, in exactly this shape:
+- First line: ONE sentence (max 30 words) that states the single most important takeaway. No heading, no label.
+- Then a blank line, then 3-5 key findings as a markdown bullet list ("- ...").
+  Each finding is one concrete, self-contained sentence with specific numbers, names or dates where the sources support them.
+- Then a blank line, then one short closing sentence on what this means in practice.
+- No headings, no citations, no other paragraphs. Write in ${language}.`;
 }
 
 export function conclusionPrompt(query: string, drafts: string, language: string): string {

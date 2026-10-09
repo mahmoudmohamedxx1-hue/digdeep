@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Globe } from "lucide-react";
+import { ArrowLeftRight, Ban, Globe } from "lucide-react";
 import { CountUp, FadeIn } from "@/components/magic";
 import type { SourceItem } from "@/components/research/types";
 
@@ -63,30 +63,43 @@ export function SourcesRow({ sources }: { sources: SourceItem[] }) {
   );
 }
 
-export function SourcesPanel({ sources }: { sources: SourceItem[] }) {
+export function SourcesPanel({ sources, audit }: { sources: SourceItem[]; audit?: { reanchoredTo?: number[]; dropped?: number[]; flagged?: number[] } }) {
   if (sources.length === 0) return null;
   return (
     <div className="space-y-1">
       {sources.map((s, i) => {
         const linkable = !s.url.startsWith("attachment://");
+        const n = i + 1;
+        const reanchored = audit?.reanchoredTo?.includes(n);
+        const dropped = audit?.dropped?.includes(n);
         const inner = (
           <>
-            <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-primary/10 text-[11px] font-semibold tabular-nums text-primary">{i + 1}</span>
+            <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-primary/10 text-[11px] font-semibold tabular-nums text-primary">{n}</span>
             <span className="min-w-0 flex-1">
               <span className="line-clamp-2 text-[13px] font-medium leading-snug">{s.title}</span>
-              <span className="mt-1 flex items-center gap-1.5 text-[11px] text-foreground/60">
+              <span className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-foreground/60">
                 <Favicon domain={s.domain} className="h-3.5 w-3.5" />
                 {s.domain}
                 {s.words > 0 && <span className="opacity-70">· {s.words.toLocaleString()} words read</span>}
+                {reanchored && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-[#ff9f0a]/12 px-1.5 py-px text-[9.5px] font-semibold text-[#b25000] dark:text-[#ff9f0a]" title="A claim citing this source was re-anchored here by the citation audit">
+                    <ArrowLeftRight className="h-2.5 w-2.5" /> re-anchored
+                  </span>
+                )}
+                {dropped && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-1.5 py-px text-[9.5px] font-semibold text-destructive" title="A citation to this source was removed as unsupported">
+                    <Ban className="h-2.5 w-2.5" /> dropped
+                  </span>
+                )}
               </span>
             </span>
           </>
         );
         const cls = "hover-lift group flex gap-2.5 rounded-[16px] border border-input bg-card p-3";
         const body = linkable ? (
-          <a key={s.id} id={`ref-${i + 1}`} href={s.url} target="_blank" rel="noreferrer" className={cls}>{inner}</a>
+          <a key={s.id} id={`ref-${n}`} href={s.url} target="_blank" rel="noreferrer" className={cls}>{inner}</a>
         ) : (
-          <span key={s.id} id={`ref-${i + 1}`} className={`${cls} opacity-80`}>{inner}</span>
+          <span key={s.id} id={`ref-${n}`} className={`${cls} opacity-80`}>{inner}</span>
         );
         return (
           <FadeIn key={s.id} y={4}>

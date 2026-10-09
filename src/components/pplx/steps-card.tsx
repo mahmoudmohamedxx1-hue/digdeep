@@ -146,6 +146,13 @@ function activeLabel(lastType: string, stage: string, liveLabel?: string): strin
   return stage || "Working…";
 }
 
+/** Honest-label detection: events that describe degradation get the amber
+ *  treatment so “degradation is always visible” is a visual promise too. */
+const DEGRADE_RE = /throttl|rate.?limit|fall(?:ing)?\s*back|unavailable|degrad|script|exhausted|cooldown/i;
+function isDegrade(e: EventItem): boolean {
+  return e.type === "error" ? false : DEGRADE_RE.test(`${e.title} ${e.detail ?? ""}`);
+}
+
 export function StepsCard({
   events, active, stage, elapsedMs, showThinking, now,
 }: {
@@ -203,7 +210,11 @@ export function StepsCard({
         ) : (
           <CheckCircle2 className="check-pop h-4 w-4 shrink-0 text-primary" />
         )}
-        <span className={active ? "shimmer-text min-w-0 truncate text-sm font-medium" : "min-w-0 truncate text-sm font-medium text-foreground"}>
+        <span
+          className={active ? "shimmer-text min-w-0 truncate text-sm font-medium" : "min-w-0 truncate text-sm font-medium text-foreground"}
+          role={active ? "status" : undefined}
+          aria-live={active ? "polite" : undefined}
+        >
           {active
             ? activeLabel(lastType, stage, liveThought?.label)
             : (
@@ -283,15 +294,18 @@ export function StepsCard({
             const e = row.e;
             const highlight = e.type === "eta" || e.type === "selfcheck" || e.type === "critique" || e.type === "agent" || e.type === "presearch" || e.type === "learning" || e.type === "walk" || e.type === "curate" || e.type === "verify" || e.type === "contradiction" || e.type === "comprehend" || e.type === "rerank" || e.type === "citecheck" || e.type === "redteam" || e.type === "debate" || e.type === "diversity" || e.type === "score" || e.type === "diff";
             const isError = e.type === "error";
+            const degraded = !isError && isDegrade(e);
             return (
               <FadeIn key={e.seq} className="relative flex gap-3">
                 <span
                   className={`z-[1] mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full ring-1 ${
                     isError
                       ? "bg-destructive/10 text-destructive ring-destructive/20"
-                      : highlight
-                        ? "bg-primary/10 text-primary ring-primary/20"
-                        : "bg-card text-muted-foreground/80 ring-border"
+                      : degraded
+                        ? "bg-[#ff9f0a]/12 text-[#b25000] ring-[#ff9f0a]/25 dark:text-[#ff9f0a]"
+                        : highlight
+                          ? "bg-primary/10 text-primary ring-primary/20"
+                          : "bg-card text-muted-foreground/80 ring-border"
                   }`}
                 >
                   {STEP_ICON[e.type] ?? <Info className="h-3.5 w-3.5" />}
@@ -299,13 +313,16 @@ export function StepsCard({
                 <div className="min-w-0 flex-1 pb-0.5">
                     <div className="flex flex-wrap items-baseline gap-x-2">
                       <span className="text-[13px] leading-snug text-foreground/90">{e.title}</span>
+                      {degraded && (
+                        <span className="rounded-full bg-[#ff9f0a]/12 px-1.5 py-px text-[9.5px] font-semibold uppercase tracking-wide text-[#b25000] dark:text-[#ff9f0a]">degraded</span>
+                      )}
                       {e.model && (
                         <span className="rounded bg-muted px-1.5 py-px font-mono text-[10px] text-muted-foreground">{e.model}</span>
                       )}
                       <span className="ml-auto shrink-0 text-[10px] tabular-nums text-muted-foreground">{timeAgo(e.ts, now)}</span>
                     </div>
                     {e.detail ? (
-                      <p className="mt-0.5 line-clamp-3 whitespace-pre-line text-[12px] leading-relaxed text-muted-foreground">{e.detail}</p>
+                      <p className={`mt-0.5 line-clamp-3 whitespace-pre-line text-[12px] leading-relaxed ${degraded ? "text-[#b25000]/85 dark:text-[#ff9f0a]/85" : "text-muted-foreground"}`}>{e.detail}</p>
                     ) : null}
                     {e.type === "selfcheck" && Array.isArray(e.meta?.followUps) && (e.meta.followUps as string[]).length > 0 && (
                       <div className="mt-1 flex flex-wrap gap-1">
