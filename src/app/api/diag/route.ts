@@ -94,20 +94,20 @@ export async function POST(req: NextRequest) {
     })
   );
 
-  // ---- track C: endpoint reachability (inside waitUntil, t≈0) ----
+  // ---- track C: endpoint reachability with the app's REAL model ids ----
   waitUntil(
     (async () => {
-      const probes: [string, string][] = [
-        ["llm7", "https://api.llm7.io/v1/chat/completions"],
-        ["pollinations", "https://text.pollinations.ai/openai"],
+      const probes: [string, string, string][] = [
+        ["llm7-glm53", "https://api.llm7.io/v1/chat/completions", "GLM-5.3-Flash"],
+        ["pollinations-openai", "https://text.pollinations.ai/openai", "openai"],
       ];
-      for (const [name, url] of probes) {
+      for (const [name, url, model] of probes) {
         const t0 = Date.now();
         try {
           const r = await fetch(url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ model: "GLM-4.5-Flash", messages: [{ role: "user", content: "Reply with exactly: ok" }], max_tokens: 8 }),
+            body: JSON.stringify({ model, messages: [{ role: "user", content: "Reply with exactly: ok" }], max_tokens: 8 }),
             signal: AbortSignal.timeout(20_000),
           });
           const body = await r.text();
@@ -117,6 +117,31 @@ export async function POST(req: NextRequest) {
         }
       }
     })()
+  );
+
+  // ---- track E: ENGINE-MIMIC — promise started DURING the handler, passed to after()
+  //      (exactly the pattern POST /api/research used). If its post-response writes
+  //      die while track A/B survive, that's the root cause. ----
+  const engineLike = (async () => {
+    await beat(`${run}:eng:e0-during-handler`, started);
+    await new Promise((r) => setTimeout(r, 2_000));
+    await beat(`${run}:eng:e2s`, started);
+    try {
+      const { llmComplete } = await import("@/lib/research/llm");
+      const r = await llmComplete([{ role: "user", content: "Reply with exactly: ok" }], { purpose: "diag-classify", patient: false, timeoutMs: 18_000, maxTokens: 20 });
+      await beat(`${run}:eng:llm`, started, { backend: r.backendId, model: r.model, text: (r.text ?? "").slice(0, 60) });
+    } catch (e) {
+      await beat(`${run}:eng:llm`, started, { err: String(e).slice(0, 220) });
+    }
+    for (let i = 1; i <= 18; i++) {
+      await new Promise((r) => setTimeout(r, 15_000));
+      await beat(`${run}:eng:b${i * 15}`, started);
+    }
+  })();
+  after(
+    engineLike.catch(async (e) => {
+      await beat(`${run}:eng:fatal`, started, { err: String(e).slice(0, 300) });
+    })
   );
 
   return NextResponse.json({ run, note: "background tracks run ~4.5 min; then GET /api/diag?run=<run>" });
