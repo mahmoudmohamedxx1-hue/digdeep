@@ -1544,7 +1544,7 @@ export async function runJob(jobId: string) {
       .filter((c) => !c.verified && (c.grade === "single-source" || c.grade === "contested") && c.claim.length > 25)
       .slice(0, 3);
     const refuted: { claim: string; correction: string; reasoning: string }[] = [];
-    if (toVerify.length > 0) {
+    if (toVerify.length > 0 && !ctx.outOfTime) {
       await ctx.emit(
         "verify",
         `Cross-checking ${toVerify.length} load-bearing claim${toVerify.length > 1 ? "s" : ""} against fresh sources`,
@@ -1553,6 +1553,9 @@ export async function runJob(jobId: string) {
         { verifying: toVerify.map((c) => c.claim.slice(0, 120)) }
       );
       for (const claim of toVerify) {
+        // the clock wins — remaining claims stay flagged (single-source/contested) in the
+        // report instead of cross-checked; verification is an enhancement, never a blocker.
+        if (ctx.outOfTime) break;
         try {
           const vq = claim.claim.split(/\s+/).slice(0, 12).join(" ");
           const vrs = (await searchAll(vq, { academic: false })).filter((r) => r.url && !ctx.seenUrls.has(r.url) && !r.domain.includes("duckduckgo.com")).slice(0, 3);
