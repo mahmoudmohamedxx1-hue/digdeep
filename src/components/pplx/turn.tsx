@@ -48,7 +48,7 @@ export function ThreadTurn({
 
       {/* assistant — avatar gutter on the left, content owns the rest */}
       <div className="message-in flex gap-3">
-        <LogoMark className="mt-0.5 h-7 w-7 shrink-0 rounded-[7.5px] shadow-elev-1" />
+        <LogoMark className="mt-0.5 h-7 w-7 shrink-0" />
         <div className="min-w-0 flex-1 space-y-5">
           {active && (
             <div className="flex justify-end">

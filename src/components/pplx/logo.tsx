@@ -3,33 +3,29 @@
 /**
  * App mark for DigDeep — the topographic "D" emblem: concentric contour lines
  * narrowing toward a glowing core, animated as a slow breathing loop (the
- * dig that never stops going deeper). Rendered from an optimized animated
- * WebP baked from the brand animation; the static PNG stands in if the
- * animation cannot load. The wordmark keeps "Dig" light and "Deep" violet,
- * matching the brand sheet.
+ * dig that never stops going deeper). The asset is tight-cropped to the
+ * emblem itself on full transparency — nothing but the logo — so it sits
+ * directly beside the wordmark on any theme. A soft drop shadow (light mode
+ * only) keeps the silver outer lines legible on bright surfaces.
  */
 
-/** Animated brand emblem. Sized by `className` (default matches the old SVG mark). */
+/** Animated brand emblem — the logo only, nothing else. */
 export function LogoMark({ className = "h-7 w-7" }: { className?: string }) {
   return (
-    <span
-      className={`${className} relative inline-block shrink-0 select-none overflow-hidden rounded-[7.5px] bg-[#232227]`}
+    <img
+      src="/brand/logo-anim.webp"
+      alt=""
       aria-hidden="true"
-    >
-      <img
-        src="/brand/logo-anim.webp"
-        alt=""
-        draggable={false}
-        decoding="async"
-        className="h-full w-full object-cover"
-        onError={(e) => {
-          // graceful stand-in if the animation fails to load (ancient browser / corrupt file)
-          const img = e.currentTarget;
-          img.onerror = null;
-          img.src = "/brand/mark.png";
-        }}
-      />
-    </span>
+      draggable={false}
+      decoding="async"
+      className={`${className} shrink-0 select-none object-contain drop-shadow-[0_1px_2px_rgba(0,0,0,0.45)] dark:drop-shadow-none`}
+      onError={(e) => {
+        // graceful stand-in if the animation fails to load (ancient browser / corrupt file)
+        const img = e.currentTarget;
+        img.onerror = null;
+        img.src = "/brand/mark.png";
+      }}
+    />
   );
 }
 

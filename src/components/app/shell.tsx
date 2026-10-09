@@ -492,7 +492,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <div className={`flex items-center gap-2.5 py-4 ${sidebarOpen ? "px-4" : "justify-center px-2"}`}>
             {sidebarOpen ? (
               <>
-                <LogoMark className="h-7 w-7 shrink-0 shadow-elev-1 rounded-[7.5px]" />
+                <LogoMark className="h-7 w-7 shrink-0" />
                 <LogoWord className="text-[15px]" />
                 <Button
                   variant="ghost"
@@ -595,7 +595,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <SheetContent side="left" className="glass w-[300px] overflow-y-auto rounded-r-[20px] p-0 sm:rounded-none">
             <SheetHeader className="border-b border-border/60 px-4 pb-3">
               <SheetTitle className="flex items-center gap-2.5">
-                <LogoMark className="h-6 w-6 rounded-[6.5px]" />
+                <LogoMark className="h-6 w-6" />
                 <LogoWord />
               </SheetTitle>
             </SheetHeader>

@@ -2,13 +2,14 @@
 
 /**
  * Favicon state manager — Claude-style page-level status in the tab icon:
- *  - working: green dot pulsing while a research run is live
+ *  - working: green dot FLASHING (bright <-> dim, 550ms) while a research run is live
  *  - done:    fixed blue dot once it finishes (until you focus the tab)
- *  - idle:    the plain brand emblem
- * Frames are canvas-drawn PNG data URLs (works in every browser, unlike
- * animated SVG favicons), swapped on the <link rel="icon"> Next.js emits.
- * The idle icon is the real /brand/mark.png whenever it has loaded; before
- * that (or if it fails) a simple canvas-drawn emblem stands in.
+ *  - idle:    the plain brand badge (the /icon.png Next.js emits)
+ *
+ * Frames are canvas-drawn PNG data URLs — the tight transparent emblem is
+ * composited onto a dark rounded badge so it stays legible on any tab strip.
+ * The badge/emblem geometry mirrors scripts/gen_tight_logo.py (make_badge)
+ * so idle, working and done all look like the same icon.
  */
 
 type FaviconState = "idle" | "working" | "done";
@@ -17,13 +18,22 @@ let originalHref: string | null = null;
 let currentState: FaviconState = "idle";
 let pulseTimer: ReturnType<typeof setInterval> | null = null;
 let pulseFrame = 0;
-let doneResetTimer: ReturnType<typeof setTimeout> | null = null;
 
 const WORK_COLOR = "#30d158"; // system green
 const DONE_COLOR = "#0a84ff"; // system blue
 
 const CANVAS_PX = 64; // retina-crisp favicon frames
-const MARK_SRC = "/brand/mark.png";
+const BADGE_R = 14; // rounded-corner radius (22%)
+const EMBLEM_PX = 58; // bold favicon emblem fills 91% of the badge
+const EMBLEM_OFF = (CANVAS_PX - EMBLEM_PX) / 2;
+const DOT_C = 49; // dot center = bottom-right corner-arc center
+const DOT_BACKING_R = 13; // dark disc so the dot reads over emblem lines
+const DOT_R = 10;
+const RING_W = 3;
+const FLASH_INTERVAL = 550; // ms per flash step
+const FLASH_DIM = 0.15; // dimmed alpha of the "off" flash phase
+
+const MARK_SRC = "/brand/mark-favicon.png";
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.beginPath();
@@ -35,7 +45,7 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.closePath();
 }
 
-/** The brand emblem image, loaded once. `null` until decoded (or forever if it fails). */
+/** The tight transparent emblem, loaded once. `null` until decoded (or forever if it fails). */
 let markImg: HTMLImageElement | null = null;
 let markRequested = false;
 
@@ -46,9 +56,9 @@ function requestMark() {
   img.decoding = "async";
   img.onload = () => {
     markImg = img;
-    framesReady = false; // rebuild frames with the real emblem on next use
+    framesReady = false; // rebuild frames with the real emblem
     if (initialized) ensureFrames();
-    // re-assert current state so an in-flight pulse picks up the new frames
+    // re-assert the current state so an in-flight flash picks up the new frames
     if (currentState === "working") {
       apply(pulseFrame === 1 ? frameWorkOn : frameWorkOff);
     } else if (currentState === "done") {
@@ -58,7 +68,7 @@ function requestMark() {
   img.src = MARK_SRC;
 }
 
-/** Draw the app mark + optional status dot, return as PNG data URL. */
+/** Draw the brand badge (+ optional status dot), return as PNG data URL. */
 function drawIcon(opts: { dotColor?: string; dotAlpha?: number } = {}): string {
   const c = document.createElement("canvas");
   c.width = CANVAS_PX;
@@ -66,35 +76,45 @@ function drawIcon(opts: { dotColor?: string; dotAlpha?: number } = {}): string {
   const ctx = c.getContext("2d");
   if (!ctx) return "";
 
+  // dark rounded badge — same gradient as src/app/icon.png
+  const g = ctx.createLinearGradient(0, 0, CANVAS_PX, CANVAS_PX);
+  g.addColorStop(0, "#2A2930");
+  g.addColorStop(1, "#1B1A1F");
+  ctx.fillStyle = g;
+  roundRect(ctx, 1, 1, CANVAS_PX - 2, CANVAS_PX - 2, BADGE_R);
+  ctx.fill();
+
+  // the tight emblem (transparent PNG, drawn to fill 86% of the badge)
   if (markImg && markImg.naturalWidth > 0) {
-    // the real brand emblem (rounded corners baked into the PNG)
-    ctx.drawImage(markImg, 0, 0, CANVAS_PX, CANVAS_PX);
+    ctx.drawImage(markImg, EMBLEM_OFF, EMBLEM_OFF, EMBLEM_PX, EMBLEM_PX);
   } else {
     // stand-in until the emblem loads: dark tile + concentric topographic arcs
-    ctx.fillStyle = "#232227";
-    roundRect(ctx, 0.5, 0.5, CANVAS_PX - 1, CANVAS_PX - 1, 15);
-    ctx.fill();
     ctx.strokeStyle = "rgba(255,255,255,0.85)";
-    ctx.lineWidth = 3;
-    for (const r of [26, 19, 12]) {
+    ctx.lineWidth = 4.5;
+    for (const r of [24, 17, 10]) {
       ctx.beginPath();
-      ctx.arc(30, 32, r, Math.PI * 0.15, Math.PI * 1.55);
+      ctx.arc(32, 34, r, Math.PI * 0.15, Math.PI * 1.55);
       ctx.stroke();
     }
     ctx.fillStyle = "#8B5CF6";
     ctx.beginPath();
-    ctx.arc(24, 44, 5, 0, Math.PI * 2);
+    ctx.arc(26, 48, 8, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  // status dot — bottom-right badge with a white ring
+  // status dot — dark backing disc, colored dot, white ring
   if (opts.dotColor) {
+    ctx.globalAlpha = 1;
+    ctx.beginPath();
+    ctx.arc(DOT_C, DOT_C, DOT_BACKING_R, 0, Math.PI * 2);
+    ctx.fillStyle = "#1B1A1F";
+    ctx.fill();
     ctx.globalAlpha = opts.dotAlpha ?? 1;
     ctx.beginPath();
-    ctx.arc(51, 51, 9.2, 0, Math.PI * 2);
+    ctx.arc(DOT_C, DOT_C, DOT_R, 0, Math.PI * 2);
     ctx.fillStyle = opts.dotColor;
     ctx.fill();
-    ctx.lineWidth = 3.2;
+    ctx.lineWidth = RING_W;
     ctx.strokeStyle = "rgba(255,255,255,0.95)";
     ctx.stroke();
     ctx.globalAlpha = 1;
@@ -117,12 +137,13 @@ function stopPulse() {
   }
 }
 
+/** FLASHING green: bright <-> dim, flipping every FLASH_INTERVAL ms. */
 function startPulse() {
   stopPulse();
   pulseTimer = setInterval(() => {
     pulseFrame = 1 - pulseFrame;
     apply(pulseFrame === 1 ? frameWorkOn : frameWorkOff);
-  }, 650);
+  }, FLASH_INTERVAL);
 }
 
 let frameWorkOn = "";
@@ -134,7 +155,7 @@ let initialized = false;
 function ensureFrames() {
   if (framesReady) return;
   frameWorkOn = drawIcon({ dotColor: WORK_COLOR, dotAlpha: 1 });
-  frameWorkOff = drawIcon({ dotColor: WORK_COLOR, dotAlpha: 0.3 });
+  frameWorkOff = drawIcon({ dotColor: WORK_COLOR, dotAlpha: FLASH_DIM });
   frameDone = drawIcon({ dotColor: DONE_COLOR, dotAlpha: 1 });
   framesReady = true;
 }
@@ -165,10 +186,6 @@ export function setFaviconState(next: FaviconState) {
   if (next === currentState) return;
   currentState = next;
   stopPulse();
-  if (doneResetTimer) {
-    clearTimeout(doneResetTimer);
-    doneResetTimer = null;
-  }
   if (next === "working") {
     ensureFrames();
     apply(frameWorkOn);
@@ -178,6 +195,6 @@ export function setFaviconState(next: FaviconState) {
     ensureFrames();
     apply(frameDone);
   } else {
-    apply(originalHref ?? MARK_SRC);
+    apply(originalHref ?? "/icon.png");
   }
 }
