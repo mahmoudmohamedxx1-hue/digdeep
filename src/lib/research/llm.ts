@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import ZAI from "z-ai-web-dev-sdk";
 import { db } from "@/lib/db";
 
@@ -37,6 +40,9 @@ export interface PoolEndpoint {
   /** "synthesis" = prefer this backend for report-writing steps (frontier synthesis),
    *  with the free keyless chain as failover. Default "general" = normal chain position. */
   role?: "general" | "synthesis";
+  /** Z.ai-native endpoint (official API): sends the `thinking` body field and keeps
+   *  system messages unfolded — the official API supports both natively. */
+  zaiNative?: boolean;
 }
 
 interface BackendHealth {
@@ -48,11 +54,56 @@ interface BackendHealth {
   lastLatencyMs: number;
 }
 
-/** Built-in keyless backends. GLM Flash via the z.ai SDK is primary (newest model first); keyless pool as failover. */
+/** Built-in keyless backends — the primary chain: every visitor can research without
+ *  any key, and no shared server key gets burned by anonymous traffic. */
 const BUILTIN_POOL: PoolEndpoint[] = [
   { id: "llm7", label: "LLM7 · keyless", baseUrl: "https://api.llm7.io/v1/chat/completions", model: "GLM-5.3-Flash", enabled: true },
   { id: "pollinations", label: "Pollinations · keyless", baseUrl: "https://text.pollinations.ai/openai", model: "openai", enabled: true },
 ];
+
+/** Z.ai official API backstop — activated only when ZAI_API_KEY is set (server-side
+ *  env var on Vercel; NEVER committed to the repo, never sent to the client).
+ *  Sits right behind the keyless builtins: keyless serves the common case for free,
+ *  and this backstop rescues jobs during keyless throttle storms instead of making
+ *  users wait out 90s+ cooldowns. Free-tier models only (glm-4.5-flash) so a zero
+ *  balance still works. Models are configurable via ZAI_API_MODELS (comma-separated). */
+function zaiEnvBackends(): PoolEndpoint[] {
+  const key = process.env.ZAI_API_KEY?.trim();
+  if (!key) return [];
+  const base = (process.env.ZAI_API_URL?.trim() || "https://api.z.ai/api/paas/v4").replace(/\/+$/, "");
+  const models = (process.env.ZAI_API_MODELS || "glm-4.5-flash")
+    .split(",")
+    .map((m) => m.trim())
+    .filter(Boolean)
+    .slice(0, 4);
+  return models.map((m) => ({
+    id: `zai-api-${m}`,
+    label: `Z.ai API · ${m} · server key`,
+    baseUrl: `${base}/chat/completions`,
+    model: m,
+    enabled: true,
+    key,
+    zaiNative: true,
+  }));
+}
+
+/** The SDK loads .z-ai-config from cwd / home / /etc (mirroring its own loadConfig()
+ *  search order). Where none exists — e.g. on Vercel — the SDK path is dead weight
+ *  that would fail on every call, so we probe once per process and skip it entirely. */
+let sdkAvailable: boolean | null = null;
+function isSdkAvailable(): boolean {
+  if (sdkAvailable === null) {
+    const candidates = [path.join(process.cwd(), ".z-ai-config"), path.join(os.homedir(), ".z-ai-config"), "/etc/.z-ai-config"];
+    sdkAvailable = candidates.some((p) => {
+      try {
+        return fs.existsSync(p);
+      } catch {
+        return false;
+      }
+    });
+  }
+  return sdkAvailable;
+}
 
 /** GLM models served through the z.ai SDK, tried in order (newest first; default last). */
 const GLM_SDK_MODELS: { id: string; label: string; model?: string }[] = [
@@ -80,10 +131,12 @@ export async function getPoolEndpoints(force = false): Promise<PoolEndpoint[]> {
   } catch {
     stored = [];
   }
-  // custom endpoints only — builtins are always prepended and never duplicated
-  const builtinUrls = new Set(BUILTIN_POOL.map((e) => e.baseUrl));
+  // custom endpoints only — builtins (keyless + env-keyed Z.ai backstop) are always
+  // prepended and never duplicated
+  const zai = zaiEnvBackends();
+  const builtinUrls = new Set([...BUILTIN_POOL, ...zai].map((e) => e.baseUrl));
   const custom = (Array.isArray(stored) ? stored : []).filter((e) => e?.baseUrl && !builtinUrls.has(e.baseUrl));
-  const data = [...BUILTIN_POOL, ...custom];
+  const data = [...BUILTIN_POOL, ...zai, ...custom];
   endpointsCache = { at: Date.now(), data };
   return data;
 }
@@ -93,6 +146,7 @@ export function invalidateEndpointsCache() {
 }
 
 async function glmBackends(): Promise<PoolEndpoint[]> {
+  if (!isSdkAvailable()) return []; // no SDK config in this runtime (e.g. Vercel)
   return GLM_SDK_MODELS.map(
     (m) => ({ id: m.id, label: `${m.label} · z.ai SDK`, baseUrl: "z-ai-sdk", model: m.label, enabled: true }) as PoolEndpoint
   );
@@ -101,7 +155,9 @@ async function glmBackends(): Promise<PoolEndpoint[]> {
 async function orderedBackends(pref: ModelPref, purpose?: string): Promise<PoolEndpoint[]> {
   const pool = (await getPoolEndpoints()).filter((e) => e.enabled);
   const glms = await glmBackends();
-  if (pref === "glm") return glms;
+  // "glm" pref: the SDK path where a .z-ai-config exists (sandbox/local), else the
+  // official Z.ai API backstop — so the GLM preference still works on Vercel.
+  if (pref === "glm") return glms.length > 0 ? glms : zaiEnvBackends();
   if (pref === "pool") return pool;
   // Frontier synthesis (P2-4): an endpoint flagged role:"synthesis" (a user's own
   // paid key) is tried FIRST for report-writing steps — the free keyless chain stays
@@ -151,7 +207,8 @@ async function callOpenAiCompatible(
   ep: PoolEndpoint,
   messages: ChatMsg[],
   maxTokens?: number,
-  timeoutMs = 90_000
+  timeoutMs = 90_000,
+  wantThinking = false
 ): Promise<{ text: string; reasoning?: string }> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -162,7 +219,8 @@ async function callOpenAiCompatible(
       headers: { "Content-Type": "application/json", ...(ep.key ? { Authorization: `Bearer ${ep.key}` } : {}) },
       body: JSON.stringify({
         model: ep.model,
-        messages: foldSystemIntoUser(messages),
+        messages: ep.zaiNative ? messages : foldSystemIntoUser(messages),
+        ...(ep.zaiNative ? { thinking: { type: wantThinking ? "enabled" : "disabled" } } : {}),
         ...(maxTokens ? { max_tokens: maxTokens } : {}),
       }),
     });
@@ -237,7 +295,7 @@ export async function llmComplete(messages: ChatMsg[], opts: LlmOptions): Promis
                 opts.maxTokens,
                 opts.timeoutMs ?? 150_000
               )
-            : await callOpenAiCompatible(be, messages, opts.maxTokens, opts.timeoutMs ?? 90_000);
+            : await callOpenAiCompatible(be, messages, opts.maxTokens, opts.timeoutMs ?? 90_000, opts.wantThinking ?? false);
           h.ok++;
           h.failures = 0;
           h.lastLatencyMs = Date.now() - started;
@@ -428,7 +486,8 @@ async function callOpenAiStream(
   messages: ChatMsg[],
   maxTokens: number | undefined,
   onDelta: (d: StreamDelta) => void,
-  timeoutMs = 90_000
+  timeoutMs = 90_000,
+  wantThinking = false
 ): Promise<StreamOutcome> {
   const ctrl = new AbortController();
   // SSE headers arrive within seconds on a healthy backend — a long wait here means the
@@ -443,7 +502,8 @@ async function callOpenAiStream(
       headers: { "Content-Type": "application/json", ...(ep.key ? { Authorization: `Bearer ${ep.key}` } : {}) },
       body: JSON.stringify({
         model: ep.model,
-        messages: foldSystemIntoUser(messages),
+        messages: ep.zaiNative ? messages : foldSystemIntoUser(messages),
+        ...(ep.zaiNative ? { thinking: { type: wantThinking ? "enabled" : "disabled" } } : {}),
         stream: true,
         ...(maxTokens ? { max_tokens: maxTokens } : {}),
       }),
@@ -505,7 +565,7 @@ export async function llmStreamComplete(
               forward,
               Math.min(opts.timeoutMs ?? 60_000, 60_000)
             )
-          : await callOpenAiStream(be, messages, opts.maxTokens, forward, opts.timeoutMs ?? 90_000);
+          : await callOpenAiStream(be, messages, opts.maxTokens, forward, opts.timeoutMs ?? 90_000, opts.wantThinking ?? false);
       h.ok++;
       h.failures = 0;
       h.lastLatencyMs = Date.now() - started;
