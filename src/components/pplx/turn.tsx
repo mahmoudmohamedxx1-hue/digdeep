@@ -8,9 +8,11 @@ import { AnswerView } from "@/components/pplx/answer";
 import { LogoMark } from "@/components/pplx/logo";
 import type { Turn } from "@/components/research/types";
 import { ACTIVE_STATUSES } from "@/components/research/types";
+import type { CitationContext } from "@/components/research/citation-chip";
 
 export function ThreadTurn({
   turn, showThinking, now, elapsedMs, onStop, onRetry, onFollowUp, onRerun, animate,
+  onSelectClaim, selectedClaimId,
 }: {
   turn: Turn;
   showThinking: boolean;
@@ -22,6 +24,8 @@ export function ThreadTurn({
   /** P2-2: re-run this exact question in the same thread */
   onRerun?: (q: string) => void;
   animate: boolean;
+  onSelectClaim?: CitationContext["onSelectClaim"];
+  selectedClaimId?: string;
 }) {
   const { job } = turn;
   if (!job) {
@@ -90,6 +94,8 @@ export function ThreadTurn({
             onRetry={onRetry}
             onFollowUp={onFollowUp}
             onRerun={onRerun ? () => onRerun(job.query) : undefined}
+            onSelectClaim={onSelectClaim}
+            selectedClaimId={selectedClaimId}
           />
         </div>
       </div>

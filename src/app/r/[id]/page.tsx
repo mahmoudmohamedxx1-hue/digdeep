@@ -8,11 +8,14 @@ import { AskBox } from "@/components/pplx/ask-box";
 import { ThreadTurn } from "@/components/pplx/turn";
 import { SourcesPanel } from "@/components/pplx/sources-row";
 import { Toc } from "@/components/research/toc";
+import { EvidencePanel } from "@/components/research/evidence-panel";
 import { useMainScroll } from "@/components/app/shell";
 import { CountUp } from "@/components/magic";
 import { useOnline } from "@/hooks/use-online";
+import { Drawer, DrawerContent, DrawerDescription, DrawerTitle } from "@/components/ui/drawer";
 import type { AttachedDoc, HistoryItem, Turn } from "@/components/research/types";
 import { ACTIVE_STATUSES, fmtElapsed } from "@/components/research/types";
+import type { ClaimSelection } from "@/components/research/citation-chip";
 import { getThreadTurns, saveTurn } from "@/lib/idb-store";
 import { registerJob, watchJob, resetJob } from "@/lib/live-poller";
 import { startResearchRun } from "@/lib/research-client";
@@ -38,6 +41,109 @@ export default function ThreadPage() {
   const [starting, setStarting] = useState(false);
   const [stoppingAll, setStoppingAll] = useState(false);
   const [showJump, setShowJump] = useState(false);
+
+  // ---------- claim evidence (Phase 2) ----------
+  const [sel, setSel] = useState<ClaimSelection | null>(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const lastChipRef = useRef<HTMLElement | null>(null);
+  /** Focus the claim's chip — looked up fresh by id: a held element ref can go
+   *  stale across re-renders, and a detached node silently eats the focus. */
+  const focusLastChip = useCallback(() => {
+    const el = lastChipRef.current;
+    const live = el && document.getElementById(`cite-${el.dataset?.citeN ?? ""}`);
+    (live ?? el)?.focus({ preventScroll: true });
+  }, []);
+  const isDesktopRail = () => typeof window !== "undefined" && window.matchMedia("(min-width: 1280px)").matches;
+
+  /** The claim list to navigate through: the owner of the current selection,
+   *  or the last completed report that has a ledger. */
+  const claimNavList = useMemo(() => {
+    if (sel?.allChecks?.length) return sel.allChecks;
+    const withChecks = [...(turns ?? [])].reverse().find((t) => t.job?.stats?.claimChecks?.length);
+    return withChecks?.job?.stats?.claimChecks ?? [];
+  }, [sel, turns]);
+
+  const focusChipOf = useCallback((checkId: string | undefined, n: number) => {
+    if (!checkId) return;
+    requestAnimationFrame(() => {
+      const el = document.getElementById(`cite-${n}`);
+      el?.scrollIntoView({ block: "center", behavior: "smooth" });
+      (el as HTMLElement | null)?.focus({ preventScroll: true });
+    });
+  }, []);
+
+  const selectClaim = useCallback(
+    (payload: ClaimSelection, chipEl: HTMLElement) => {
+      chipEl.dataset.citeN = String(payload.check.n);
+      lastChipRef.current = chipEl;
+      setSel(payload);
+      if (!isDesktopRail()) setSheetOpen(true);
+    },
+    []
+  );
+
+  /** The report that owns claim navigation (the selection's owner, or the last
+   *  completed report that has a ledger) — used to rebuild the full payload. */
+  const claimOwnerTurn = useMemo(() => {
+    if (sel) {
+      const owner = (turns ?? []).find((t) => t.job?.stats?.claimChecks?.some((c) => c.id === sel.check.id));
+      if (owner) return owner;
+    }
+    return [...(turns ?? [])].reverse().find((t) => t.job?.stats?.claimChecks?.length);
+  }, [sel, turns]);
+
+  const moveClaim = useCallback(
+    (dir: 1 | -1) => {
+      const list = claimNavList;
+      if (list.length === 0) return;
+      const curIdx = sel ? list.findIndex((c) => c.id === sel.check.id) : -1;
+      const nextIdx = curIdx < 0 && dir === -1 ? list.length - 1 : Math.min(list.length - 1, Math.max(0, curIdx + dir));
+      const check = list[nextIdx];
+      if (!check) return;
+      setSel((prev) => {
+        if (prev) return { ...prev, check };
+        // first selection via keyboard — rebuild the payload from the owner report
+        const owner = claimOwnerTurn;
+        if (!owner?.job?.reportMd) return prev;
+        const parsed = parseAnswer(owner.job.reportMd, owner.job.mode);
+        return {
+          check,
+          refs: parsed.refs,
+          sources: owner.sources,
+          reportMd: owner.job.reportMd,
+          allChecks: owner.job.stats?.claimChecks,
+          summaryLine: owner.job.stats?.claimVerdict
+            ? `${owner.job.stats.claimVerdict.fullySupported} of ${owner.job.stats.claimVerdict.citedSources} sources fully support their claims`
+            : undefined,
+        };
+      });
+      focusChipOf(check.id, check.n);
+    },
+    [claimNavList, sel, focusChipOf, claimOwnerTurn]
+  );
+
+  // J / K claim navigation + Esc closes the evidence panel (keyboard-only flow)
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      const typing = t instanceof HTMLTextAreaElement || t instanceof HTMLInputElement || t instanceof HTMLSelectElement || (t as HTMLElement | null)?.isContentEditable;
+      if (typing) return;
+      if (e.key === "Escape" && (sel || sheetOpen)) {
+        setSel(null);
+        setSheetOpen(false);
+        setTimeout(focusLastChip, 120);
+        setTimeout(focusLastChip, 650);
+        return;
+      }
+      if (claimNavList.length === 0) return;
+      const k = e.key.toLowerCase();
+      if (k === "j") { e.preventDefault(); moveClaim(1); }
+      else if (k === "k") { e.preventDefault(); moveClaim(-1); }
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [claimNavList, sel, sheetOpen, moveClaim]);
 
   const unwatches = useRef<Map<string, () => void>>(new Map());
   const watch = useCallback((jobId: string) => {
@@ -410,13 +516,33 @@ export default function ThreadPage() {
               onFollowUp={(q) => void startFollowUpFrom(q)}
               onRerun={(q) => void startFollowUpFrom(q)}
               animate={ACTIVE_STATUSES.includes(t.job?.status ?? "") || !t.job}
+              onSelectClaim={selectClaim}
+              selectedClaimId={sel?.check.id}
             />
           ))}
         </div>
 
-        {/* right rail (xl) — sources FIRST, then the table of contents */}
+        {/* right rail (xl) — claim evidence FIRST, then sources, then TOC */}
         {lastTurn && (
           <aside className="sticky top-16 hidden h-fit w-[300px] shrink-0 space-y-6 xl:block">
+            {sel ? (
+              <div id="evidence-panel">
+                <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">Claim evidence</p>
+                <EvidencePanel
+                  selection={sel}
+                  index={claimNavList.findIndex((c) => c.id === sel.check.id)}
+                  total={claimNavList.length}
+                  onPrev={() => moveClaim(-1)}
+                  onNext={() => moveClaim(1)}
+                  onGoDeeper={(claimText) => void startFollowUpFrom(`Dig deeper: ${claimText.slice(0, 180)}`)}
+                />
+              </div>
+            ) : lastTurn.job?.stats?.claimChecks?.length ? (
+              <p className="rounded-[14px] border border-dashed px-3.5 py-3 text-[11.5px] leading-relaxed text-muted-foreground">
+                Select any citation to see the passage it rests on — J/K move through claims, Esc closes.
+              </p>
+            ) : null}
+
             {lastTurn.sources.length > 0 && (
               <div>
                 <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">
@@ -492,10 +618,44 @@ export default function ThreadPage() {
           </div>
         )}
       </div>
+      {/* claim evidence bottom sheet — phones and tablets (below xl rail). Closing returns focus to the claim chip. */}
+      <Drawer
+        open={sheetOpen}
+        onOpenChange={(o) => {
+          setSheetOpen(o); // the selection itself persists — J/K still work after close
+          // Return focus to the claim chip. The sheet's unmount pass steals
+          // focus back to body mid-way through the exit transition, so the
+          // restore runs twice: just after close, and after the exit settles.
+          if (!o) {
+            setTimeout(focusLastChip, 120);
+            setTimeout(focusLastChip, 650);
+          }
+        }}
+      >
+        <DrawerContent className="max-h-[82dvh] rounded-t-[22px] px-0 pb-2">
+          <div className="mx-auto mb-1 h-1 w-10 rounded-full bg-muted-foreground/25" aria-hidden />
+          <DrawerTitle className="sr-only">Claim evidence</DrawerTitle>
+          <DrawerDescription className="sr-only">The passage, source and support ratio behind the selected claim.</DrawerDescription>
+          <div className="max-h-[70dvh] overflow-y-auto px-2">
+            {sel && (
+              <EvidencePanel
+                inSheet
+                selection={sel}
+                index={claimNavList.findIndex((c) => c.id === sel.check.id)}
+                total={claimNavList.length}
+                onPrev={() => moveClaim(-1)}
+                onNext={() => moveClaim(1)}
+                onGoDeeper={(claimText) => {
+                  setSheetOpen(false);
+                  void startFollowUpFrom(`Dig deeper: ${claimText.slice(0, 180)}`);
+                }}
+              />
+            )}
+          </div>
+        </DrawerContent>
+      </Drawer>
     </div>
   );
-
-  /** Related-question pill / rerun: same thread, new turn. */
   async function startFollowUpFrom(q: string) {
     if (!threadId) {
       sessionStorage.setItem("digdeep:prefill", q);

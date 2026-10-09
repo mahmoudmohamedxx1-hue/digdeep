@@ -12,7 +12,8 @@ import { toast } from "@/hooks/use-toast";
 import type { SourceItem, SectionItem, JobItem } from "@/components/research/types";
 import { fmtElapsed, ACTIVE_STATUSES } from "@/components/research/types";
 import { VerdictStrip } from "@/components/research/verdict-strip";
-import { parseAnswer, parseExec } from "@/lib/report-parse";
+import { parseAnswer, parseExec, type ReportRef } from "@/lib/report-parse";
+import type { CitationContext, ClaimSelection } from "@/components/research/citation-chip";
 
 function SkipTypingButton({ onClick }: { onClick: () => void }) {
   return (
@@ -198,6 +199,7 @@ function ShareButton({ job, compact }: { job: JobItem; compact?: boolean }) {
 
 export function AnswerView({
   job, sources, sections, animate, onRetry, onFollowUp, onRerun,
+  onSelectClaim, selectedClaimId,
 }: {
   job: JobItem;
   sources: SourceItem[];
@@ -206,6 +208,8 @@ export function AnswerView({
   onRetry: () => void;
   onFollowUp: (q: string) => void;
   onRerun?: () => void;
+  onSelectClaim?: CitationContext["onSelectClaim"];
+  selectedClaimId?: string;
 }) {
   const [copied, setCopied] = useState(false);
   const active = ACTIVE_STATUSES.includes(job.status);
@@ -292,6 +296,9 @@ export function AnswerView({
     const isQuick = job.mode === "quick";
     const execShape = exec ? parseExec(exec) : null;
     const showFindings = execShape && (execShape.findings.length > 0 || execShape.lead);
+    const claimChecks = job.stats?.claimChecks ?? undefined;
+    const cv = job.stats?.claimVerdict;
+    const claimSummaryLine = cv ? `${cv.fullySupported} of ${cv.citedSources} sources fully support their claims` : undefined;
 
     return (
       <div className="fade-up">
@@ -328,17 +335,17 @@ export function AnswerView({
         )}
 
         {/* report body — serif at a 68-character measure */}
-        {body && <Markdown serif text={isQuick ? body.replace(/^##\s.*\n+/, "") : body} sources={sources} refs={refs} audit={audit} />}
+        {body && <Markdown serif text={isQuick ? body.replace(/^##\s.*\n+/, "") : body} sources={sources} refs={refs} audit={audit} checks={claimChecks} onSelectClaim={onSelectClaim ? (sel, el) => onSelectClaim({ ...sel, reportMd: job.reportMd ?? null, allChecks: claimChecks, summaryLine: claimSummaryLine }, el) : undefined} selectedClaimId={selectedClaimId} />}
         {conclusion && (
           <div className="mt-10">
             <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">Conclusion</p>
-            <Markdown serif text={conclusion} sources={sources} refs={refs} audit={audit} />
+            <Markdown serif text={conclusion} sources={sources} refs={refs} audit={audit} checks={claimChecks} onSelectClaim={onSelectClaim ? (sel, el) => onSelectClaim({ ...sel, reportMd: job.reportMd ?? null, allChecks: claimChecks, summaryLine: claimSummaryLine }, el) : undefined} selectedClaimId={selectedClaimId} />
           </div>
         )}
         {diff && (
           <div className="mt-10">
             <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">What changed since the last run</p>
-            <Markdown serif text={diff} sources={sources} refs={refs} audit={audit} />
+            <Markdown serif text={diff} sources={sources} refs={refs} audit={audit} checks={claimChecks} onSelectClaim={onSelectClaim ? (sel, el) => onSelectClaim({ ...sel, reportMd: job.reportMd ?? null, allChecks: claimChecks, summaryLine: claimSummaryLine }, el) : undefined} selectedClaimId={selectedClaimId} />
           </div>
         )}
 

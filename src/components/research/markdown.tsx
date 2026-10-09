@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useMemo } from "react";
+import { memo, createContext, useContext, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CitationChip, type CitationContext } from "@/components/research/citation-chip";
@@ -16,7 +16,14 @@ import type { SourceItem } from "@/components/research/types";
  * typer streams a long report only the LAST block re-renders, not the whole
  * document. Citation markers `[n]` become hover-card chips; h2s carry anchor
  * ids so the right-rail table of contents can track them.
+ *
+ * The citation context (sources/refs/audit/checks/selection) travels through a
+ * React context, NOT through component props — so the react-markdown component
+ * identities stay stable and selecting a claim never remounts the report DOM
+ * (which would drop focus and kill hover states mid-read).
  */
+
+const CiteCtx = createContext<CitationContext>({});
 
 /** Convert bare citation markers into internal links the `a` override can style. */
 function linkifyCitations(text: string): string {
@@ -33,86 +40,76 @@ function childText(children: React.ReactNode): string {
   return "";
 }
 
-/** Extract the text content of a react-markdown node's children (for heading ids). */
-function useComponents(ctx: CitationContext) {
-  return useMemo(
-    () => ({
-      h1: ({ children }: { children?: React.ReactNode }) => (
-        <h1 className="mb-5 mt-10 text-[26px] font-bold tracking-[-0.022em]">{children}</h1>
-      ),
-      h2: ({ children }: { children?: React.ReactNode }) => (
-        <h2 id={headingId(childText(children))} className="mt-10 mb-3 scroll-mt-24 text-[21px] font-semibold tracking-[-0.022em] text-foreground">
-          {children}
-        </h2>
-      ),
-      h3: ({ children }: { children?: React.ReactNode }) => (
-        <h3 className="mt-8 mb-2.5 text-[17.5px] font-semibold tracking-[-0.018em] text-foreground">{children}</h3>
-      ),
-      h4: ({ children }: { children?: React.ReactNode }) => (
-        <h4 className="mt-6 mb-2 text-[15.5px] font-semibold text-foreground">{children}</h4>
-      ),
-      p: ({ children }: { children?: React.ReactNode }) => <p className="my-[18px] leading-[1.75]">{children}</p>,
-      a: ({ href, children }: { href?: string; children?: React.ReactNode }) => {
-        const m = typeof href === "string" ? href.match(/^#cite-(\d+)$/) : null;
-        if (m) return <CitationChip n={Number(m[1])} ctx={ctx} />;
-        return (
-          <a href={href} target="_blank" rel="noreferrer" className="break-words text-primary underline decoration-primary/30 underline-offset-2 hover:decoration-primary">
-            {children}
-          </a>
-        );
-      },
-      ul: ({ children }: { children?: React.ReactNode }) => (
-        <ul className="my-[18px] space-y-2">{children}</ul>
-      ),
-      ol: ({ children }: { children?: React.ReactNode }) => (
-        <ol className="my-[18px] list-decimal space-y-2 pl-[22px] marker:font-medium marker:text-muted-foreground/70">{children}</ol>
-      ),
-      li: ({ children }: { children?: React.ReactNode }) => <li className="leading-[1.7]">{children}</li>,
-      blockquote: ({ children }: { children?: React.ReactNode }) => (
-        <blockquote className="my-4 rounded-r-lg border-l-2 border-primary/40 py-0.5 pl-4 pr-3 text-muted-foreground">{children}</blockquote>
-      ),
-      hr: () => <hr className="my-8 border-border/60" />,
-      code: ({ className, children }: { className?: string; children?: React.ReactNode }) => {
-        const isBlock = /language-/.test(className ?? "");
-        if (isBlock) return <code className={`${className ?? ""} font-mono text-[12.5px]`}>{children}</code>;
-        return <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[0.84em]">{children}</code>;
-      },
-      pre: ({ children }: { children?: React.ReactNode }) => (
-        <pre className="my-4 overflow-x-auto rounded-[14px] border border-border/70 bg-muted/40 p-4 font-mono text-[12.5px] leading-relaxed">{children}</pre>
-      ),
-      table: ({ children }: { children?: React.ReactNode }) => (
-        <div className="my-5 overflow-x-auto rounded-[14px] border border-border/70">
-          <table className="w-full border-collapse text-[13.5px]">{children}</table>
-        </div>
-      ),
-      thead: ({ children }: { children?: React.ReactNode }) => <thead>{children}</thead>,
-      tbody: ({ children }: { children?: React.ReactNode }) => <tbody>{children}</tbody>,
-      tr: ({ children }: { children?: React.ReactNode }) => <tr className="transition-colors hover:bg-muted/30">{children}</tr>,
-      th: ({ children }: { children?: React.ReactNode }) => (
-        <th className="border-b border-border/70 bg-muted/50 px-3.5 py-2.5 text-left font-semibold tracking-tight">{children}</th>
-      ),
-      td: ({ children }: { children?: React.ReactNode }) => (
-        <td className="border-b border-border/40 px-3.5 py-2.5 align-top leading-snug last:border-b-0">{children}</td>
-      ),
-      img: ({ src, alt }: { src?: string; alt?: string }) => (
-        <img src={typeof src === "string" ? src : ""} alt={alt ?? ""} className="my-4 max-h-[420px] rounded-[14px] border border-border/70" loading="lazy" />
-      ),
-    }),
-    [ctx]
-  );
-}
+/** The one set of markdown components — created a single time. Selection or
+ *  context changes flow through CiteCtx, never through new identities. */
+const MD_COMPONENTS = {
+  h1: ({ children }: { children?: React.ReactNode }) => (
+    <h1 className="mb-5 mt-10 text-[26px] font-bold tracking-[-0.022em]">{children}</h1>
+  ),
+  h2: ({ children }: { children?: React.ReactNode }) => (
+    <h2 id={headingId(childText(children))} className="mt-10 mb-3 scroll-mt-24 text-[21px] font-semibold tracking-[-0.022em] text-foreground">
+      {children}
+    </h2>
+  ),
+  h3: ({ children }: { children?: React.ReactNode }) => (
+    <h3 className="mt-8 mb-2.5 text-[17.5px] font-semibold tracking-[-0.018em] text-foreground">{children}</h3>
+  ),
+  h4: ({ children }: { children?: React.ReactNode }) => (
+    <h4 className="mt-6 mb-2 text-[15.5px] font-semibold text-foreground">{children}</h4>
+  ),
+  p: ({ children }: { children?: React.ReactNode }) => <p className="my-[18px] leading-[1.75]">{children}</p>,
+  a: ({ href, children }: { href?: string; children?: React.ReactNode }) => {
+    const m = typeof href === "string" ? href.match(/^#cite-(\d+)$/) : null;
+    const ctx = useContext(CiteCtx);
+    if (m) return <CitationChip n={Number(m[1])} ctx={ctx} />;
+    return (
+      <a href={href} target="_blank" rel="noreferrer" className="break-words text-primary underline decoration-primary/30 underline-offset-2 hover:decoration-primary">
+        {children}
+      </a>
+    );
+  },
+  ul: ({ children }: { children?: React.ReactNode }) => (
+    <ul className="my-[18px] space-y-2">{children}</ul>
+  ),
+  ol: ({ children }: { children?: React.ReactNode }) => (
+    <ol className="my-[18px] list-decimal space-y-2 pl-[22px] marker:font-medium marker:text-muted-foreground/70">{children}</ol>
+  ),
+  li: ({ children }: { children?: React.ReactNode }) => <li className="leading-[1.7]">{children}</li>,
+  blockquote: ({ children }: { children?: React.ReactNode }) => (
+    <blockquote className="my-4 rounded-r-lg border-l-2 border-primary/40 py-0.5 pl-4 pr-3 text-muted-foreground">{children}</blockquote>
+  ),
+  hr: () => <hr className="my-8 border-border/60" />,
+  code: ({ className, children }: { className?: string; children?: React.ReactNode }) => {
+    const isBlock = /language-/.test(className ?? "");
+    if (isBlock) return <code className={`${className ?? ""} font-mono text-[12.5px]`}>{children}</code>;
+    return <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[0.84em]">{children}</code>;
+  },
+  pre: ({ children }: { children?: React.ReactNode }) => (
+    <pre className="my-4 overflow-x-auto rounded-[14px] border border-border/70 bg-muted/40 p-4 font-mono text-[12.5px] leading-relaxed">{children}</pre>
+  ),
+  table: ({ children }: { children?: React.ReactNode }) => (
+    <div className="my-5 overflow-x-auto rounded-[14px] border border-border/70">
+      <table className="w-full border-collapse text-[13.5px]">{children}</table>
+    </div>
+  ),
+  thead: ({ children }: { children?: React.ReactNode }) => <thead>{children}</thead>,
+  tbody: ({ children }: { children?: React.ReactNode }) => <tbody>{children}</tbody>,
+  tr: ({ children }: { children?: React.ReactNode }) => <tr className="transition-colors hover:bg-muted/30">{children}</tr>,
+  th: ({ children }: { children?: React.ReactNode }) => (
+    <th className="border-b border-border/70 bg-muted/50 px-3.5 py-2.5 text-left font-semibold tracking-tight">{children}</th>
+  ),
+  td: ({ children }: { children?: React.ReactNode }) => (
+    <td className="border-b border-border/40 px-3.5 py-2.5 align-top leading-snug last:border-b-0">{children}</td>
+  ),
+  img: ({ src, alt }: { src?: string; alt?: string }) => (
+    <img src={typeof src === "string" ? src : ""} alt={alt ?? ""} className="my-4 max-h-[420px] rounded-[14px] border border-border/70" loading="lazy" />
+  ),
+};
 
 /** One memoized markdown block — completed blocks never re-render while streaming. */
-const MdBlock = memo(function MdBlock({
-  text, ctx, compact,
-}: {
-  text: string;
-  ctx: CitationContext;
-  compact: boolean;
-}) {
-  const components = useComponents(ctx);
+const MdBlock = memo(function MdBlock({ text }: { text: string }) {
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={components as never}>
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS as never}>
       {linkifyCitations(text)}
     </ReactMarkdown>
   );
@@ -154,6 +151,9 @@ export function Markdown({
   sources,
   refs,
   audit,
+  checks,
+  onSelectClaim,
+  selectedClaimId,
 }: {
   text: string;
   compact?: boolean;
@@ -162,23 +162,33 @@ export function Markdown({
   sources?: SourceItem[];
   refs?: ReportRef[];
   audit?: CitationContext["audit"];
+  /** claim ledger — chips with a matching check show its verdict */
+  checks?: CitationContext["checks"];
+  onSelectClaim?: CitationContext["onSelectClaim"];
+  /** id of the currently selected claim (for active chip styling) */
+  selectedClaimId?: string;
 }) {
-  const ctx = useMemo<CitationContext>(() => ({ sources, refs, audit }), [sources, refs, audit]);
+  const ctx = useMemo<CitationContext>(
+    () => ({ sources, refs, audit, checks, onSelectClaim, selectedCheckId: selectedClaimId }),
+    [sources, refs, audit, checks, onSelectClaim, selectedClaimId]
+  );
   const blocks = useMemo(() => splitBlocks(text), [text]);
   return (
-    <div
-      dir="auto"
-      className={
-        compact
-          ? "text-[15px] text-foreground"
-          : serif
-            ? "report-prose text-[16px] text-foreground"
-            : "text-[16px] text-foreground"
-      }
-    >
-      {blocks.map((b, i) => (
-        <MdBlock key={i} text={b} ctx={ctx} compact={compact} />
-      ))}
-    </div>
+    <CiteCtx.Provider value={ctx}>
+      <div
+        dir="auto"
+        className={
+          compact
+            ? "text-[15px] text-foreground"
+            : serif
+              ? "report-prose text-[16px] text-foreground"
+              : "text-[16px] text-foreground"
+        }
+      >
+        {blocks.map((b, i) => (
+          <MdBlock key={i} text={b} />
+        ))}
+      </div>
+    </CiteCtx.Provider>
   );
 }

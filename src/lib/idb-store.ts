@@ -202,6 +202,7 @@ export async function getThreadTurns(threadId: string): Promise<Turn[]> {
 
 function toHistoryItem(rec: StoredTurn): HistoryItem {
   const j = rec.job;
+  const cv = j.stats?.claimVerdict;
   return {
     id: j.id,
     query: j.query,
@@ -214,6 +215,10 @@ function toHistoryItem(rec: StoredTurn): HistoryItem {
     createdAt: j.createdAt,
     completedAt: j.completedAt ?? null,
     modelPref: j.modelPref,
+    // Phase 2 — one-line verdict summary for Library rows (research reports only)
+    ...(j.status === "completed" && cv
+      ? { verdict: { fully: cv.fullySupported, of: cv.citedSources, integrity: j.stats?.citationIntegrity } }
+      : {}),
   };
 }
 

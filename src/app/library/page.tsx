@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Compass, LibraryBig, Search, Trash2 } from "lucide-react";
+import { BadgeCheck, Compass, LibraryBig, Search, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StaggerIn } from "@/components/magic";
@@ -10,6 +10,23 @@ import { deleteThread, deleteTurn, clearAll } from "@/lib/idb-store";
 import { useHistory, refreshHistory } from "@/lib/store";
 import { groupHistory } from "@/lib/history-group";
 import { toast } from "@/hooks/use-toast";
+
+/** The one-line verdict chip for Library rows — colour + icon + text. */
+function VerdictChip({ v }: { v: NonNullable<import("@/components/research/types").HistoryItem["verdict"]> }) {
+  const full = v.fully >= v.of && v.of > 0;
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 font-medium ${
+        full ? "bg-[var(--verify)]/10 text-[var(--verify-text)]" : "bg-[var(--warn)]/10 text-[var(--warn-text)]"
+      }`}
+      title={`Claim support: ${v.fully} of ${v.of} sources fully support their claims${v.integrity != null ? ` · citation integrity ${v.integrity}%` : ""}`}
+    >
+      <BadgeCheck className="h-3 w-3" aria-hidden />
+      {v.fully}/{v.of} sources fully support
+      {v.integrity != null && <span className="opacity-70">· {v.integrity}%</span>}
+    </span>
+  );
+}
 
 export default function LibraryPage() {
   const router = useRouter();
@@ -139,6 +156,7 @@ export default function LibraryPage() {
                           {h.status}
                         </span>
                         <span className="capitalize">{h.mode === "chat" ? "chat" : h.mode === "quick" ? "quick answer" : h.preset}</span>
+                        {h.verdict && <VerdictChip v={h.verdict} />}
                         <span>{new Date(h.createdAt).toLocaleString()}</span>
                       </div>
                     </button>

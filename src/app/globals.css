@@ -517,6 +517,67 @@
   color: #ffb340;
 }
 
+/* ---------- claim verdicts (Phase 2) ----------
+   Tokens: verify teal / warn amber / bad coral. AA-checked pairs for text.
+   Underline patterns carry the verdict beyond colour: solid = verified,
+   dashed = partly supported, wavy = unverified. */
+:root {
+  --verify: #0f9d8f;        /* teal 600 — fills, bars, chips (non-text) */
+  --verify-text: #0f766e;   /* teal 700 — 4.74:1 on the light canvas */
+  --warn: #d97706;          /* amber 600 — fills */
+  --warn-text: #b45309;     /* amber 700 — 4.6:1 on light */
+  --bad: #e5484d;           /* coral — fills */
+  --bad-text: #b8233f;      /* deep coral — ~5:1 on light */
+}
+.dark {
+  --verify: #2dd4bf;
+  --verify-text: #5eead4;   /* teal 300 — ~11:1 on charcoal */
+  --warn: #fbbf24;
+  --warn-text: #fbbf24;     /* amber 400 — ~9:1 on charcoal */
+  --bad: #ff8489;
+  --bad-text: #ff9ba0;      /* ~7:1 on charcoal */
+}
+
+.cite-v-verified {
+  color: var(--verify-text);
+  background: color-mix(in oklab, var(--verify) 14%, transparent);
+  text-decoration: underline;
+  text-decoration-style: solid;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--verify);
+}
+.cite-v-partly {
+  color: var(--warn-text);
+  background: color-mix(in oklab, var(--warn) 14%, transparent);
+  text-decoration: underline;
+  text-decoration-style: dashed;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--warn);
+}
+.cite-v-unverified {
+  color: var(--bad-text);
+  background: color-mix(in oklab, var(--bad) 14%, transparent);
+  text-decoration: underline;
+  text-decoration-style: wavy;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--bad);
+}
+.cite-chip.cite-v-verified:hover, .cite-chip.cite-v-verified:focus-visible { background: color-mix(in oklab, var(--verify) 30%, transparent); }
+.cite-chip.cite-v-partly:hover, .cite-chip.cite-v-partly:focus-visible { background: color-mix(in oklab, var(--warn) 30%, transparent); }
+.cite-chip.cite-v-unverified:hover, .cite-chip.cite-v-unverified:focus-visible { background: color-mix(in oklab, var(--bad) 30%, transparent); }
+.cite-v-selected {
+  outline: 2px solid color-mix(in oklab, var(--verify) 65%, transparent);
+  outline-offset: 2px;
+}
+/* verdict bar segments — pattern beyond colour (stripes = partly, dots = unverified) */
+.claim-v-partly-seg { background-color: var(--warn); background-image: repeating-linear-gradient(45deg, var(--warn) 0 5px, color-mix(in oklab, var(--warn) 45%, var(--muted)) 5px 10px); }
+.claim-v-unverified-seg { background-color: var(--bad); background-image: radial-gradient(color-mix(in oklab, var(--bad) 20%, var(--muted)) 1.2px, transparent 1.3px); background-size: 7px 7px; }
+.claim-v-partly-dot { background-image: repeating-linear-gradient(45deg, var(--warn) 0 3px, color-mix(in oklab, var(--warn) 45%, var(--muted)) 3px 6px); }
+.claim-v-unverified-dot { background-image: radial-gradient(color-mix(in oklab, var(--bad) 20%, var(--muted)) 1px, transparent 1.1px); background-size: 5px 5px; }
+
 /* ==================================================================
    MAGIC — premium primitives adapted from 21st.dev / ReactBits
    (text shimmer, aurora, spotlight card, aurora badge ring, button

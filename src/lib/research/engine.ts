@@ -3,6 +3,15 @@ import { llmComplete, llmStreamComplete, type ChatMsg, type LlmResult, type Mode
 import { capabilityQuestion, heuristicChatIntent, selfKnowledgeTopic, type SelfTopic } from "./intent-heuristics";
 import { searchAll, fetchPageContent, domainOf, type SearchResult } from "./search";
 import {
+  supportTokens as sharedSupportTokens,
+  lexicalSupport as sharedLexicalSupport,
+  bestPassage,
+  verdictFromSupport,
+  classifyCloseness,
+  type ClaimCheck,
+  type ClaimVerdictSummary,
+} from "@/lib/claim-support";
+import {
   RESEARCHER_SYS,
   CHAT_SYS,
   classifyPrompt,
@@ -1789,17 +1798,10 @@ export async function runJob(jobId: string) {
       checked: 0, repaired: 0, dropped: 0, integrity: 100 as number, reanchoredTo: [], droppedNs: [], flagged: [],
     };
     if (ctx.sourceTexts.size > 0 && !ctx.outOfTime) {
-      const CITE_STOP = new Set(["about", "after", "again", "their", "there", "these", "those", "which", "while", "would", "could", "should", "other", "because", "being", "under", "between", "through", "during", "before", "above", "below", "further", "once", "where", "both", "each", "more", "most", "some", "such", "only", "same", "than", "very", "just", "also", "into", "over", "have", "this", "that", "from", "they", "been", "were", "when", "what", "will", "your", "them", "then", "many", "much", "since", "based", "including", "according", "reported", "argues", "suggests", "compared", "largely", "several", "various", "important", "significant", "currently", "recently", "however", "therefore", "whereas", "although", "despite", "across", "within", "without", "toward", "among"]);
-      const supportTokens = (t: string) =>
-        t.toLowerCase().replace(/\[\d+\]/g, " ").replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 4 && !CITE_STOP.has(w));
-      const lexicalSupport = (sentence: string, sourceText: string) => {
-        const st = supportTokens(sentence);
-        if (st.length < 2) return 1; // too generic to judge — never flag on vibes
-        const src = new Set(supportTokens(sourceText));
-        let hit = 0;
-        for (const t of st) if (src.has(t)) hit++;
-        return hit / st.length;
-      };
+      // the shared implementation (src/lib/claim-support.ts) — identical rules on
+      // the server and in the client's "re-check this claim", by design
+      const supportTokens = sharedSupportTokens;
+      const lexicalSupport = sharedLexicalSupport;
 
       // 4.5a. lexical scan — flag citations whose claim-sentence barely overlaps the source
       const weak: { secId: string; n: number; sentence: string }[] = [];
@@ -1882,6 +1884,54 @@ export async function runJob(jobId: string) {
     }
 
     const drafts = draftsArr.join("\n\n");
+
+    // ---------- STAGE 4.6: CLAIM-CHECK LEDGER (claim-level verification) ----------
+    // Built from the FINAL drafts (post judge repairs/drops), so every entry
+    // corresponds to a citation actually printed in the report. Pure computation
+    // against ctx.sourceTexts — zero extra LLM calls. The ns are the engine's
+    // internal numbering here; the assembly remap below rewrites them to the
+    // report's final numbering so the ledger matches what the reader sees.
+    const claimChecks: ClaimCheck[] = [];
+    if (ctx.sourceTexts.size > 0) {
+      const seen = new Set<string>(); // dedupe (sentence + n)
+      for (const sec of finalSections) {
+        const draft = sec.draftMd || "";
+        if (!draft) continue;
+        for (const sentence of draft.split(/(?<=[.!?])\s+/)) {
+          const nums = [...new Set([...sentence.matchAll(/\[(\d+)\]/g)].map((m) => Number(m[1])))];
+          if (nums.length === 0) continue;
+          for (const n of nums) {
+            const key = `${n}::${sentence.trim().slice(0, 120)}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            if (claimChecks.length >= 160) break; // cap the ledger — honest, bounded
+            const srcText = ctx.sourceTexts.get(n) ?? "";
+            const meta = ctx.sourceMeta.get(n) ?? { title: "", domain: "" };
+            const snippetGrade = srcText.length < 400;
+            const { passage, support } = bestPassage(sentence, srcText);
+            const verdict = verdictFromSupport(support);
+            const notes: string[] = [];
+            if (snippetGrade) notes.push("snippet-grade source — judged from the search excerpt, not the full page");
+            if (citeStats.reanchoredTo.includes(n)) notes.push("re-anchored by the citation audit (originally cited a different source)");
+            else if (citeStats.flagged.includes(n)) notes.push("flagged as weakly anchored, kept after the model audit");
+            if (verdict === "unverified" && !snippetGrade && srcText) notes.push("the claim sentence barely overlaps the source text that was read");
+            claimChecks.push({
+              id: `c${claimChecks.length + 1}`,
+              text: sentence.replace(/\s+/g, " ").trim().slice(0, 300),
+              n,
+              verdict,
+              support: Math.round(support * 100) / 100,
+              passage,
+              section: sec.title,
+              closeness: classifyCloseness(meta.domain),
+              sourceTitle: meta.title || `Source ${n}`,
+              sourceDomain: meta.domain,
+              ...(notes.length > 0 ? { note: notes.join("; ") } : {}),
+            });
+          }
+        }
+      }
+    }
     await updateJob(jobId, { stage: "Writing executive summary & conclusion", progress: 95 });
     const [execR, concR, titleR, relatedR] = await Promise.allSettled([
       // bounded: on a capped serverless run the tail must not ride patient cooldown
@@ -1937,6 +1987,29 @@ export async function runJob(jobId: string) {
       .join("\n");
     const remap: Record<number, number> = {};
     sourcesUsed.forEach((s, i) => (remap[s.n] = i + 1));
+    // the claim-check ledger was recorded with the engine's internal numbering —
+    // rewrite it to the report's final citation numbers so it matches what the
+    // reader sees (and what the References list numbers mean)
+    for (const c of claimChecks) c.n = remap[c.n] ?? c.n;
+    let claimVerdict: ClaimVerdictSummary | undefined;
+    if (claimChecks.length > 0) {
+      const byN = new Map<number, { verified: number; total: number }>();
+      for (const c of claimChecks) {
+        const e = byN.get(c.n) ?? { verified: 0, total: 0 };
+        e.total++;
+        if (c.verdict === "verified") e.verified++;
+        byN.set(c.n, e);
+      }
+      let fully = 0;
+      for (const e of byN.values()) if (e.verified === e.total) fully++;
+      claimVerdict = {
+        citedSources: byN.size,
+        fullySupported: fully,
+        verified: claimChecks.filter((c) => c.verdict === "verified").length,
+        partly: claimChecks.filter((c) => c.verdict === "partly").length,
+        unverified: claimChecks.filter((c) => c.verdict === "unverified").length,
+      };
+    }
     const body = finalSections
       .map((s, i) => `## ${i + 1}. ${s.title}\n\n${(s.draftMd || "").replace(/\[(\d+)\]/g, (_, d) => `[${remap[Number(d)] ?? d}]`)}`)
       .join("\n\n");
@@ -2058,6 +2131,9 @@ export async function runJob(jobId: string) {
         dropped: [...new Set(citeStats.droppedNs)],
         flagged: [...new Set(citeStats.flagged)],
       },
+      // claim-level verification ledger (final numbering) + one-line summary
+      ...(claimChecks.length > 0 ? { claimChecks } : {}),
+      ...(claimVerdict ? { claimVerdict } : {}),
       reranked: ctx.rerankRuns,
       parallelAspects: concurrency,
       redTeamAttacks: redTeamAttacks.length,

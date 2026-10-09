@@ -1,28 +1,28 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 
 /**
  * Offline awareness for every screen — one shared hook so the whole app
  * reacts to the browser going offline consistently. Values:
- *  - "online"  — navigator says we have a connection
- *  - "offline" — no connection; screens that need the server say so and
- *                offer local recovery actions instead of a dead spinner.
+ *  - true  — navigator says we have a connection (also the SSR default)
+ *  - false — no connection; screens that need the server say so and offer
+ *            local recovery actions instead of a dead spinner.
+ *
+ * useSyncExternalStore keeps SSR and client in agreement without
+ * state-setting effects.
  */
+function subscribe(onStoreChange: () => void) {
+  window.addEventListener("online", onStoreChange);
+  window.addEventListener("offline", onStoreChange);
+  return () => {
+    window.removeEventListener("online", onStoreChange);
+    window.removeEventListener("offline", onStoreChange);
+  };
+}
+
 export function useOnline(): boolean {
-  const [online, setOnline] = useState(true);
-
-  useEffect(() => {
-    const up = () => setOnline(true);
-    const down = () => setOnline(false);
-    setOnline(navigator.onLine);
-    window.addEventListener("online", up);
-    window.addEventListener("offline", down);
-    return () => {
-      window.removeEventListener("online", up);
-      window.removeEventListener("offline", down);
-    };
-  }, []);
-
-  return online;
+  const getSnapshot = useCallback(() => navigator.onLine, []);
+  const getServerSnapshot = useCallback(() => true, []);
+  return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }

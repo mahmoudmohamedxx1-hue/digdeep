@@ -1,3 +1,5 @@
+import type { ClaimCheck, ClaimVerdictSummary } from "@/lib/claim-support";
+
 export interface EventItem {
   id: string;
   seq: number;
@@ -77,6 +79,9 @@ export interface JobItem {
     /** per-citation audit trail — which sources received re-anchored citations,
      *  which citation numbers were dropped as unsupported, which were flagged weak */
     citationAudit?: { reanchoredTo?: number[]; dropped?: number[]; flagged?: number[] };
+    /** Phase 2 — the claim-level verification ledger (final citation numbering) */
+    claimChecks?: ClaimCheck[];
+    claimVerdict?: ClaimVerdictSummary;
     /** chat lane: reply came from the built-in script because every model was throttled */
     throttledFallback?: boolean;
     // P0-2 / P0-3

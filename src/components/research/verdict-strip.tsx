@@ -170,10 +170,49 @@ function ExpandedCard({ stats, quality }: { stats: Stats; quality?: Quality }) {
   );
 }
 
+/** The claim-verdict bar — “X of Y sources fully support their claims”, one
+ *  segmented bar with three textures (solid / stripes / dots) so pattern, not
+ *  just colour, carries the meaning. Counts as text for good measure. */
+function ClaimVerdictBar({ v }: { v: NonNullable<Stats["claimVerdict"]> }) {
+  const total = v.verified + v.partly + v.unverified;
+  if (total === 0) return null;
+  const pct = (n: number) => `${(n / total) * 100}%`;
+  return (
+    <div className="border-t border-border/60 px-4 py-3 sm:px-5">
+      <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[12.5px]">
+        <span className="font-semibold tabular-nums text-[var(--verify-text)]">
+          {v.fullySupported} of {v.citedSources}
+        </span>
+        <span className="text-muted-foreground">sources fully support their claims</span>
+        <span className="ml-auto flex items-center gap-2 text-[11px] tabular-nums text-muted-foreground">
+          <span className="inline-flex items-center gap-1">
+            <span className="h-2 w-2 rounded-[3px] bg-[var(--verify)]" aria-hidden /> {v.verified} verified
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <span className="claim-v-partly-dot h-2 w-2 rounded-[3px] bg-[var(--warn)]" aria-hidden /> {v.partly} partly
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <span className="claim-v-unverified-dot h-2 w-2 rounded-[3px] bg-[var(--bad)]" aria-hidden /> {v.unverified} unverified
+          </span>
+        </span>
+      </p>
+      <div
+        className="mt-2 flex h-2 overflow-hidden rounded-full bg-muted"
+        role="img"
+        aria-label={`Claim support: ${v.verified} verified, ${v.partly} partly supported, ${v.unverified} unverified out of ${total} checks; ${v.fullySupported} of ${v.citedSources} sources fully support their claims`}
+      >
+        {v.verified > 0 && <span className="h-full bg-[var(--verify)]" style={{ width: pct(v.verified) }} />}
+        {v.partly > 0 && <span className="claim-v-partly-seg h-full" style={{ width: pct(v.partly) }} />}
+        {v.unverified > 0 && <span className="claim-v-unverified-seg h-full" style={{ width: pct(v.unverified) }} />}
+      </div>
+    </div>
+  );
+}
+
 /**
  * The verdict strip — one honest row directly under the question:
- * integrity %, quality score, source & domain counts, elapsed time.
- * Click to expand the full quality card in place.
+ * integrity %, quality score, source & domain counts, elapsed time, plus the
+ * claim-verdict bar. Click to expand the full quality card in place.
  */
 export function VerdictStrip({ job }: { job: JobItem }) {
   const [open, setOpen] = useState(false);
@@ -226,6 +265,7 @@ export function VerdictStrip({ job }: { job: JobItem }) {
           aria-hidden
         />
       </button>
+      {stats.claimVerdict && <ClaimVerdictBar v={stats.claimVerdict} />}
       <div
         id="verdict-detail"
         className="grid transition-[grid-template-rows] duration-300 ease-apple"
