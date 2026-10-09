@@ -76,6 +76,7 @@ export function ThreadTurn({
               events={turn.events}
               active={active}
               stage={job.stage}
+              progress={job.progress}
               elapsedMs={elapsedMs}
               showThinking={showThinking}
               now={now}

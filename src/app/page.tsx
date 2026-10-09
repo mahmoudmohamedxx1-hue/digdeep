@@ -127,6 +127,12 @@ export default function HomePage() {
         <p className="rise-in relative z-10 mt-3.5 text-center text-[12.5px] font-medium leading-relaxed text-muted-foreground [animation-delay:440ms]">
           Free &amp; keyless · every claim cited · every citation audited · honest quality scores
         </p>
+        <p className="kbd-hints relative z-10 mt-2.5 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+          <span className="inline-flex items-center gap-1"><kbd>/</kbd> focus</span>
+          <span className="inline-flex items-center gap-1"><kbd>⌘K</kbd> commands</span>
+          <span className="inline-flex items-center gap-1"><kbd>N</kbd> new research</span>
+          <span className="inline-flex items-center gap-1"><kbd>J</kbd>/<kbd>K</kbd> claim evidence</span>
+        </p>
       </div>
 
       {/* starter chips — spotlight pills that wake under the cursor */}

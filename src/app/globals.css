@@ -928,3 +928,47 @@
   }
   .pplx-dot { animation: none; }
 }
+
+
+/* ==================================================================
+   PHASE 4 (v2) — A-grade polish: focus, touch, hints
+   ================================================================== */
+
+/* ---------- Global visible focus (keyboard-first) ---------- */
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: inherit;
+}
+.cite-chip:focus-visible { outline-offset: 3px; }
+
+/* ---------- 44px touch targets on coarse pointers ----------
+   Inline chips can't grow 44px without wrecking the text flow, so
+   they get an invisible ::before hit-area instead. */
+@media (pointer: coarse) {
+  .cite-chip { position: relative; }
+  .cite-chip::before {
+    content: "";
+    position: absolute;
+    inset: -12px -14px; /* ~44px square around a 17px chip */
+  }
+  .touch-44 { min-height: 44px; min-width: 44px; }
+}
+
+/* ---------- Keyboard hints under the composer (pointer-fine only) ---------- */
+@media (hover: none) {
+  .kbd-hints { display: none; }
+}
+.kbd-hints kbd {
+  display: inline-flex;
+  align-items: center;
+  height: 17px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--card);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--muted-foreground);
+}

@@ -230,7 +230,7 @@ export function AskBox({
               tabIndex={-1}
             />
             <button
-              className="press-scale flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              className="press-scale flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground max-sm:h-11 max-sm:w-11"
               onClick={() => fileRef.current?.click()}
               aria-label="Attach documents as ground-truth sources"
               title="Attach .txt / .md documents — they become ground-truth sources for this research"
@@ -244,7 +244,7 @@ export function AskBox({
         <Popover open={settingsOpen} onOpenChange={setSettingsOpen}>
           <PopoverTrigger asChild>
             <button
-              className={`press-scale flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors ${advDirty || !showThinking ? "text-primary hover:bg-primary/10" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}
+              className={`press-scale flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors max-sm:h-11 max-sm:w-11 ${advDirty || !showThinking ? "text-primary hover:bg-primary/10" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}
               aria-label="Research settings"
               title="Research settings — budgets, language, backend, visible thinking"
             >
@@ -388,7 +388,7 @@ export function AskBox({
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
-                className="press-scale flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:hidden"
+                className="press-scale flex h-11 w-11 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:hidden sm:h-9 sm:w-9"
                 aria-label={`Research depth: ${modeLabel}`}
               >
                 <Gauge className="h-[18px] w-[18px] text-primary/70" />

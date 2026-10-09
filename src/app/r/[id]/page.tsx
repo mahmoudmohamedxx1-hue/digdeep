@@ -294,6 +294,18 @@ export default function ThreadPage() {
     return () => clearInterval(iv);
   }, [anyActive]);
 
+  // the tab title follows the open question — you can find the run in a
+  // wall of tabs without reading URLs
+  useEffect(() => {
+    const q = turns?.[0]?.job?.query;
+    if (!q) return;
+    const prev = document.title;
+    document.title = `${q.slice(0, 60)}${q.length > 60 ? "…" : ""}${anyActive ? " · digging" : ""} — DigDeep`;
+    return () => {
+      document.title = prev;
+    };
+  }, [turns?.[0]?.job?.query, anyActive]);
+
   const turnElapsed = (t: Turn): number => {
     const j = t.job;
     if (!j?.startedAt) return 0;
@@ -524,7 +536,7 @@ export default function ThreadPage() {
 
         {/* right rail (xl) — claim evidence FIRST, then sources, then TOC */}
         {lastTurn && (
-          <aside className="sticky top-16 hidden h-fit w-[300px] shrink-0 space-y-6 xl:block">
+          <aside aria-label="Report tools — claim evidence, sources and outline" className="sticky top-16 hidden h-fit w-[300px] shrink-0 space-y-6 xl:block">
             {sel ? (
               <div id="evidence-panel">
                 <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">Claim evidence</p>
@@ -615,6 +627,12 @@ export default function ThreadPage() {
               stopping={stoppingAll}
               inputId="follow-input"
             />
+            <p className="kbd-hints mt-2 flex items-center justify-center gap-x-3 gap-y-1 px-4 text-[11px] text-muted-foreground">
+              <span className="inline-flex items-center gap-1"><kbd>/</kbd> focus</span>
+              <span className="inline-flex items-center gap-1"><kbd>⌘K</kbd> commands</span>
+              <span className="inline-flex items-center gap-1"><kbd>J</kbd>/<kbd>K</kbd> claim evidence</span>
+              <span className="inline-flex items-center gap-1"><kbd>Esc</kbd> close</span>
+            </p>
           </div>
         )}
       </div>

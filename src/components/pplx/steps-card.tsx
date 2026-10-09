@@ -154,11 +154,13 @@ function isDegrade(e: EventItem): boolean {
 }
 
 export function StepsCard({
-  events, active, stage, elapsedMs, showThinking, now,
+  events, active, stage, progress, elapsedMs, showThinking, now,
 }: {
   events: EventItem[];
   active: boolean;
   stage: string;
+  /** engine progress 0-100 — the honest step bar while it works */
+  progress?: number;
   elapsedMs: number;
   showThinking: boolean;
   now: number;
@@ -228,6 +230,23 @@ export function StepsCard({
         )}
         <ChevronDown className={`ml-auto h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-300 ease-apple ${open ? "rotate-180" : ""}`} />
       </button>
+
+      {/* the honest step bar — engine-reported progress, never a fake spinner */}
+      {active && (
+        <div
+          className="h-[3px] w-full overflow-hidden bg-muted/60"
+          role="progressbar"
+          aria-label="Research progress"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.max(0, Math.min(100, progress ?? 0))}
+        >
+          <div
+            className="h-full rounded-r-full bg-primary transition-[width] duration-700 ease-apple"
+            style={{ width: `${Math.max(2, Math.min(100, progress ?? 2))}%` }}
+          />
+        </div>
+      )}
 
       {open && (
         <div ref={bodyRef} className="slim-scroll max-h-[340px] overflow-y-auto px-4 py-3">

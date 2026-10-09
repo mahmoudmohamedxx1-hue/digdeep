@@ -22,6 +22,8 @@ import { StaggerIn } from "@/components/magic";
 import { JobSignals } from "@/components/app/job-signals";
 import type { HistoryItem, PoolEndpointUi, SearchSettingsUi } from "@/components/research/types";
 import { useSettings, useHistory, refreshHistory } from "@/lib/store";
+import { getThreadTurns, getTurn, deleteThread, deleteTurn, saveTurn } from "@/lib/idb-store";
+import { ToastAction } from "@/components/ui/toast";
 import { groupHistory } from "@/lib/history-group";
 
 /** The scroll container ref — pages (thread view) need it for jump-to-latest. */
@@ -69,11 +71,43 @@ function SidebarItem({
   );
 }
 
-/** Recents list — shared by the desktop rail and the mobile nav sheet. */
+/** Recents list — shared by the desktop rail and the mobile nav sheet.
+ *  Rows are Today/Earlier groups, active row highlighted, delete with undo. */
 function Recents({ onNavigate }: { onNavigate: (h: HistoryItem) => void }) {
   const { history } = useHistory();
   const grouped = useMemo(() => groupHistory(history), [history]);
   const pathname = usePathname();
+
+  /** Delete with undo — the turns are captured first, so Undo re-saves them
+   *  and the thread metadata rebuilds itself (saveTurn upserts it). */
+  const remove = async (h: HistoryItem) => {
+    // capture BEFORE deleting: whole threads via getThreadTurns, single turns
+    // via getTurn — so Undo can put the exact records back
+    const captured = h.threadId
+      ? await getThreadTurns(h.threadId)
+      : [(await getTurn(h.id))].filter(Boolean);
+    if (h.threadId) await deleteThread(h.threadId);
+    else await deleteTurn(h.id);
+    await refreshHistory();
+    toast({
+      title: "Deleted from this browser",
+      description: h.threadId ? "The server copy (if any) is not affected." : undefined,
+      action: captured.length
+        ? (
+            <ToastAction
+              altText="Undo the delete"
+              onClick={async () => {
+                for (const t of captured) if (t.job) await saveTurn(t);
+                await refreshHistory();
+              }}
+            >
+              Undo
+            </ToastAction>
+          )
+        : undefined,
+    });
+  };
+
   if (grouped.length === 0) {
     return (
       <p className="px-4 py-3 text-[12px] leading-relaxed text-muted-foreground">
@@ -90,16 +124,26 @@ function Recents({ onNavigate }: { onNavigate: (h: HistoryItem) => void }) {
             const active = pathname.startsWith("/r/") && h.threadId != null && pathname === `/r/${h.threadId}`;
             return (
               <StaggerIn key={h.id} index={0} y={4} className="px-0">
-                <button
-                  onClick={() => onNavigate(h)}
-                  title={h.query}
-                  className={`flex h-8 w-full items-center gap-2.5 rounded-[10px] px-4 text-left text-[13px] transition-colors ${
-                    active ? "bg-accent font-medium text-foreground" : "text-foreground/75 hover:bg-accent/70 hover:text-foreground"
-                  }`}
-                >
-                  <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT[h.status] ?? "bg-amber-500 pulse-dot"}`} aria-hidden />
-                  <span className="min-w-0 flex-1 truncate">{h.query}</span>
-                </button>
+                <div className="group/row relative">
+                  <button
+                    onClick={() => onNavigate(h)}
+                    title={h.query}
+                    className={`flex h-8 w-full items-center gap-2.5 rounded-[10px] pr-9 text-left text-[13px] transition-colors ${
+                      active ? "bg-accent font-medium text-foreground" : "text-foreground/75 hover:bg-accent/70 hover:text-foreground"
+                    }`}
+                  >
+                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATUS_DOT[h.status] ?? "bg-amber-500 pulse-dot"}`} aria-hidden />
+                    <span className="min-w-0 flex-1 truncate">{h.query}</span>
+                  </button>
+                  <button
+                    onClick={() => void remove(h)}
+                    aria-label={`Delete "${h.query.slice(0, 40)}" from this browser (undoable)`}
+                    title="Delete from this browser — undo available"
+                    className="absolute right-1 top-1/2 -translate-y-1/2 flex h-8 w-8 items-center justify-center rounded-[10px] text-muted-foreground/0 transition-colors hover:bg-destructive/10 hover:text-destructive group-hover/row:text-muted-foreground/70 focus-visible:text-destructive"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               </StaggerIn>
             );
           })}
@@ -454,6 +498,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
       } else if (e.key === "/" && !typing) {
         e.preventDefault();
         (document.getElementById("follow-input") ?? document.getElementById("ask-input"))?.focus();
+      } else if (e.key.toLowerCase() === "n" && !typing && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        router.push("/");
+        setTimeout(() => document.getElementById("ask-input")?.focus(), 150);
       }
     };
     window.addEventListener("keydown", h);

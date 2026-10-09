@@ -162,7 +162,7 @@ export default function LibraryPage() {
                     </button>
                     <button
                       onClick={() => void remove(h)}
-                      className="shrink-0 rounded-lg p-1.5 text-muted-foreground/50 opacity-0 transition-all hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+                      className="shrink-0 rounded-lg p-1.5 text-muted-foreground/50 opacity-0 transition-all hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100 max-sm:h-11 max-sm:w-11 max-sm:opacity-100 max-sm:grid max-sm:place-items-center"
                       aria-label={h.threadId ? "Delete this thread from this browser" : "Delete from this browser"}
                       title={h.threadId ? "Delete this thread from this browser" : "Delete from this browser"}
                     >
