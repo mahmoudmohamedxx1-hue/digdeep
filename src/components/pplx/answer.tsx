@@ -3,12 +3,13 @@
 import { useMemo, useState } from "react";
 import {
   BadgeCheck, Check, ChevronDown, Copy, Cpu, FileDown, FileText, RefreshCw,
-  RotateCw, Share2, SquarePen, FastForward, TriangleAlert, WifiOff, Gauge, Brain,
+  RotateCw, Share2, SquarePen, FastForward, TriangleAlert, WifiOff, Gauge, Brain, Telescope,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/research/markdown";
 import { useTyper } from "@/hooks/use-typer";
 import { toast } from "@/hooks/use-toast";
+import { copyText } from "@/lib/utils";
 import type { SourceItem, SectionItem, JobItem } from "@/components/research/types";
 import { fmtElapsed, ACTIVE_STATUSES } from "@/components/research/types";
 import { VerdictStrip } from "@/components/research/verdict-strip";
@@ -236,11 +237,10 @@ export function AnswerView({
   );
 
   const copyReport = async () => {
-    try {
-      await navigator.clipboard.writeText(job.reportMd ?? liveAnswerText);
+    if (await copyText(job.reportMd ?? liveAnswerText)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1600);
-    } catch { /* ignore */ }
+    }
   };
 
   // ---------- FAILED ----------
@@ -294,6 +294,21 @@ export function AnswerView({
             </span>
           )}
         </div>
+
+        {/* chat → research escalation — the one thing a chat reply can't do is
+            be a cited report; this hands the same question to the full pipeline */}
+        {!job.sharedSnapshot && onFollowUp && (
+          <div className="mt-4">
+            <button
+              onClick={() => onFollowUp(`Do full deep research on this and give me a cited report: ${job.query.slice(0, 300)}`)}
+              className="press-scale group inline-flex h-9 max-w-full items-center gap-2 rounded-full border border-primary/25 bg-primary/[0.06] px-3.5 text-[12px] font-medium text-primary transition-all duration-200 hover:border-primary/45 hover:bg-primary/10"
+              title="Hand this question to the full research pipeline — multi-source, visible steps, cited report"
+            >
+              <Telescope className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">Turn this into a full research report</span>
+            </button>
+          </div>
+        )}
         <ProvenanceDisclosure job={job} />
       </div>
     );

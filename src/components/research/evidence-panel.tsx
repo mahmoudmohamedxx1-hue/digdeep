@@ -8,6 +8,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
 import { CLOSENESS_LABEL, lexicalSupport, type ClaimCheck, type ClaimVerdict } from "@/lib/claim-support";
+import { copyText } from "@/lib/utils";
 import type { ClaimSelection } from "@/components/research/citation-chip";
 
 const VERDICT_META: Record<ClaimVerdict, { label: string; icon: typeof BadgeCheck; chip: string; iconCls: string }> = {
@@ -84,10 +85,11 @@ export function EvidencePanel({ selection, index, total, onPrev, onNext, onGoDee
       ),
     ].join("\n");
     const out = `${head}\n${appendix}`;
-    navigator.clipboard
-      .writeText(out)
-      .then(() => toast({ title: "Copied — report with claim appendix" }))
-      .catch(() => toast({ title: "Copy failed", description: "Your browser blocked clipboard access — select the text manually.", variant: "destructive" }));
+    void copyText(out).then((ok) =>
+      ok
+        ? toast({ title: "Copied — report with claim appendix" })
+        : toast({ title: "Copy failed", description: "Your browser blocked clipboard access — select the text manually.", variant: "destructive" })
+    );
   };
 
   return (
@@ -230,10 +232,11 @@ export function EvidencePanel({ selection, index, total, onPrev, onNext, onGoDee
             label="Copy citation"
             title="Copy the passage + source as a citation"
             onClick={() => {
-              navigator.clipboard
-                .writeText(citeText)
-                .then(() => toast({ title: "Citation copied" }))
-                .catch(() => toast({ title: "Copy failed", description: "Your browser blocked clipboard access.", variant: "destructive" }));
+              void copyText(citeText).then((ok) =>
+                ok
+                  ? toast({ title: "Citation copied" })
+                  : toast({ title: "Copy failed", description: "Your browser blocked clipboard access.", variant: "destructive" })
+              );
             }}
           />
           <ActBtn

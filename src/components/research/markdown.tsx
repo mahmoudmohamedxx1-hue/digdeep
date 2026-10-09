@@ -1,10 +1,12 @@
 "use client";
 
-import { memo, createContext, useContext, useMemo } from "react";
+import { memo, createContext, useContext, useMemo, useState } from "react";
+import { Check, Copy } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CitationChip, type CitationContext } from "@/components/research/citation-chip";
 import { headingId, type ReportRef } from "@/lib/report-parse";
+import { copyText } from "@/lib/utils";
 import type { SourceItem } from "@/components/research/types";
 
 /**
@@ -52,6 +54,35 @@ function MdLink({ href, children }: { href?: string; children?: React.ReactNode 
   );
 }
 
+/** Code block with a quiet header — language tag + copy button. The button is
+ *  hover-revealed on pointer devices and always visible on touch. */
+function CodeBlock({ lang, text, children }: { lang?: string; text: string; children?: React.ReactNode }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="group/code relative my-4 overflow-hidden rounded-[14px] border border-border/70 bg-muted/40">
+      <div className="flex items-center justify-between gap-2 border-b border-border/50 bg-muted/60 py-1 pl-3.5 pr-1.5">
+        <span className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/80" aria-hidden>
+          {lang ?? "code"}
+        </span>
+        <button
+          onClick={async () => {
+            if (await copyText(text)) {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1500);
+            }
+          }}
+          className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground/70 opacity-0 transition-all hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/code:opacity-100 max-sm:opacity-100"
+          aria-label="Copy code"
+          title="Copy code"
+        >
+          {copied ? <Check className="h-3 w-3 text-primary" /> : <Copy className="h-3 w-3" />}
+        </button>
+      </div>
+      <pre className="overflow-x-auto p-4 font-mono text-[12.5px] leading-relaxed">{children}</pre>
+    </div>
+  );
+}
+
 /** The one set of markdown components — created a single time. — created a single time. Selection or
  *  context changes flow through CiteCtx, never through new identities. */
 const MD_COMPONENTS = {
@@ -87,9 +118,20 @@ const MD_COMPONENTS = {
     if (isBlock) return <code className={`${className ?? ""} font-mono text-[12.5px]`}>{children}</code>;
     return <code className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[0.84em]">{children}</code>;
   },
-  pre: ({ children }: { children?: React.ReactNode }) => (
-    <pre className="my-4 overflow-x-auto rounded-[14px] border border-border/70 bg-muted/40 p-4 font-mono text-[12.5px] leading-relaxed">{children}</pre>
-  ),
+  pre: ({ children }: { children?: React.ReactNode }) => {
+    // pull the language tag + raw text out of the <code> child for the header
+    const codeEl = Array.isArray(children) ? children[0] : children;
+    const codeCls =
+      codeEl && typeof codeEl === "object" && "props" in (codeEl as object)
+        ? String((codeEl as { props?: { className?: unknown } }).props?.className ?? "")
+        : "";
+    const lang = codeCls.match(/language-([\w+-]+)/)?.[1];
+    return (
+      <CodeBlock lang={lang} text={childText(children)}>
+        {children}
+      </CodeBlock>
+    );
+  },
   table: ({ children }: { children?: React.ReactNode }) => (
     <div className="my-5 overflow-x-auto rounded-[14px] border border-border/70">
       <table className="w-full border-collapse text-[13.5px]">{children}</table>

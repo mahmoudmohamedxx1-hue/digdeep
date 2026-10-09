@@ -338,23 +338,70 @@ export default function ThreadPage() {
   }, [lastTurn?.job]);
 
   // ---------- scrolling: jump FAB + bottom-follow while streaming ----------
-  const onMainScroll = useCallback(() => {
+  // Follow state is INTENT, not distance: a completed-view swap can grow the
+  // page 200px in one mutation batch, which distance checks misread as "the
+  // user scrolled away". So the scroll listener tracks the reader's intent
+  // (scroll up = unfollow, reach the bottom = refollow) and the observer obeys it.
+  const pinnedRef = useRef(true);
+  useEffect(() => {
     const el = mainRef?.current;
-    if (!el) return;
-    setShowJump(el.scrollHeight - el.scrollTop - el.clientHeight >= 140);
-  }, [mainRef]);
+    if (!el || turns == null) return;
+    pinnedRef.current = true;
+    const onScroll = () => {
+      const away = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (away >= 160) pinnedRef.current = false;
+      if (away <= 40) pinnedRef.current = true;
+      setShowJump(away >= 140);
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [turns == null, mainRef]);
 
   useEffect(() => {
     const el = mainRef?.current;
     if (!el || !turns) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 180;
-    if (atBottom) {
+    if (pinnedRef.current) {
       el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-      setShowJump(false);
-    } else {
-      setShowJump(true);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turns?.length, lastTurn?.job?.status, lastTurn?.sections?.length]);
+
+  // Content growth doesn't fire scroll events — the typing animation can pour
+  // text past the fold with no follow and no jump button. Watch the DOM: while
+  // the reader is pinned, stay glued to the newest line (instant, like chat
+  // apps); the moment they scroll away, stop following and surface the jump
+  // button instead.
+  useEffect(() => {
+    const el = mainRef?.current;
+    if (!el || turns == null) return;
+    const mo = new MutationObserver(() => {
+      if (pinnedRef.current) {
+        el.scrollTop = el.scrollHeight; // instant — a smooth queue would lag behind every frame
+        setShowJump(false);
+      } else {
+        setShowJump(el.scrollHeight - el.scrollTop - el.clientHeight >= 140);
+      }
+    });
+    mo.observe(el, { childList: true, subtree: true, characterData: true });
+    return () => mo.disconnect();
+  }, [turns == null, mainRef]);
+
+  // ---------- follow-up draft: survives navigation away and back ----------
+  const draftKey = threadId ? `digdeep:draft:${threadId}` : null;
+  const followQueryRef = useRef(followQuery);
+  followQueryRef.current = followQuery;
+  useEffect(() => {
+    if (!draftKey) return;
+    const saved = sessionStorage.getItem(draftKey);
+    if (saved && !followQueryRef.current) setFollowQuery(saved);
+    // restore runs once per resolved thread — never clobbers what the user typed
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey]);
+  useEffect(() => {
+    if (!draftKey) return;
+    if (followQuery) sessionStorage.setItem(draftKey, followQuery);
+    else sessionStorage.removeItem(draftKey);
+  }, [draftKey, followQuery]);
 
   // ---------- actions ----------
   const submitFollowUp = async () => {

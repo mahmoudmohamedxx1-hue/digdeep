@@ -1,5 +1,44 @@
 # Changelog
 
+## v2.0.4 — solid emblem (no more semi-transparency) + chat flow that follows you (2026-10-10)
+
+- **The animated emblem is finally SOLID.** The shipped animation turned out
+  to be genuinely semi-transparent: it was encoded with premultiplied colors
+  that browsers composite as straight alpha — double-multiplied to ~25%
+  brightness, with not a single fully-opaque pixel in the file (max alpha
+  127). Rebuilt from the clean source frames: straight colors + an alpha
+  saturation curve + 2px line dilation, so the contour lines that the artist
+  drew as solid strokes read solid at the 28px sidebar size too (measured:
+  broken max luminance 43 on dark, now 150; the original GIF itself only
+  reaches 79 at that size). 64 frames, 8s loop, 372KB — smaller than before.
+- **Light mode gets the ink treatment.** The emblem's silver lines are
+  white-on-white on light surfaces (measured contrast: 1/255). Light mode
+  now tone-shifts the same geometry and animation to graphite-and-purple
+  (`brightness(0.6) saturate(1.25)`) — visible on white, unchanged in dark.
+- **The page now follows the typing.** Content growth doesn't fire scroll
+  events, so the streaming answer could pour text past the fold with no
+  auto-follow and no jump button — and the completed-view swap (+212px in
+  one mutation batch) jumped clean past the old distance check, leaving the
+  newest reply hidden behind the composer. Follow state is now the reader's
+  *intent*: scrolling up unfollows (jump button appears), reaching the
+  bottom re-pins. Verified live on real engine runs — the view stays glued
+  to the newest line through submit → think → stream → type → complete.
+- **Code blocks grew a header.** Language tag + a copy button (hover-reveal
+  on desktop, always visible on touch) on every fenced code block.
+- **"Turn this into a full research report"** — a quiet teal pill after
+  every completed chat reply that hands the same question to the full
+  research pipeline (multi-source, visible steps, cited report), in the
+  same thread.
+- **Copy that always reports honestly.** All copy affordances (question,
+  reply/report, code, citation, appendix) share one helper with an
+  execCommand fallback — and a failed copy never shows the confirmation
+  check.
+- **Follow-up drafts survive navigation.** Typed text in the thread
+  composer is kept per-thread in sessionStorage and restored when you come
+  back; submitting clears it.
+- Favicon/notification badge rebuilt from the bolder mark (legible at
+  16px tabs, max brightness 226).
+
 ## v2.0.3 — more Recents, denser sidebar, chattier threads (2026-10-10)
 
 - **Half the chrome above Recents, twice the list.** Everything above the

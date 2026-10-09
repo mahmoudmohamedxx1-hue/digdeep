@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Check, Copy } from "lucide-react";
+import { copyText } from "@/lib/utils";
 import { StepsCard, ChatThinking } from "@/components/pplx/steps-card";
 import { SourcesRow } from "@/components/pplx/sources-row";
 import { AnswerView } from "@/components/pplx/answer";
@@ -16,11 +17,10 @@ function CopyQuestion({ text }: { text: string }) {
   return (
     <button
       onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(text);
+        if (await copyText(text)) {
           setCopied(true);
           setTimeout(() => setCopied(false), 1500);
-        } catch { /* clipboard unavailable */ }
+        }
       }}
       className="flex h-5 w-5 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
       aria-label="Copy question"

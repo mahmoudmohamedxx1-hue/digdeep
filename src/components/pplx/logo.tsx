@@ -32,7 +32,10 @@ export function LogoMark({ className = "h-7 w-7" }: { className?: string }) {
       aria-hidden="true"
       draggable={false}
       decoding="async"
-      className={`${className} shrink-0 select-none object-contain drop-shadow-[0_1px_2px_rgba(0,0,0,0.45)] dark:drop-shadow-none`}
+      // Light surfaces get the "ink" treatment — the emblem's silver lines are
+      // white-on-white without it (measured contrast 1/255). Tone-shift only:
+      // same geometry, same animation, graphite-and-purple instead of silver.
+      className={`${className} shrink-0 select-none object-contain [filter:brightness(0.6)_saturate(1.25)_drop-shadow(0_1px_2px_rgba(0,0,0,0.22))] dark:[filter:none]`}
       onError={(e) => {
         // graceful stand-in if the animation fails to load (ancient browser / corrupt file)
         const img = e.currentTarget;
