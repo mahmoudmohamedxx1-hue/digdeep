@@ -83,3 +83,4 @@ db/pg.pid
 db/.pgpw
 !scripts/pg-dev.ts
 !scripts/pg-smoke.ts
+!scripts/db-migrate-deploy.sh

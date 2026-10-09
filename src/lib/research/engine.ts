@@ -750,13 +750,36 @@ export async function runJob(jobId: string) {
     if (!job) return;
 
     const unlimited = job.breadth < 0 || job.depth < 0 || job.maxSources < 0 || job.maxMinutes < 0;
+    // ── serverless wall-clock (Vercel) ─────────────────────────────────────
+    // On a long-lived server the engine trusts the preset's time budget. On a
+    // serverless function the whole pipeline must finish inside ONE invocation
+    // (the function is frozen when the request completes), so the budget is
+    // clamped to what the platform allows and the run degrades gracefully:
+    // research until the clock runs out, then write the best report the
+    // gathered evidence supports — and say so honestly in the event stream.
+    const SERVERLESS = !!process.env.VERCEL;
+    const SERVERLESS_CAP_MS = Math.max(60_000, Number(process.env.DIGDEEP_SERVERLESS_BUDGET_MS) || 240_000);
+    const rawBudgetMs = unlimited ? Infinity : Math.max(3, job.maxMinutes) * 60_000;
+    const budgetMs = SERVERLESS ? Math.min(rawBudgetMs, SERVERLESS_CAP_MS) : rawBudgetMs;
+    const budgetMinutes = budgetMs === Infinity ? -1 : Math.max(1, Math.floor(budgetMs / 60_000));
+
     const maxSeq = await db.activityEvent.aggregate({ where: { jobId }, _max: { seq: true } });
     const ctx = new Ctx(jobId, job.modelPref as ModelPref, (maxSeq._max.seq ?? 0) + 1, {
-      maxMinutes: job.maxMinutes,
+      maxMinutes: budgetMinutes,
       depth: job.depth,
       maxSources: job.maxSources,
       anyUnlimited: unlimited,
     });
+
+    if (SERVERLESS && rawBudgetMs > SERVERLESS_CAP_MS) {
+      await ctx.emit(
+        "info",
+        `Serverless run — time budget capped at ~${Math.round(SERVERLESS_CAP_MS / 60_000)} min`,
+        "This deployment runs on serverless functions, which cap background compute at roughly five minutes per run. I will research within that window and then write the deepest report the gathered evidence supports — everything else (multi-engine search, citation audit, self-grading) runs unchanged. For full-length runs (30 min and up), self-host digdeep with `bun run dev`; the engine is identical, only the clock differs.",
+        undefined,
+        { serverless: true, budgetMs: SERVERLESS_CAP_MS }
+      );
+    }
 
     // follow-up context: latest completed turn from the same thread
     let threadContext = "";

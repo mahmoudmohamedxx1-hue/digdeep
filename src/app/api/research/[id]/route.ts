@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import { after } from "next/server";
 import { db } from "@/lib/db";
 import { runJob, markStaleJobs } from "@/lib/research/engine";
 
 export const dynamic = "force-dynamic";
+// retry restarts a full engine run past the response — same serverless budget
+// contract as POST /api/research
+export const maxDuration = 300;
 
 const ACTIVE = ["queued", "planning", "researching", "critiquing", "synthesizing"];
 
@@ -10,7 +14,8 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   try {
     const { id } = await params;
     const sinceSeq = Number(req.nextUrl.searchParams.get("sinceSeq") ?? 0) || 0;
-    void markStaleJobs().catch(() => {});
+    // stale-job watchdog: `after()` so it also completes on serverless
+    after(markStaleJobs().catch(() => {}));
     const job = await db.researchJob.findUnique({ where: { id } });
     if (!job) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -76,7 +81,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         where: { id },
         data: { status: "queued", stage: "Queued", cancelRequested: false, error: null, progress: 0, reportMd: null, stats: null, plan: null, startedAt: null, completedAt: null },
       });
-      void runJob(id).catch(() => {});
+      // restart the run past the response — same contract as the initial POST
+      after(runJob(id).catch(() => {}));
       return NextResponse.json({ ok: true });
     }
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });

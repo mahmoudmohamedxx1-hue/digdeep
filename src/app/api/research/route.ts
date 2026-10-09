@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
+import { after } from "next/server";
 import { db } from "@/lib/db";
 import { runJob } from "@/lib/research/engine";
 
 export const dynamic = "force-dynamic";
+// Vercel: the engine must finish inside one invocation (the function is frozen
+// when the response completes) — 300s is the Hobby-plan ceiling and the engine
+// clamps its own budget to fit (see runJob → SERVERLESS_CAP_MS).
+export const maxDuration = 300;
 
 const PRESETS: Record<string, { breadth: number; depth: number; maxSources: number; maxMinutes: number }> = {
   quick: { breadth: 2, depth: 1, maxSources: 8, maxMinutes: 10 },
@@ -50,8 +55,9 @@ export async function POST(req: NextRequest) {
         stage: "Queued",
       },
     });
-    // fire-and-forget background run (survives page reloads; state persisted in PostgreSQL)
-    void runJob(job.id).catch((e) => console.error("[engine]", job.id, e));
+    // Background run past the response: `after()` keeps the function alive on
+    // Vercel (up to maxDuration); locally it behaves like fire-and-forget.
+    after(runJob(job.id).catch((e) => console.error("[engine]", job.id, e)));
     return NextResponse.json({ id: job.id, threadId: job.threadId });
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : "Failed to start research" }, { status: 500 });

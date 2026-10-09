@@ -188,14 +188,11 @@ bun run build && bun start
 digdeep runs serverlessly on Vercel with a Vercel Postgres database:
 
 1. **Create the database** — in your Vercel project, open **Storage → Create Database → Postgres** and link it to the project.
-2. **Push the schema once** from your machine (or the Vercel CLI):
-   ```bash
-   DATABASE_URL="<your pooled connection string>" bun run db:push
-   ```
-   The pooled URL (the one ending in `?pgbouncer=true&connection_limit=1`) is the right one for serverless.
-3. **Nothing else to configure** — when you deploy, Vercel injects `POSTGRES_URL` / `POSTGRES_PRISMA_URL` automatically and digdeep picks them up (`DATABASE_URL` also works if you prefer to set it explicitly). `prisma generate` runs automatically on every deploy via the `postinstall` script.
+2. **Deploy — that's it.** No manual schema step: every build runs `prisma migrate deploy` automatically (via `postinstall` and the build script), applying committed migrations to your database. Vercel injects `POSTGRES_URL` / `POSTGRES_PRISMA_URL` automatically and digdeep picks them up (`DATABASE_URL` also works if you prefer to set it explicitly). If no database is linked, the build fails loudly with instructions instead of deploying a broken app.
 
 The database stores research jobs, activity events, sources, sections, and settings — so deep links (`/r/<id>`) keep working across restarts and deployments.
+
+**Serverless time budget (honest limitation).** Vercel caps background compute at ~5 minutes per function invocation, so on Vercel every run (any preset) works inside a ~4-minute research window: the engine searches, audits citations, and self-grades as usual, then writes the deepest report that window supports — and says so in the run's event stream. Quick runs fit comfortably; deep/exhaustive runs are naturally shallower than a self-hosted run. For full 30-minute-plus budgets, self-host (`bun run dev` or `bun run build && bun start`) — the engine is identical, only the clock differs. The cap is tunable via `DIGDEEP_SERVERLESS_BUDGET_MS` (never exceed your plan's `maxDuration`).
 
 ## Configuration
 
