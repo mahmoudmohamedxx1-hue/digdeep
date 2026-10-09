@@ -1,0 +1,86 @@
+# Changelog
+
+## v2.0 — the claim-verification upgrade (2026-10-10)
+
+Four phases, four commits, each independently reviewable. The product promise
+is unchanged: **free, no API keys, every claim cited — and never simulated
+output presented as real.**
+
+### Phase 1 — fix what was broken (`d786c81`)
+- **Shareable reports.** `/r/<uuid>` links used to work only in the browser
+  that created them. Any finished report can now save a read-only snapshot
+  (keyless, in the same Postgres the engine already uses) and share
+  `/r/s-<id>` — opens for anyone, in any browser, sources and claim evidence
+  included. Viewers see a clear **"shared, read-only"** state; follow-ups
+  start a new thread instead of mutating the snapshot.
+- **Honest screen states everywhere**: loading skeletons (thread, library),
+  designed empty states, errors with a recovery action, offline detection,
+  and a distinct "report not found" vs "can't reach the server".
+- **Versioned storage**: IndexedDB `digdeep` v1 → v2 with an in-place
+  migration (verified against a seeded v1 database — nothing lost, thread
+  metadata intact); zustand settings persist v2 + migrate.
+
+### Phase 2 — claim-level verification, the main idea (`feb8a33`)
+- Every claim in a report links to the source passage it rests on, with a
+  verdict: **Verified** / **Partly supported** / **Unverified** — shown as
+  icon + label + underline pattern (solid / dashed / wavy) so colour is never
+  the only signal.
+- **Evidence panel** beside the report (right rail on wide screens, bottom
+  sheet on phones — closing returns focus to the claim). Shows the passage,
+  the source, closeness to the original (primary / peer-reviewed / secondary /
+  community — preprints are deliberately *not* "peer"), where to look, and
+  the honest support ratio.
+- Panel actions: copy citation, **re-check** (the same deterministic algorithm
+  the engine ran — labeled as such, never a fake model call), go deeper,
+  copy report with a claim-verification appendix.
+- **J / K** claim navigation (works keyboard-only from cold), Esc closes.
+- **Verdict bar** on every report ("3 of 5 sources fully support their
+  claims") with patterned segments, and the same summary in Library rows.
+- Engine: a claim-check ledger is built from the final drafts (after judge
+  repairs), renumbered to the report's final citations, capped at 160 —
+  **zero additional LLM calls**.
+
+### Phase 3 — look and motion (`9c5b93f`)
+- **New logo**: nested contour rings of the "D" — the outer outline fixed,
+  eight inner rings streaming inward forever (fade in at the edge, fade out
+  at the core, organic wobble, turning teal as they approach it). Idle the
+  dig is slow (~9s a cycle); while research runs it speeds up (~2.8s).
+  It is a live SVG — a few hundred bytes, replacing the 365KB animated WebP
+  (the thing that made the header slow to arrive). Aligned to the wordmark
+  at 0.00px deviation; fully static under `prefers-reduced-motion`.
+  The favicon mirrors the same geometry (canvas-drawn, no image loads).
+- **Palette**: verification teal is the accent; amber for partly supported,
+  coral for unverified. **Fonts**: Bricolage Grotesque (headings), Geist
+  (text), Geist Mono (citations) — self-hosted, keyless, offline builds.
+- **Floating window**: ≥1180px the app is a rounded panel (max ~1280×840) on
+  a darker backdrop; smaller screens fill the viewport edge to edge.
+- **Compact**: ~16% tighter rhythm, ~8% smaller reading text. The sidebar
+  hides its scrollbar. No size toggle — one considered size.
+
+### Phase 4 — A-grade polish (`8868744`)
+- **Accessibility**: all 16 palette pairs measured WCAG AA (both modes);
+  global visible focus; 44px touch targets on coarse pointers; aria-live for
+  progress and evidence; labelled landmarks; `prefers-reduced-transparency`
+  and `prefers-contrast` handled.
+- **Keyboard**: `N` new research, `/` focus the question box, `⌘/Ctrl+K`
+  palette, `Esc` closes panels, `J/K` walk claims. Hints under the composer
+  (pointer-fine devices).
+- **Sidebar**: recents grouped by time, active row highlighted, delete with
+  **undo** (turns are captured before deletion and re-saved on undo).
+- **While researching**: honest engine-reported progress bar
+  (`role=progressbar`), stop, retry, skeletons; the tab title follows the
+  open question.
+- **Writing**: sentence case, plain verbs; every error says what happened
+  and how to fix it.
+
+### Not changed (by design)
+The search layer, the keyless LLM chain, the engine pipeline shape, the
+per-browser IndexedDB ownership model, and the free/keyless promise.
+
+### Known limitations (honest ones)
+- Claim verdicts are deterministic lexical-support computations (plus the
+  existing model judge for weak anchors) — the re-check button reruns the
+  same rule; it is not a fresh model judgement and says so.
+- Favicon drift while working is 2 fps — subtle by design; fully static under
+  reduced motion.
+- Shared snapshots freeze the report at share time; re-runs don't update them.
