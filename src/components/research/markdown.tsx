@@ -40,34 +40,37 @@ function childText(children: React.ReactNode): string {
   return "";
 }
 
-/** The one set of markdown components — created a single time. Selection or
+/** The `a` override — uppercase so hooks inside are legal (rules-of-hooks). */
+function MdLink({ href, children }: { href?: string; children?: React.ReactNode }) {
+  const m = typeof href === "string" ? href.match(/^#cite-(\d+)$/) : null;
+  const ctx = useContext(CiteCtx);
+  if (m) return <CitationChip n={Number(m[1])} ctx={ctx} />;
+  return (
+    <a href={href} target="_blank" rel="noreferrer" className="break-words text-primary underline decoration-primary/30 underline-offset-2 hover:decoration-primary">
+      {children}
+    </a>
+  );
+}
+
+/** The one set of markdown components — created a single time. — created a single time. Selection or
  *  context changes flow through CiteCtx, never through new identities. */
 const MD_COMPONENTS = {
   h1: ({ children }: { children?: React.ReactNode }) => (
-    <h1 className="mb-5 mt-10 text-[26px] font-bold tracking-[-0.022em]">{children}</h1>
+    <h1 className="mb-4 mt-9 text-[24px] font-bold tracking-[-0.022em]">{children}</h1>
   ),
   h2: ({ children }: { children?: React.ReactNode }) => (
-    <h2 id={headingId(childText(children))} className="mt-10 mb-3 scroll-mt-24 text-[21px] font-semibold tracking-[-0.022em] text-foreground">
+    <h2 id={headingId(childText(children))} className="mt-9 mb-2.5 scroll-mt-24 text-[19.5px] font-semibold tracking-[-0.022em] text-foreground">
       {children}
     </h2>
   ),
   h3: ({ children }: { children?: React.ReactNode }) => (
-    <h3 className="mt-8 mb-2.5 text-[17.5px] font-semibold tracking-[-0.018em] text-foreground">{children}</h3>
+    <h3 className="mt-7 mb-2 text-[16px] font-semibold tracking-[-0.018em] text-foreground">{children}</h3>
   ),
   h4: ({ children }: { children?: React.ReactNode }) => (
     <h4 className="mt-6 mb-2 text-[15.5px] font-semibold text-foreground">{children}</h4>
   ),
-  p: ({ children }: { children?: React.ReactNode }) => <p className="my-[18px] leading-[1.75]">{children}</p>,
-  a: ({ href, children }: { href?: string; children?: React.ReactNode }) => {
-    const m = typeof href === "string" ? href.match(/^#cite-(\d+)$/) : null;
-    const ctx = useContext(CiteCtx);
-    if (m) return <CitationChip n={Number(m[1])} ctx={ctx} />;
-    return (
-      <a href={href} target="_blank" rel="noreferrer" className="break-words text-primary underline decoration-primary/30 underline-offset-2 hover:decoration-primary">
-        {children}
-      </a>
-    );
-  },
+  p: ({ children }: { children?: React.ReactNode }) => <p className="my-4 leading-[1.68]">{children}</p>,
+  a: MdLink,
   ul: ({ children }: { children?: React.ReactNode }) => (
     <ul className="my-[18px] space-y-2">{children}</ul>
   ),
@@ -179,10 +182,10 @@ export function Markdown({
         dir="auto"
         className={
           compact
-            ? "text-[15px] text-foreground"
+            ? "text-[14px] text-foreground"
             : serif
-              ? "report-prose text-[16px] text-foreground"
-              : "text-[16px] text-foreground"
+              ? "report-prose text-[15px] text-foreground"
+              : "text-[15px] text-foreground"
         }
       >
         {blocks.map((b, i) => (

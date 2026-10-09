@@ -482,14 +482,17 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
   return (
     <MotionConfig reducedMotion="user">
-      <div className="app-bg flex h-dvh overflow-hidden text-foreground">
+      {/* the floating window (>= 1180px): the app sits as a rounded panel, max
+          ~1280x840, on a darker backdrop; smaller screens fill the viewport */}
+      <div className="app-stage">
+      <div className="app-window app-bg flex h-dvh overflow-hidden text-foreground">
         {/* ---------- DESKTOP SIDEBAR ---------- */}
         <aside
           className={`hidden shrink-0 flex-col border-r border-sidebar-border bg-sidebar backdrop-blur-xl transition-[width] duration-300 ease-apple md:flex ${
             sidebarOpen ? "w-[240px]" : "w-[64px]"
           }`}
         >
-          <div className={`flex items-center gap-2.5 py-4 ${sidebarOpen ? "px-4" : "justify-center px-2"}`}>
+          <div className={`flex items-center gap-2.5 py-3.5 ${sidebarOpen ? "px-4" : "justify-center px-2"}`}>
             {sidebarOpen ? (
               <>
                 <LogoMark className="h-7 w-7 shrink-0" />
@@ -529,14 +532,14 @@ export function Shell({ children }: { children: React.ReactNode }) {
               {sidebarOpen && <span>New research</span>}
             </Link>
           </div>
-          <nav className={`space-y-1 pt-3 ${sidebarOpen ? "px-3" : "px-1"}`} aria-label="Main">
+          <nav className={`space-y-1 pt-2.5 ${sidebarOpen ? "px-3" : "px-1"}`} aria-label="Main">
             <SidebarItem collapsed={!sidebarOpen} icon={<House className="h-[18px] w-[18px]" />} label="Home" active={pathname === "/"} href="/" onClick={() => {}} />
             <SidebarItem collapsed={!sidebarOpen} icon={<Compass className="h-[18px] w-[18px]" />} label="Discover" active={pathname === "/discover"} href="/discover" onClick={() => {}} />
             <SidebarItem collapsed={!sidebarOpen} icon={<LibraryBig className="h-[18px] w-[18px]" />} label="Library" active={pathname === "/library"} href="/library" onClick={() => {}} />
           </nav>
 
           {sidebarOpen && (
-            <div className="slim-scroll mt-4 min-h-0 flex-1 overflow-y-auto pb-1">
+            <div className="no-scrollbar mt-3.5 min-h-0 flex-1 overflow-y-auto pb-1">
               <p className="px-4 pb-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">Recents</p>
               <Recents onNavigate={openFromHistory} />
               {history.length > 14 && (
@@ -695,6 +698,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
         {/* favicon states + browser notifications — mounted once, route-proof */}
         <JobSignals />
+      </div>
       </div>
     </MotionConfig>
   );

@@ -148,7 +148,7 @@ export default function LibraryPage() {
             <div className="space-y-2">
               {g.items.map((h, i) => (
                 <StaggerIn key={h.id} index={Math.min(i, 8)} y={6}>
-                  <div className="surface-card hover-lift group relative flex items-start gap-2 rounded-[16px] p-3.5">
+                  <div className="surface-card hover-lift group relative flex items-start gap-2 rounded-[16px] p-3">
                     <button onClick={() => open(h)} className="min-w-0 flex-1 text-left">
                       <p dir="auto" className="line-clamp-2 text-sm font-medium">{h.query}</p>
                       <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">

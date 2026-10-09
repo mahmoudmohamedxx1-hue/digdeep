@@ -84,7 +84,7 @@ function IdlePlaceholder({ phrases, compact }: { phrases: string[]; compact: boo
   return (
     <div
       aria-hidden
-      className={`pointer-events-none absolute left-5 w-[calc(100%-40px)] truncate text-[16px] leading-[1.6] text-muted-foreground/90 transition-opacity duration-250 ${compact ? "top-[15px]" : "top-[17px]"} ${visible ? "opacity-100" : "opacity-0"}`}
+      className={`pointer-events-none absolute left-5 w-[calc(100%-40px)] truncate text-[15px] leading-[1.55] text-muted-foreground/90 transition-opacity duration-250 ${compact ? "top-[13px]" : "top-[15px]"} ${visible ? "opacity-100" : "opacity-0"}`}
     >
       {phrases[idx]}
     </div>
@@ -188,7 +188,7 @@ export function AskBox({
         placeholder={streaming ? "" : placeholder}
         aria-label="Research question"
         rows={1}
-        className={`resize-none border-0 bg-transparent px-5 pb-1.5 pt-4 text-[16px] leading-[1.6] shadow-none focus-visible:ring-0 placeholder:text-muted-foreground ${compact ? "min-h-[52px]" : "min-h-[64px]"}`}
+        className={`resize-none border-0 bg-transparent px-5 pb-1.5 pt-3.5 text-[15px] leading-[1.55] shadow-none focus-visible:ring-0 placeholder:text-muted-foreground ${compact ? "min-h-[48px]" : "min-h-[58px]"}`}
       />
       {streaming && idle && <IdlePlaceholder phrases={placeholderStream as string[]} compact={compact} />}
 

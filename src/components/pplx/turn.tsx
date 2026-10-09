@@ -45,7 +45,7 @@ export function ThreadTurn({
     <article className="space-y-4">
       {/* user question — right-aligned gradient bubble; the one place color pops */}
       <div className="flex justify-end">
-        <p className="bubble-in chat-bubble-user max-w-[75%] whitespace-pre-wrap px-4 py-2.5 text-[15px] leading-[1.55]">
+        <p className="bubble-in chat-bubble-user max-w-[75%] whitespace-pre-wrap px-3.5 py-2 text-[14px] leading-[1.5]">
           {job.query}
         </p>
       </div>

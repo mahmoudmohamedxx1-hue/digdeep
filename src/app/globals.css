@@ -7,9 +7,10 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", sans-serif;
-  --font-serif: "Charter", "New York", "Iowan Old Style", Georgia, "Times New Roman", serif;
-  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-serif: "Geist", "Charter", "Iowan Old Style", Georgia, serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-display: "Bricolage Grotesque", "Geist", -apple-system, sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -45,47 +46,57 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
+/* Self-hosted fonts — keyless, offline-deterministic builds (scripts/fetch_fonts.py) */
+@font-face { font-family: 'Bricolage Grotesque'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/BricolageGrotesque-400.woff2') format('woff2'); }
+@font-face { font-family: 'Bricolage Grotesque'; font-style: normal; font-weight: 600; font-display: swap; src: url('/fonts/BricolageGrotesque-600.woff2') format('woff2'); }
+@font-face { font-family: 'Bricolage Grotesque'; font-style: normal; font-weight: 700; font-display: swap; src: url('/fonts/BricolageGrotesque-700.woff2') format('woff2'); }
+@font-face { font-family: 'Geist'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/Geist-400.woff2') format('woff2'); }
+@font-face { font-family: 'Geist'; font-style: normal; font-weight: 500; font-display: swap; src: url('/fonts/Geist-500.woff2') format('woff2'); }
+@font-face { font-family: 'Geist'; font-style: normal; font-weight: 600; font-display: swap; src: url('/fonts/Geist-600.woff2') format('woff2'); }
+@font-face { font-family: 'Geist Mono'; font-style: normal; font-weight: 400; font-display: swap; src: url('/fonts/GeistMono-400.woff2') format('woff2'); }
+@font-face { font-family: 'Geist Mono'; font-style: normal; font-weight: 500; font-display: swap; src: url('/fonts/GeistMono-500.woff2') format('woff2'); }
+
 :root {
   /* Geometry: buttons 12, cards 20, inputs 16, bubbles 20→8 (flatted reply corner) */
   --radius: 0.875rem;
-  /* Identity — warm paper canvas, near-black ink, iris accent (NOT default web blue) */
+  /* Identity — warm paper canvas, near-black ink, verification-teal accent */
   --background: #f7f7f5;
   --foreground: #1a1b1e;
   --card: #ffffff;
   --card-foreground: #1a1b1e;
   --popover: #ffffff;
   --popover-foreground: #1a1b1e;
-  --primary: #7c3aed;
+  --primary: #0f766e; /* verification teal — AA 4.74:1 on the paper canvas */
   --primary-foreground: #ffffff;
   --secondary: #efeff2;
   --secondary-foreground: #1a1b1e;
   --muted: #ececf0;
-  --muted-foreground: #6e6e76;
+  --muted-foreground: #5f5f68; /* AA 5.9:1 */
   --accent: rgba(26, 27, 30, 0.05);
-  /* neutral hover ink — color discipline: violet lives only in the brand moments */
+  /* neutral hover ink — colour discipline: teal lives in verification and brand */
   --accent-foreground: #1a1b1e;
-  --destructive: #e5484d;
+  --destructive: #c92a3a; /* AA 5.1:1 for text usage */
   --border: rgba(26, 27, 30, 0.09);
   --input: rgba(26, 27, 30, 0.09);
-  --ring: #7c3aed;
-  --chart-1: #7c3aed;
+  --ring: #0f766e;
+  --chart-1: #0f9d8f;
   --chart-2: #64a7ff;
-  --chart-3: #2fbf71;
-  --chart-4: #f5a524;
-  --chart-5: #a854f7;
+  --chart-3: #d97706;
+  --chart-4: #e5484d;
+  --chart-5: #64748b;
   --sidebar: rgba(255, 255, 255, 0.55);
   --sidebar-foreground: #1a1b1e;
-  --sidebar-primary: #7c3aed;
-  --sidebar-primary-foreground: #ffffff;
+  --sidebar-primary: #0f766e;
+  --sidebar-primary-foreground: #06281f;
   --sidebar-accent: rgba(26, 27, 30, 0.05);
   --sidebar-accent-foreground: #1a1b1e;
   --sidebar-border: rgba(26, 27, 30, 0.07);
-  --sidebar-ring: #7c3aed;
+  --sidebar-ring: #0f766e;
   /* Elevation — multi-stop, whisper-soft. Light mode relies on borders first. */
   --elev-1: 0 1px 1px rgba(26, 27, 30, 0.03), 0 1px 2px rgba(26, 27, 30, 0.04);
   --elev-2: 0 1px 2px rgba(26, 27, 30, 0.03), 0 8px 24px -8px rgba(26, 27, 30, 0.08), 0 16px 40px -16px rgba(26, 27, 30, 0.08);
   --elev-3: 0 2px 4px rgba(26, 27, 30, 0.04), 0 16px 36px -10px rgba(26, 27, 30, 0.12), 0 36px 72px -20px rgba(26, 27, 30, 0.14);
-  --elev-primary: 0 2px 8px rgba(124, 58, 237, 0.24), 0 8px 24px -6px rgba(124, 58, 237, 0.34);
+  --elev-primary: 0 2px 8px rgba(15, 157, 143, 0.22), 0 8px 24px -6px rgba(15, 157, 143, 0.32);
   /* Ink button — monochrome primary (the premium quiet) */
   --ink-btn: #1a1b1e;
   --ink-btn-hover: #33343a;
@@ -100,35 +111,35 @@
   --card-foreground: #f4f4f6;
   --popover: #23242c;
   --popover-foreground: #f4f4f6;
-  --primary: #8b5cf4;
-  --primary-foreground: #ffffff;
+  --primary: #2dd4bf; /* teal 400 — ~8.4:1 as text on charcoal */
+  --primary-foreground: #06281f; /* ~8.6:1 on the bright-teal fill */
   --secondary: #24252b;
   --secondary-foreground: #f4f4f6;
   --muted: #26272e;
   --muted-foreground: #b3b3bf;
   --accent: rgba(255, 255, 255, 0.07);
   --accent-foreground: #f4f4f6;
-  --destructive: #ff5d5d;
+  --destructive: #ff6369;
   --border: rgba(255, 255, 255, 0.11);
   --input: rgba(255, 255, 255, 0.15);
-  --ring: #8b5cf4;
-  --chart-1: #8b5cf4;
+  --ring: #2dd4bf;
+  --chart-1: #2dd4bf;
   --chart-2: #64a7ff;
-  --chart-3: #30d158;
-  --chart-4: #ffd60a;
-  --chart-5: #bf5af2;
+  --chart-3: #fbbf24;
+  --chart-4: #ff8489;
+  --chart-5: #94a3b8;
   --sidebar: rgba(15, 16, 20, 0.55);
   --sidebar-foreground: #f4f4f6;
-  --sidebar-primary: #8b5cf4;
+  --sidebar-primary: #2dd4bf;
   --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: rgba(255, 255, 255, 0.07);
   --sidebar-accent-foreground: #f4f4f6;
   --sidebar-border: rgba(255, 255, 255, 0.09);
-  --sidebar-ring: #8b5cf4;
+  --sidebar-ring: #2dd4bf;
   --elev-1: 0 1px 2px rgba(0, 0, 0, 0.4);
   --elev-2: 0 1px 2px rgba(0, 0, 0, 0.45), 0 8px 24px -8px rgba(0, 0, 0, 0.5), 0 16px 40px -16px rgba(0, 0, 0, 0.55);
   --elev-3: 0 2px 4px rgba(0, 0, 0, 0.5), 0 16px 36px -10px rgba(0, 0, 0, 0.6), 0 36px 72px -20px rgba(0, 0, 0, 0.65);
-  --elev-primary: 0 2px 10px rgba(139, 92, 244, 0.25), 0 10px 28px -6px rgba(139, 92, 244, 0.34);
+  --elev-primary: 0 2px 10px rgba(45, 212, 191, 0.25), 0 10px 28px -6px rgba(45, 212, 191, 0.34);
   --ink-btn: #f4f4f6;
   --ink-btn-hover: #ffffff;
   --ink-btn-text: #0f1014;
@@ -137,6 +148,9 @@
 @layer base {
   * {
     @apply border-border outline-ring/50;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display); /* Bricolage Grotesque — v2 headings */
   }
   ::selection {
     background: color-mix(in oklab, var(--primary) 22%, transparent);
@@ -314,22 +328,23 @@
   box-shadow: 0 0 0 3.5px color-mix(in oklab, var(--primary) 12%, transparent), var(--elev-2);
 }
 
-/* ---------- chat: user bubble — the one place color pops. Vertical violet gradient,
-     lit top edge, flatted reply corner. Everything else in the thread stays ink. ---------- */
+/* ---------- chat: user bubble — the one place colour pops. Vertical teal gradient,
+     falling slightly darker toward the baseline (the weight of the dig). ---------- */
 .chat-bubble-user {
-  background: linear-gradient(178deg, #8b5cf6 0%, #7c3aed 52%, #6d28d9 100%);
+  background: linear-gradient(178deg, #14b8a6 0%, #0d9488 52%, #0f766e 100%);
   color: #fff;
   border-radius: 22px;
   border-bottom-right-radius: 8px;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.2),
-    0 1px 2px color-mix(in oklab, #7c3aed 30%, transparent);
+    0 1px 2px color-mix(in oklab, #0f766e 30%, transparent);
 }
 .dark .chat-bubble-user {
-  background: linear-gradient(178deg, #a78bfa 0%, #8b5cf6 52%, #7c3aed 100%);
+  background: linear-gradient(178deg, #2dd4bf 0%, #14b8a6 52%, #0f9d8f 100%);
+  color: #06281f;
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.24),
-    0 2px 12px color-mix(in oklab, #8b5cf6 32%, transparent);
+    0 2px 12px color-mix(in oklab, #0f9d8f 32%, transparent);
 }
 @keyframes bubble-in {
   from { opacity: 0; transform: translateX(10px) scale(0.98); }
@@ -467,10 +482,10 @@
    serif at a ~68-character measure, generous leading, sans headings.
    ================================================================== */
 .report-prose {
-  font-family: var(--font-serif);
-  font-size: 17.5px;
-  line-height: 1.72;
-  max-width: 68ch;
+  font-family: var(--font-serif); /* Geist — the v2 reading voice */
+  font-size: 16px;   /* v2 compact: 17.5 → 16 (~8% smaller) */
+  line-height: 1.68; /* v2 compact: 1.72 → 1.68 (~16% tighter rhythm) */
+  max-width: 66ch;
   letter-spacing: 0.002em;
 }
 .report-prose p, .report-prose li {
@@ -767,11 +782,11 @@
   inherits: false;
 }
 :root {
-  --beam-a: #7c3aed;
+  --beam-a: #0f9d8f;
   --beam-b: #64a7ff;
 }
 .dark {
-  --beam-a: #a78bfa;
+  --beam-a: #2dd4bf;
   --beam-b: #64a7ff;
 }
 .border-beam {
@@ -838,4 +853,78 @@
      glyph noise uses tabular figures so width jitter stays minimal ---------- */
 .scramble {
   font-variant-numeric: tabular-nums;
+}
+
+
+/* ==================================================================
+   PHASE 3 (v2) — the floating window, compact rhythm, quiet chrome
+   ================================================================== */
+
+/* ---------- The floating app window (>= 1180px) ----------
+   Large screens see the app as a rounded window (max ~1280x840) on a
+   darker backdrop; smaller screens fill the viewport edge to edge. */
+.app-stage {
+  /* below 1180px: full-bleed — the window keeps its own h-dvh utility */
+  width: 100%;
+}
+@media (min-width: 1180px) {
+  .app-stage {
+    padding: 24px;
+    background:
+      radial-gradient(1100px 500px at 50% -8%, color-mix(in oklab, var(--verify) 7%, transparent), transparent 60%),
+      #ececf0; /* darker than the paper canvas — the window floats on it */
+  }
+  .dark .app-stage {
+    background:
+      radial-gradient(1100px 500px at 50% -8%, color-mix(in oklab, var(--verify) 6%, transparent), transparent 55%),
+      #07080b;
+  }
+  .app-window {
+    max-width: 1280px;
+    height: min(840px, calc(100dvh - 48px));
+    margin: 0 auto;
+    border-radius: 24px;
+    border: 1px solid color-mix(in oklab, var(--foreground) 10%, transparent);
+    overflow: hidden;
+    box-shadow: var(--elev-3);
+  }
+  .dark .app-window {
+    border-color: rgba(255, 255, 255, 0.09);
+  }
+}
+
+
+/* ---------- Citation voice — Geist Mono for [n], refs and tabular verdicts ---------- */
+.cite-chip { font-family: var(--font-mono); }
+.report-prose .cite-chip { font-family: var(--font-mono); }
+
+/* ---------- v2 compact rhythm helpers (16% tighter, 8% smaller text) ----------
+   Applied surgically in the components; these are the shared primitives. */
+.compact-tight { letter-spacing: -0.011em; }
+
+/* ---------- Reduced transparency ---------- */
+@media (prefers-reduced-transparency: reduce) {
+  .glass, .glass-nav, .glass-dock {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: var(--card);
+  }
+  .app-stage { background: #e8e8ec; }
+  .dark .app-stage { background: #06070a; }
+}
+
+/* ---------- High contrast ---------- */
+@media (prefers-contrast: more) {
+  :root { --border: rgba(26, 27, 30, 0.28); --input: rgba(26, 27, 30, 0.28); }
+  .dark { --border: rgba(255, 255, 255, 0.32); --input: rgba(255, 255, 255, 0.32); }
+  .app-window { border-width: 2px; }
+}
+
+/* ---------- Reduced motion: global quiet switch ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .press-scale, .press-scale:active { transform: none; transition: none; }
+  .spring-pop, .rise-in, .stagger-1, .stagger-2, .stagger-3, .stagger-4, .stagger-5, .stagger-6 {
+    animation: none;
+  }
+  .pplx-dot { animation: none; }
 }

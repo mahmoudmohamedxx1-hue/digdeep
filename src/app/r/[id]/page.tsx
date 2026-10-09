@@ -441,7 +441,7 @@ export default function ThreadPage() {
   // ---------- loading ----------
   if (turns == null) {
     return (
-      <div className="mx-auto w-full max-w-[768px] space-y-4 px-4 pb-24 pt-8" aria-label="Loading thread">
+      <div className="mx-auto w-full max-w-[768px] space-y-3.5 px-4 pb-20 pt-7" aria-label="Loading thread">
         <div className="flex justify-end">
           <div className="skeleton-line h-10 w-2/3 rounded-[22px]" />
         </div>
@@ -501,9 +501,9 @@ export default function ThreadPage() {
         </div>
       )}
 
-      <div className="mx-auto flex w-full max-w-[1140px] justify-center gap-8 px-4 pb-44 pt-6 sm:pt-8">
+      <div className="mx-auto flex w-full max-w-[1140px] justify-center gap-7 px-4 pb-40 pt-5 sm:pt-6">
         {/* turns */}
-        <div className="mx-auto w-full max-w-[768px] space-y-12">
+        <div className="mx-auto w-full max-w-[768px] space-y-10">
           {turns.map((t) => (
             <ThreadTurn
               key={t.jobId}

@@ -81,7 +81,7 @@ export default function HomePage() {
   };
 
   return (
-    <div className="relative flex min-h-full w-full flex-col items-center justify-center overflow-visible px-4 py-14 sm:py-20">
+    <div className="relative flex min-h-full w-full flex-col items-center justify-center overflow-visible px-4 py-12 sm:py-16">
       <div aria-hidden className="dot-grid inset-x-0 top-0 h-[440px]" />
       <AuroraHero />
       <div className="relative z-10 flex w-full max-w-[768px] flex-col items-center text-center">
@@ -89,16 +89,16 @@ export default function HomePage() {
           <Sparkles className="h-3 w-3 shrink-0 text-primary" />
           Free &amp; open-source deep research
         </span>
-        <h1 className="rise-in mt-5 text-balance text-[32px] font-semibold leading-[1.15] tracking-[-0.032em] text-foreground [animation-delay:120ms] sm:text-[34px]">
+        <h1 className="rise-in mt-4 text-balance text-[30px] font-semibold leading-[1.15] tracking-[-0.032em] text-foreground [animation-delay:120ms] sm:text-[31px]">
           {greeting()}
         </h1>
-        <p className="rise-in mt-2.5 font-serif text-[21px] leading-snug text-muted-foreground [animation-delay:220ms]">
+        <p className="rise-in mt-2 font-serif text-[19.5px] leading-snug text-muted-foreground [animation-delay:220ms]">
           What should we dig into?
         </p>
       </div>
 
       {/* the composer — the star; its focus glow is the one deliberate moment */}
-      <div className="group/composer rise-in relative z-10 mt-8 w-full max-w-[768px] [animation-delay:340ms]">
+      <div className="group/composer rise-in relative z-10 mt-7 w-full max-w-[768px] [animation-delay:340ms]">
         <div aria-hidden className="composer-glow opacity-70 transition-opacity duration-500 group-focus-within/composer:opacity-100" />
         <AskBox
           value={query}
@@ -130,7 +130,7 @@ export default function HomePage() {
       </div>
 
       {/* starter chips — spotlight pills that wake under the cursor */}
-      <div className="relative z-10 mt-8 flex w-full max-w-[768px] flex-wrap items-center justify-center gap-2">
+      <div className="relative z-10 mt-7 flex w-full max-w-[768px] flex-wrap items-center justify-center gap-2">
         {SUGGESTIONS.map((s, i) => (
           <StaggerIn key={s.label} index={i} enterDelay={0.5} className="inline-flex">
             <SpotlightCard size={190} className="rounded-full">

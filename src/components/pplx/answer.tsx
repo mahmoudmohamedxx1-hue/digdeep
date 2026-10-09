@@ -82,7 +82,7 @@ function ProvenanceDisclosure({ job }: { job: JobItem }) {
   const stats = job.stats;
   const modeLabel = job.mode === "chat" ? "chat" : job.mode === "quick" ? "quick answer" : job.preset;
   return (
-    <div className="mt-8">
+    <div className="mt-6">
       <button
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
@@ -303,16 +303,16 @@ export function AnswerView({
     return (
       <div className="fade-up">
         {/* verdict strip — the honest scoreboard, first thing under the question */}
-        <div className="mb-7">
+        <div className="mb-6">
           <VerdictStrip job={job} />
         </div>
 
         {/* executive summary — a short lead plus 3–5 key findings */}
         {showFindings && execShape && (
-          <div className="mb-8">
-            <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">Executive summary</p>
+          <div className="mb-7">
+            <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">Executive summary</p>
             {execShape.lead && (
-              <p dir="auto" className="report-prose !max-w-none text-[19px] font-medium leading-[1.6] text-foreground">
+              <p dir="auto" className="report-prose !max-w-none text-[17.5px] font-medium leading-[1.55] text-foreground">
                 {execShape.lead}
               </p>
             )}
@@ -321,13 +321,13 @@ export function AnswerView({
                 {execShape.findings.map((f, i) => (
                   <li key={i} className="flex items-start gap-2.5 leading-[1.65]">
                     <BadgeCheck className="mt-[3px] h-4 w-4 shrink-0 text-primary/80" aria-hidden />
-                    <span dir="auto" className="report-prose !max-w-none !text-[15.5px]">{f}</span>
+                    <span dir="auto" className="report-prose !max-w-none !text-[14.25px]">{f}</span>
                   </li>
                 ))}
               </ul>
             )}
             {execShape.tail && (
-              <p dir="auto" className="report-prose !max-w-none mt-4 !text-[15.5px] text-muted-foreground">
+              <p dir="auto" className="report-prose !max-w-none mt-3.5 !text-[14.25px] text-muted-foreground">
                 {execShape.tail}
               </p>
             )}
@@ -337,20 +337,20 @@ export function AnswerView({
         {/* report body — serif at a 68-character measure */}
         {body && <Markdown serif text={isQuick ? body.replace(/^##\s.*\n+/, "") : body} sources={sources} refs={refs} audit={audit} checks={claimChecks} onSelectClaim={onSelectClaim ? (sel, el) => onSelectClaim({ ...sel, reportMd: job.reportMd ?? null, allChecks: claimChecks, summaryLine: claimSummaryLine }, el) : undefined} selectedClaimId={selectedClaimId} />}
         {conclusion && (
-          <div className="mt-10">
-            <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">Conclusion</p>
+          <div className="mt-8">
+            <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">Conclusion</p>
             <Markdown serif text={conclusion} sources={sources} refs={refs} audit={audit} checks={claimChecks} onSelectClaim={onSelectClaim ? (sel, el) => onSelectClaim({ ...sel, reportMd: job.reportMd ?? null, allChecks: claimChecks, summaryLine: claimSummaryLine }, el) : undefined} selectedClaimId={selectedClaimId} />
           </div>
         )}
         {diff && (
-          <div className="mt-10">
-            <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">What changed since the last run</p>
+          <div className="mt-8">
+            <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">What changed since the last run</p>
             <Markdown serif text={diff} sources={sources} refs={refs} audit={audit} checks={claimChecks} onSelectClaim={onSelectClaim ? (sel, el) => onSelectClaim({ ...sel, reportMd: job.reportMd ?? null, allChecks: claimChecks, summaryLine: claimSummaryLine }, el) : undefined} selectedClaimId={selectedClaimId} />
           </div>
         )}
 
         {/* action bar — quiet icon row, the content is the star */}
-        <div className="mt-9 flex flex-wrap items-center gap-0.5 border-t border-border/60 pt-3.5">
+        <div className="mt-7 flex flex-wrap items-center gap-0.5 border-t border-border/60 pt-3">
           <Button size="sm" variant="ghost" className="press-scale h-9 w-9 rounded-full p-0 text-muted-foreground hover:text-foreground" onClick={copyReport} title="Copy report">
             {copied ? <Check className="h-4 w-4 text-primary" /> : <Copy className="h-4 w-4" />}
             <span className="sr-only">{copied ? "Copied" : "Copy"}</span>
@@ -385,14 +385,14 @@ export function AnswerView({
 
         {/* related questions — quiet pills, not a form */}
         {related.length > 0 && (
-          <div className="mt-10">
-            <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">Related</p>
+          <div className="mt-8">
+            <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">Related</p>
             <div className="flex flex-wrap gap-2">
               {related.map((q, i) => (
                 <button
                   key={i}
                   onClick={() => onFollowUp(q)}
-                  className="press-scale group inline-flex h-9 max-w-full items-center gap-2 rounded-full border border-border/90 bg-card px-3.5 text-[13px] font-medium text-foreground/80 shadow-elev-1 transition-all duration-200 hover:border-primary/35 hover:bg-accent/40 hover:text-foreground"
+                  className="press-scale group inline-flex h-9 max-w-full items-center gap-2 rounded-full border border-border/90 bg-card px-3.5 text-[12px] font-medium text-foreground/80 shadow-elev-1 transition-all duration-200 hover:border-primary/35 hover:bg-accent/40 hover:text-foreground"
                 >
                   <SquarePen className="h-3.5 w-3.5 shrink-0 text-primary/80" />
                   <span className="truncate">{q}</span>

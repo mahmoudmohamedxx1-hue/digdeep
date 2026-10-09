@@ -34,7 +34,7 @@ export function JobSignals() {
               ? `${query}\n${(turn.job?.error ?? "").slice(0, 120)}`
               : `${query}\nYour report is ready.`,
             tag: id,
-            icon: "/brand/mark-badge.png",
+            icon: "/icon.png",
           });
           n.onclick = () => {
             window.focus();
