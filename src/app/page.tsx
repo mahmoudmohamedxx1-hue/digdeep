@@ -6,7 +6,7 @@ import type { LucideIcon } from "lucide-react";
 import { BadgeCheck, Scale, ShieldCheck, Sparkles } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { AskBox } from "@/components/pplx/ask-box";
-import { AuroraHero, SpotlightCard, StaggerIn } from "@/components/magic";
+import { AuroraHero, NeonMazeD, SpotlightCard, StaggerIn } from "@/components/magic";
 import type { AttachedDoc } from "@/components/research/types";
 import { useSettings, refreshHistory } from "@/lib/store";
 import { startResearchRun } from "@/lib/research-client";
@@ -93,16 +93,21 @@ export default function HomePage() {
           <Sparkles className="h-3 w-3 shrink-0 text-primary" />
           Free &amp; open-source deep research
         </span>
-        <h1 className="rise-in mt-4 text-balance text-[30px] font-semibold leading-[1.15] tracking-[-0.032em] text-foreground [animation-delay:120ms] sm:text-[31px]">
+
+        {/* the D inside the neon maze — the hero's visual anchor. The maze
+            waves radiate from the logo; the composer below stays the star. */}
+        <NeonMazeD className="rise-in mt-4 [animation-delay:100ms]" />
+
+        <h1 className="rise-in mt-4 text-balance text-[30px] font-semibold leading-[1.15] tracking-[-0.032em] text-foreground [animation-delay:240ms] sm:text-[31px]">
           {greeting()}
         </h1>
-        <p className="rise-in mt-2 font-serif text-[19.5px] leading-snug text-muted-foreground [animation-delay:220ms]">
+        <p className="rise-in mt-2 font-serif text-[19.5px] leading-snug text-muted-foreground [animation-delay:340ms]">
           What should we dig into?
         </p>
       </div>
 
       {/* the composer — the star; its focus glow is the one deliberate moment */}
-      <div className="group/composer rise-in relative z-10 mt-7 w-full max-w-[768px] [animation-delay:340ms]">
+      <div className="group/composer rise-in relative z-10 mt-7 w-full max-w-[768px] [animation-delay:480ms]">
         <div aria-hidden className="composer-glow opacity-70 transition-opacity duration-500 group-focus-within/composer:opacity-100" />
         <AskBox
           value={query}
@@ -128,7 +133,7 @@ export default function HomePage() {
           inputId="ask-input"
           placeholderStream={EXAMPLE_STREAM}
         />
-        <p className="rise-in relative z-10 mt-3.5 text-center text-[12.5px] font-medium leading-relaxed text-muted-foreground [animation-delay:440ms]">
+        <p className="rise-in relative z-10 mt-3.5 text-center text-[12.5px] font-medium leading-relaxed text-muted-foreground [animation-delay:580ms]">
           Free &amp; keyless · every claim cited · every citation audited · honest quality scores
         </p>
         <p className="kbd-hints relative z-10 mt-2.5 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
