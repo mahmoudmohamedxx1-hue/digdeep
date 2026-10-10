@@ -81,7 +81,11 @@ export default function HomePage() {
   };
 
   return (
-    <div className="relative flex min-h-full w-full flex-col items-center justify-center overflow-visible px-4 py-12 sm:py-16">
+    // overflow-x-clip: the AuroraHero bleeds ±240px past the column; without
+    // the clip that bleed widens the document beyond the viewport, and on
+    // touch a left-swipe pans the whole page sideways. Clip kills the pan
+    // (v2.0.5); vertical stays visible so glows/hovers are untouched.
+    <div className="relative flex min-h-full w-full flex-col items-center justify-center overflow-x-clip px-4 py-12 sm:py-16">
       <div aria-hidden className="dot-grid inset-x-0 top-0 h-[440px]" />
       <AuroraHero />
       <div className="relative z-10 flex w-full max-w-[768px] flex-col items-center text-center">

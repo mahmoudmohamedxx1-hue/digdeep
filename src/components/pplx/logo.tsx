@@ -1,19 +1,32 @@
 "use client";
 
 /**
- * App mark for DigDeep — the user's topographic "D" emblem (from the
- * uploaded GIF), tight-cropped to the logo alone on full transparency so it
- * sits directly beside the wordmark on any theme. A soft drop shadow (light
- * mode only) keeps the silver outer lines legible on bright surfaces.
- *
- * prefers-reduced-motion swaps the animation for the static mark. The
- * favicon (src/lib/favicon.ts) composites the same emblem onto a dark badge
- * with status dots — working flashes green, done is a fixed blue dot.
+ * App mark for DigDeep — the user's emblem repainted in the exact teal of the
+ * "Deep" wordmark. The artwork is applied as an alpha MASK over a var(--primary)
+ * fill (scripts/teal_brand.py re-crisped its alpha), so:
+ *   - the mark and the wordmark's "Deep" are the same paint in every theme;
+ *   - it reads SOLID — the old mid-alpha smear that made it look
+ *     semi-transparent is gone;
+ *   - the 64-frame webp still drives the animation (the mask is the image).
+ * prefers-reduced-motion swaps the animation for the static mark.
  */
 
 import { useEffect, useState } from "react";
 
-/** Animated brand emblem — the logo only, nothing else. */
+function maskStyle(src: string) {
+  return {
+    maskImage: `url("${src}")`,
+    WebkitMaskImage: `url("${src}")`,
+    maskSize: "contain",
+    WebkitMaskSize: "contain",
+    maskRepeat: "no-repeat",
+    WebkitMaskRepeat: "no-repeat",
+    maskPosition: "center",
+    WebkitMaskPosition: "center",
+  } as const;
+}
+
+/** Animated brand emblem — the logo only, nothing else, in Deep teal. */
 export function LogoMark({ className = "h-7 w-7" }: { className?: string }) {
   const [reduced, setReduced] = useState(false);
   useEffect(() => {
@@ -25,23 +38,10 @@ export function LogoMark({ className = "h-7 w-7" }: { className?: string }) {
   }, []);
 
   return (
-    // eslint-disable-next-line @next/next/no-img-element -- static asset, no optimizer needed
-    <img
-      src={reduced ? "/brand/mark.png" : "/brand/logo-anim.webp"}
-      alt=""
+    <span
       aria-hidden="true"
-      draggable={false}
-      decoding="async"
-      // Light surfaces get the "ink" treatment — the emblem's silver lines are
-      // white-on-white without it (measured contrast 1/255). Tone-shift only:
-      // same geometry, same animation, graphite-and-purple instead of silver.
-      className={`${className} shrink-0 select-none object-contain [filter:brightness(0.6)_saturate(1.25)_drop-shadow(0_1px_2px_rgba(0,0,0,0.22))] dark:[filter:none]`}
-      onError={(e) => {
-        // graceful stand-in if the animation fails to load (ancient browser / corrupt file)
-        const img = e.currentTarget;
-        img.onerror = null;
-        img.src = "/brand/mark.png";
-      }}
+      className={`inline-block shrink-0 select-none bg-primary ${className}`}
+      style={maskStyle(reduced ? "/brand/mark-mask.png" : "/brand/logo-mask.webp")}
     />
   );
 }

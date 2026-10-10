@@ -1,5 +1,45 @@
 # Changelog
 
+## v2.0.5 — one brand color everywhere + a light mode that actually toggles (2026-10-10)
+
+- **The animated logo now wears the brand color.** It was silver/periwinkle
+  artwork with ~38% of its painted pixels at mid alpha — translucent on both
+  canvases. Rebuilt as an alpha MASK (`scripts/teal_brand.py`): the same
+  64-frame animation, its geometry re-crisped (smoothstep 72→144 kills the
+  mid-alpha smear), painted `var(--primary)` — so the mark is pixel-identical
+  to the "Deep" half of the wordmark in both themes (light `#0f766e`, dark
+  `#2dd4bf`) and reads SOLID. Verified: mask animates in Chromium (three
+  sampled frames differ), 20% solid-teal coverage at 24px vs the old
+  semi-transparent smear.
+- **The animated background speaks the same color.** The home hero aurora was
+  violet/blue/purple — a different family from the brand. All three blobs now
+  derive from `var(--primary)` (26/18/22% light, 34/26/30% dark) — the "Deep"
+  teal, whisper-subtle as before.
+- **Light mode is fixed — it never actually toggled for system-dark users.**
+  The Dark-mode switch was bound to next-themes' `theme` (the *preference*,
+  `"system"`), not the applied mode — so on a dark-OS machine the switch read
+  OFF while the app was visibly dark, and flipping it seemed to do nothing.
+  `resolvedTheme` (v0.4.6) lags the DOM in the system state, so the shell now
+  derives ground truth from the `<html>` class via MutationObserver
+  (`useResolvedTheme`) — the switch always mirrors what the user actually
+  sees, and the ⌘K palette item flips the real mode too. Verified end-to-end:
+  system-dark → switch ON → toggle OFF → paper canvas `#f7f7f5` → persists
+  across reload → toggle ON → charcoal again.
+- **No more sideways home page.** On touch, a left-swipe panned the whole
+  home page sideways: the AuroraHero bleeds ±240px past the column, and with
+  `overflow-visible` that bleed widened the document to ~855px on a 375px
+  screen. The page root is now `overflow-x-clip` — measured at 375px:
+  `scrollWidth === clientWidth === 375`, `scrollTo(30,0)` leaves `scrollX` at
+  0. Glows and vertical behavior untouched.
+- **Favicon, toast badge and idle tab icon join the family** — teal emblem
+  on the dark badge (`mark-favicon.png`, `mark-badge.png`, `icon.png`),
+  same geometry as the dynamic status favicon, so idle/working/done read as
+  one icon.
+- Ops note: `next-server` renames its process, so `pkill -f
+  ".next/standalone/server.js"` never matched — restarts silently failed with
+  EADDRINUSE while a stale build kept serving. Restart procedure now kills by
+  PID from `ss -ltnp` and verifies the served chunk hash.
+
 ## v2.0.4 — solid emblem (no more semi-transparency) + chat flow that follows you (2026-10-10)
 
 - **The animated emblem is finally SOLID.** The shipped animation turned out

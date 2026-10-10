@@ -165,7 +165,7 @@ const BYOK_PRESETS: { label: string; baseUrl: string; model: string }[] = [
 ];
 
 function SettingsDialog({
-  open, onOpenChange, endpoints, setEndpoints, searchSettings, setSearchSettings, onSave, savingPool, savingSearch, testEndpoint, testing, saveSearch, theme, setTheme, mounted,
+  open, onOpenChange, endpoints, setEndpoints, searchSettings, setSearchSettings, onSave, savingPool, savingSearch, testEndpoint, testing, saveSearch, resolvedTheme, setTheme, mounted,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -179,7 +179,7 @@ function SettingsDialog({
   testEndpoint: (ep: PoolEndpointUi) => void;
   testing: string | null;
   saveSearch: () => void;
-  theme: string | undefined;
+  resolvedTheme: string | undefined;
   setTheme: (t: string) => void;
   mounted: boolean;
 }) {
@@ -202,7 +202,7 @@ function SettingsDialog({
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2.5">
                 <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground/80">
-                  {mounted && theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                  {mounted && resolvedTheme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
                 </span>
                 <div>
                   <p className="text-xs font-medium">Dark mode</p>
@@ -210,7 +210,7 @@ function SettingsDialog({
                 </div>
               </div>
               <Switch
-                checked={mounted ? theme === "dark" : false}
+                checked={mounted ? resolvedTheme === "dark" : false}
                 onCheckedChange={(v) => setTheme(v ? "dark" : "light")}
                 aria-label="Dark mode"
               />
@@ -432,13 +432,34 @@ function SettingsDialog({
 }
 
 /**
+ * Ground-truth resolved theme. next-themes' `resolvedTheme` (v0.4.6) can lag
+ * the DOM in the system-theme state, which rendered the Dark-mode switch as OFF
+ * while the app was visibly dark — the "light mode not working" report. Reading
+ * the class next-themes actually applied to <html> can't lie; the observer keeps
+ * it live for system changes and programmatic flips alike.
+ */
+function useResolvedTheme() {
+  const [resolved, setResolved] = useState<"light" | "dark">("dark");
+  useEffect(() => {
+    const el = document.documentElement;
+    const apply = () => setResolved(el.classList.contains("dark") ? "dark" : "light");
+    apply();
+    const mo = new MutationObserver(apply);
+    mo.observe(el, { attributes: true, attributeFilter: ["class"] });
+    return () => mo.disconnect();
+  }, []);
+  return resolved;
+}
+
+/**
  * The app shell — sidebar (desktop), menu button + sheet nav (mobile),
  * ⌘K palette, settings dialog and the global job signals. Wraps every page.
  */
 export function Shell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { theme, setTheme } = useTheme();
+  const { setTheme } = useTheme();
+  const resolvedTheme = useResolvedTheme();
   const [mounted, setMounted] = useState(false);
   const { sidebarOpen, toggleSidebar, mode, applyMode } = useSettings();
 
@@ -713,9 +734,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
               <CommandItem onSelect={() => { setPaletteOpen(false); router.push("/library"); }}>
                 <LibraryBig className="h-4 w-4" /> Library — saved threads
               </CommandItem>
-              <CommandItem onSelect={() => { setPaletteOpen(false); setTheme(theme === "dark" ? "light" : "dark"); }}>
-                {mounted && theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-                {mounted && theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              <CommandItem onSelect={() => { setPaletteOpen(false); setTheme(resolvedTheme === "dark" ? "light" : "dark"); }}>
+                {mounted && resolvedTheme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                {mounted && resolvedTheme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
               </CommandItem>
               <CommandItem onSelect={() => { setPaletteOpen(false); openSettings(); }}>
                 <Settings2 className="h-4 w-4" /> Settings — backends, search &amp; theme
@@ -761,7 +782,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           testEndpoint={testEndpoint}
           testing={testing}
           saveSearch={saveSearch}
-          theme={theme}
+          resolvedTheme={resolvedTheme}
           setTheme={setTheme}
           mounted={mounted}
         />
