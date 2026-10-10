@@ -68,6 +68,7 @@ Caddyfile
 
 # scripts: only the product toolchain is committed
 scripts/*
+!scripts/teal_brand.py
 !scripts/test-routing.ts
 !scripts/mock-llm.js
 !scripts/benchmark-harness.mjs
