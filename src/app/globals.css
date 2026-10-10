@@ -650,22 +650,6 @@
 .dark .aurora-b { background: radial-gradient(closest-side, color-mix(in oklab, var(--primary) 26%, transparent), transparent 72%); }
 .dark .aurora-c { background: radial-gradient(closest-side, color-mix(in oklab, var(--primary) 30%, transparent), transparent 72%); }
 
-/* ---------- NeonMazeD — the D inside the neon maze (v2.0.7) ----------
-   Companion styles for src/components/magic/neon-maze.tsx. Kept here (not
-   as Tailwind arbitrary values) because the long gradient/color-mix value
-   lists belong in real CSS where they can breathe and be tuned by hand. */
-.maze-vignette {
-  background: radial-gradient(ellipse 78% 75% at 50% 50%,
-      transparent 55%, var(--background) 96%);
-}
-.maze-d-glow {
-  /* neon rim on the D: two-layer drop-shadow — a tight bright core that
-     separates the mark from the maze, plus a wide bloom that reads as the
-     clearing's light source. Both in the theme's Deep paint family. */
-  filter:
-    drop-shadow(0 0 10px color-mix(in oklab, var(--primary) 88%, transparent))
-    drop-shadow(0 0 30px color-mix(in oklab, var(--primary) 50%, transparent));
-}
 @keyframes aurora-drift-a {
   from { transform: translate3d(0, 0, 0) scale(1); }
   to   { transform: translate3d(64px, 26px, 0) scale(1.12); }

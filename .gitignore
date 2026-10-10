@@ -85,3 +85,8 @@ db/.pgpw
 !scripts/pg-dev.ts
 !scripts/pg-smoke.ts
 !scripts/db-migrate-deploy.sh
+
+# local python env for FreeLLMPool experiments — never commit
+.venv-freellm/
+!scripts/teal_brand.py
+!scripts/verify_maze_208.py
