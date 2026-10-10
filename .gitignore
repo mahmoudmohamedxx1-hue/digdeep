@@ -90,3 +90,4 @@ db/.pgpw
 .venv-freellm/
 !scripts/teal_brand.py
 !scripts/verify_maze_208.py
+!scripts/verify_mazemark_210.py
