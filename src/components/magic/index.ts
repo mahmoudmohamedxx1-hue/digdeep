@@ -13,4 +13,3 @@ export { SpotlightCard } from "./spotlight-card";
 export { StaggerIn, FadeIn } from "./animated-list";
 export { AuroraHero } from "./aurora-hero";
 export { BorderBeam } from "./border-beam";
-export { NeonMazeD } from "./neon-maze";
