@@ -55,9 +55,19 @@ interface BackendHealth {
 }
 
 /** Built-in keyless backends — the primary chain: every visitor can research without
- *  any key, and no shared server key gets burned by anonymous traffic. */
+ *  any key, and no shared server key gets burned by anonymous traffic.
+ *  LLM7's keyless lane is a CHAIN, not one model: the catalog lists 66 models but only
+ *  its turbo tier serves keyless (pro tier returns pro_access_required even when the
+ *  catalog says usage_based_only:false — live-probed, see scripts/probe_llm7_models.sh).
+ *  GLM-5.3-Flash is the flagship flash but is frequently "model_temporarily_unavailable"
+ *  keyless — DeepSeek-V4-Flash-0731 (400k ctx, same price) is the reliable star, verified
+ *  serving good IFRS-9 answers. Order = best-answer-first, so a busy model falls through
+ *  to the next keyless lane instead of stalling the run. */
 const BUILTIN_POOL: PoolEndpoint[] = [
-  { id: "llm7", label: "LLM7 · keyless", baseUrl: "https://api.llm7.io/v1/chat/completions", model: "GLM-5.3-Flash", enabled: true },
+  { id: "llm7-glm53", label: "LLM7 · GLM-5.3-Flash · keyless", baseUrl: "https://api.llm7.io/v1/chat/completions", model: "GLM-5.3-Flash", enabled: true },
+  { id: "llm7-dsv4", label: "LLM7 · DeepSeek-V4-Flash · keyless", baseUrl: "https://api.llm7.io/v1/chat/completions", model: "DeepSeek-V4-Flash-0731", enabled: true },
+  { id: "llm7-minimax", label: "LLM7 · MiniMax-M2.7 · keyless", baseUrl: "https://api.llm7.io/v1/chat/completions", model: "minimax-m2.7", enabled: true },
+  { id: "llm7-gptoss", label: "LLM7 · gpt-oss-20b · keyless", baseUrl: "https://api.llm7.io/v1/chat/completions", model: "gpt-oss:20b", enabled: true },
   { id: "pollinations", label: "Pollinations · keyless", baseUrl: "https://text.pollinations.ai/openai", model: "openai", enabled: true },
 ];
 
@@ -105,10 +115,15 @@ function isSdkAvailable(): boolean {
   return sdkAvailable;
 }
 
-/** GLM models served through the z.ai SDK, tried in order (newest first; default last). */
+/** The z.ai SDK serves ONE keyless lane. Live probes (scripts/probe_sdk_glm53.mjs)
+ *  show the server ignores the requested model name — every call, whatever model is
+ *  asked for, comes back served as a glm-4-plus class model. The old two-entry design
+ *  ("glm-5.3-flash" + "glm-4.5-flash") was therefore two failure counters on the same
+ *  physical lane — the first absorbed the 429s and the second inherited, which is exactly
+ *  why 5.3 looked "broken" while "4.5" served. One entry, four failures to cooldown:
+ *  identical recovery, honest attribution (the REAL served model from the response). */
 const GLM_SDK_MODELS: { id: string; label: string; model?: string }[] = [
-  { id: "glm-5.3-flash", label: "GLM-5.3-Flash", model: "glm-5.3-flash" },
-  { id: "glm-4.5-flash", label: "GLM-4.5-Flash", model: undefined }, // SDK default
+  { id: "zai-sdk", label: "GLM · z.ai SDK", model: "glm-5.3-flash" },
 ];
 
 const health = new Map<string, BackendHealth>();
@@ -190,7 +205,7 @@ async function callGlm(
   const msg = completion.choices?.[0]?.message;
   const text = msg?.content ?? "";
   if (!text.trim()) throw new Error("GLM returned empty response");
-  return { text, reasoning: msg?.reasoning_content || msg?.reasoning || undefined };
+  return { text, reasoning: msg?.reasoning_content || msg?.reasoning || undefined, servedModel: completion.model || undefined };
 }
 
 /** Some keyless OpenAI-compatible endpoints (Pollinations) return HTTP 500 on system-role
@@ -203,13 +218,15 @@ function foldSystemIntoUser(messages: ChatMsg[]): ChatMsg[] {
   return [{ role: "user", content: `${sys}\n\n---\n\n${rest[0].content}` }, ...rest.slice(1)];
 }
 
+interface Served { text: string; reasoning?: string; servedModel?: string }
+
 async function callOpenAiCompatible(
   ep: PoolEndpoint,
   messages: ChatMsg[],
   maxTokens?: number,
   timeoutMs = 90_000,
   wantThinking = false
-): Promise<{ text: string; reasoning?: string }> {
+): Promise<Served> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -227,10 +244,11 @@ async function callOpenAiCompatible(
     if (!res.ok) throw new Error(`${ep.label} HTTP ${res.status}`);
     const data = (await res.json()) as {
       choices?: { message?: { content?: string; reasoning_content?: string } }[];
+      model?: string;
     };
     const text = data.choices?.[0]?.message?.content ?? "";
     if (!text.trim()) throw new Error(`${ep.label} empty response`);
-    return { text, reasoning: data.choices?.[0]?.message?.reasoning_content || undefined };
+    return { text, reasoning: data.choices?.[0]?.message?.reasoning_content || undefined, servedModel: data.model || undefined };
   } finally {
     clearTimeout(timer);
   }
@@ -287,7 +305,7 @@ export async function llmComplete(messages: ChatMsg[], opts: LlmOptions): Promis
         h.calls++;
         try {
           const isGlm = be.baseUrl === "z-ai-sdk";
-          const out = isGlm
+          const out: Served = isGlm
             ? await callGlm(
                 GLM_SDK_MODELS.find((m) => m.id === be.id)?.model,
                 messages,
@@ -303,7 +321,10 @@ export async function llmComplete(messages: ChatMsg[], opts: LlmOptions): Promis
             text: out.text,
             reasoning: out.reasoning,
             backendId: be.id,
-            model: be.model || be.label,
+            // honest attribution: report the model the backend ACTUALLY served — the
+            // z.ai SDK ignores requested names (everything comes back glm-4-plus class),
+            // and OpenAI-compatible endpoints echo the real model id in `data.model`.
+            model: out.servedModel || be.model || be.label,
             latencyMs: h.lastLatencyMs,
           };
         } catch (err) {
@@ -409,6 +430,7 @@ async function readSse(
 interface StreamOutcome {
   text: string;
   reasoning?: string;
+  servedModel?: string;
 }
 
 /** Consume a streaming response: accumulate text + reasoning, forward every fragment to onDelta.
@@ -417,7 +439,8 @@ async function consumeStream(
   body: unknown,
   onDelta: (d: StreamDelta) => void,
   label: string,
-  idleMs = 90_000
+  idleMs = 90_000,
+  servedModel?: string
 ): Promise<StreamOutcome> {
   if (!body || typeof (body as ReadableStream).getReader !== "function") {
     const data = body as { choices?: { message?: { content?: string; reasoning_content?: string } }[] };
@@ -425,7 +448,7 @@ async function consumeStream(
     if (!text.trim()) throw new Error(`${label} empty response`);
     const reasoning = data.choices?.[0]?.message?.reasoning_content || undefined;
     if (reasoning) onDelta({ reasoning });
-    return { text, reasoning };
+    return { text, reasoning, servedModel: servedModel ?? data?.model };
   }
   let text = "";
   let reasoning = "";
@@ -450,7 +473,7 @@ async function consumeStream(
     }
   });
   if (!text.trim()) throw new Error(`${label} empty stream`);
-  return { text, reasoning: reasoning || undefined };
+  return { text, reasoning: reasoning || undefined, servedModel };
 }
 
 /** Stream a GLM completion through the z.ai SDK (returns the raw SSE ReadableStream). */
@@ -475,7 +498,7 @@ async function callGlmStream(
       setTimeout(() => rej(new Error(`GLM stream timeout (${Math.round(headerTimeoutMs / 1000)}s to connect)`)), headerTimeoutMs)
     ),
   ]);
-  return consumeStream(out, onDelta, "GLM");
+  return consumeStream(out, onDelta, "GLM", undefined, (out as { model?: string })?.model);
 }
 
 /** Stream a completion from an OpenAI-compatible keyless endpoint.
@@ -515,12 +538,12 @@ async function callOpenAiStream(
       return await consumeStream(res.body, onDelta, ep.label, Math.min(90_000, Math.max(30_000, timeoutMs)));
     }
     // backend ignored stream:true — plain JSON response
-    const data = (await res.json()) as { choices?: { message?: { content?: string; reasoning_content?: string } }[] };
+    const data = (await res.json()) as { choices?: { message?: { content?: string; reasoning_content?: string } }[]; model?: string };
     const text = data.choices?.[0]?.message?.content ?? "";
     if (!text.trim()) throw new Error(`${ep.label} empty response`);
     const reasoning = data.choices?.[0]?.message?.reasoning_content || undefined;
     if (reasoning) onDelta({ reasoning });
-    return { text, reasoning };
+    return { text, reasoning, servedModel: data.model || undefined };
   } finally {
     clearTimeout(timer);
   }
@@ -569,7 +592,7 @@ export async function llmStreamComplete(
       h.ok++;
       h.failures = 0;
       h.lastLatencyMs = Date.now() - started;
-      return { text: out.text, reasoning: out.reasoning, backendId: be.id, model: be.model || be.label, latencyMs: h.lastLatencyMs };
+      return { text: out.text, reasoning: out.reasoning, backendId: be.id, model: out.servedModel || be.model || be.label, latencyMs: h.lastLatencyMs };
     } catch (err) {
       h.failures++;
       h.lastError = err instanceof Error ? err.message : String(err);

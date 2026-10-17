@@ -210,7 +210,11 @@ Respond with ONLY valid JSON (no markdown fences, no commentary) with this exact
 Rules:
 - ${breadthRule}
 - Aspects should together fully cover the topic: context/definitions, current state, key players/examples, data & evidence, trends/outlook, risks/criticism — adapted to the topic.
-- Queries must be effective web searches (include specific entities, years where relevant) — NEVER the literal text of the user's question.
+- Queries must be effective web searches — NEVER the literal text of the user's question. Rewrite them the way a DOMAIN EXPERT would search:
+  • Expand every acronym to its full name plus the acronym ("ECL" → "expected credit loss ECL IFRS 9"; "LLM" → "large language model").
+  • Name the standard-setters, regulators, professional bodies and methods (e.g. accounting: IFRS 9, IASB, Big 4 firms by name; medicine: FDA/EMA trial phases) — the vocabulary practitioners use, not the user's casual phrasing.
+  • Drop filler ("can you tell me how to get") and keep the load-bearing nouns.
+  Example — user asks: "how to get the looking forward factor for a country for the ECL report same as the Big 4 method" → expert queries: "IFRS 9 expected credit loss forward-looking information methodology", "ECL macroeconomic scenarios methodology Big 4 PwC KPMG Deloitte EY", "forward-looking overlay probability of default country risk GDP unemployment ECL".
 - The final report will be written in ${language}.`;
 }
 
@@ -223,11 +227,39 @@ Below are source excerpts retrieved so far:
 ${src}
 
 Write dense research notes answering the question using ONLY these sources. Format as markdown bullets grouped by theme.
-- Every factual claim must end with its citation like [2] or [1][5].
+- FIRST, judge relevance: if most excerpts are about a DIFFERENT topic than the question (they matched filler words, not the subject), start your notes with the exact marker line "OFF-TOPIC SOURCES" and one sentence on what the sources actually discuss — then stop. Do not fabricate relevance.
+- Otherwise: every factual claim must end with its citation like [2] or [1][5].
 - Capture specific numbers, dates, names, methods, and direct insights — not vague generalities.
 - Note disagreements between sources and notable limitations.
 - End with a line "GAPS: <comma-separated list of things still unknown or thinly covered>".
 Write the notes in English (they are internal working notes).`;
+}
+
+/** Query reformulation — fired when a round's sources came back off-topic or empty.
+ *  The model sees what was tried and what garbage came back, and rewrites the
+ *  queries with proper domain vocabulary (the way a practitioner would search). */
+export function reformulateQueriesPrompt(
+  question: string,
+  goal: string | undefined,
+  failedQueries: string[],
+  offTopicSamples: string[],
+): string {
+  return `Iterative web research hit a dead end.
+
+Research question: "${question}"
+Aspect goal: ${goal ?? "(none)"}
+Queries already tried (they returned off-topic or empty results — film pages, unrelated repos, wrong-domain papers matched on filler words):
+${failedQueries.map((q) => `- "${q}"`).join("\n") || "(none recorded)"}
+Sample of what came back instead:
+${offTopicSamples.slice(0, 6).map((t) => `- ${t}`).join("\n") || "(nothing returned)"}
+
+Rewrite the search queries so a real domain expert would run them. Rules:
+- Expand acronyms to full name + acronym ("ECL" → "expected credit loss ECL").
+- Use the field's standard vocabulary: standard-setters, regulators, methodology names, professional bodies by name (e.g. IFRS 9, IASB, PwC/KPMG/Deloitte/EY, FDA, IEEE — whatever this field actually uses).
+- Target pages that genuinely answer the question (methodology guides, standards, technical publications) — not news chatter.
+- 3-5 queries, each phrased differently (broad definition → specific method → practitioner phrasing).
+
+Respond with ONLY a valid JSON array of query strings (no fences).`;
 }
 
 /** Reflect v3 — dual critic (WebWalker) + EVIDENCE-GRADED learnings + contradiction detection.
@@ -555,7 +587,8 @@ ${refs}
 Write the section body in ${language}:
 - ${words[0]}-${words[1]} words, markdown. Start directly with substance (no "# heading" — it will be added automatically).
 - Use ### for internal sub-headings where helpful, bullet lists, and bold for key terms.
-- Cite inline with [n] immediately after claims, e.g. "adoption grew 340% in 2025 [2]". Every substantive claim needs a citation.
+- Cite inline with [n] immediately after claims, e.g. "adoption grew 340% in 2025 [2]". Every substantive claim from the sources needs a citation.
+- HONESTY RULE — if the findings show the sources did NOT cover this question (off-topic material, or explicitly marked gaps): do NOT write an empty "insufficient evidence" section and do NOT cite irrelevant sources. Instead (a) say plainly, in one sentence, that web sources did not cover this angle; then (b) answer the question from well-established professional knowledge of the field, marked inline at first use like "*(from standard methodology, not from the retrieved sources)*" — no citation numbers on those statements. The reader must always know what is sourced and what is background knowledge.
 - Include concrete data, examples, comparisons and mechanisms. Flag genuine uncertainty ("sources disagree…", "evidence is limited to…").
 - Do NOT write a reference list — only cite with [n].`;
 }

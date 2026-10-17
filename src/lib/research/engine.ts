@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { llmComplete, llmStreamComplete, type ChatMsg, type LlmResult, type ModelPref, type StreamDelta } from "./llm";
 import { capabilityQuestion, heuristicChatIntent, selfKnowledgeTopic, type SelfTopic } from "./intent-heuristics";
 import { searchAll, fetchPageContent, domainOf, type SearchResult } from "./search";
+import { gateByRelevance } from "./relevance";
 import {
   supportTokens as sharedSupportTokens,
   lexicalSupport as sharedLexicalSupport,
@@ -33,6 +34,7 @@ import {
   relatedPrompt,
   rerankPrompt,
   citeRepairPrompt,
+  reformulateQueriesPrompt,
   redTeamPrompt,
   qualityScorePrompt,
   debateProposerPrompt,
@@ -656,11 +658,16 @@ async function runQuickLane(
   // 1. search
   const rs = await searchAll(job.query, { academic: false });
   await ctx.emit("search", `Searching: “${job.query}”`, `${rs.length} results`, undefined, { query: job.query, count: rs.length, engines: [...new Set(rs.map((r) => r.engine))] });
-  const fresh = rs.filter((r) => r.url && !r.domain.includes("duckduckgo.com"));
+  const gatedQuick = gateByRelevance(job.query, job.query, rs.filter((r) => r.url && !r.domain.includes("duckduckgo.com")));
+  if (gatedQuick.dropped.length > 0) {
+    await ctx.emit("refine", `Dropped ${gatedQuick.dropped.length} off-topic results — kept ${gatedQuick.kept.length}`, "The dropped pages matched filler words, not the question.");
+  }
+  const fresh = gatedQuick.kept;
   const picked: SearchResult[] = [];
   const domainCount: Record<string, number> = {};
   for (const r of fresh) {
     if (picked.length >= 4) break;
+    if (ctx.seenUrls.has(r.url)) continue;
     const dc = domainCount[r.domain] ?? 0;
     if (dc >= 2) continue;
     domainCount[r.domain] = dc + 1;
@@ -1124,6 +1131,9 @@ export async function runJob(jobId: string) {
       let roundsDone = 0;
       /** WebWalker: URLs the reflection chose to visit directly next round */
       let pendingWalks: { url: string; reason: string }[] = [];
+      /** P2 quality guard: query reformulation budget + what the off-topic results looked like */
+      let reformulations = 0;
+      let offTopicSamples: string[] = [];
 
       for (let round = 1; round <= maxRounds; round++) {
         if (await ctx.isCancelled()) throw new Cancelled();
@@ -1167,10 +1177,36 @@ export async function runJob(jobId: string) {
           searchResults.push(...rs);
           await sleep(300 + Math.random() * 400);
         }
-        // 2b. dedupe + diverse-domain pick
-        const fresh = searchResults
-          .filter((r) => !ctx.seenUrls.has(r.url) && r.url && !r.domain.includes("duckduckgo.com"))
+        // 2b. dedupe + diverse-domain pick. URL-unique across the round's queries (two
+        // engines can return the same page for different phrasings), seen re-checked at
+        // PICK time — parallel aspect workers race between this filter and the read.
+        let fresh = searchResults
+          .filter((r) => r.url && !ctx.seenUrls.has(r.url) && !r.domain.includes("duckduckgo.com"))
+          .filter((r, i, arr) => arr.findIndex((x) => x.url === r.url) === i)
           .sort((a, b) => (a.engine === "Bing News" ? -1 : 0) - (b.engine === "Bing News" ? -1 : 0));
+
+        // 2b-0. RELEVANCE GATE — the fix for the garbage-sources failure mode (the ECL run:
+        // film pages, toy repos and math papers matched on filler words, and the report
+        // became "no relevant discussion" sections). Pure lexical scoring (relevance.ts):
+        // off-topic results are dropped before the read budget is spent, best-first.
+        {
+          const gatedNow = gateByRelevance(sec.question, queries.join(" "), fresh);
+          if (gatedNow.dropped.length > 0 && gatedNow.kept.length > 0) {
+            await ctx.emit(
+              "refine",
+              `Dropped ${gatedNow.dropped.length} off-topic result${gatedNow.dropped.length > 1 ? "s" : ""} before reading — kept ${gatedNow.kept.length} on-topic`,
+              `“${sec.title}”: the dropped pages matched filler words, not the question (median kept relevance ${gatedNow.keptScore.toFixed(2)}).`,
+              undefined,
+              { aspect: sec.title, dropped: gatedNow.dropped.length, kept: gatedNow.kept.length },
+              "verbose",
+            );
+          }
+          if (gatedNow.dropped.length > 0) {
+            offTopicSamples.push(...gatedNow.dropped.slice(0, 4).map((d) => `${d.title} (${d.domain})`).slice(0, 200));
+            if (offTopicSamples.length > 12) offTopicSamples = offTopicSamples.slice(0, 12);
+          }
+          fresh = gatedNow.kept;
+        }
 
         // 2b-2. LLM RERANK (P0-3) — spend the read budget on the pages that matter.
         // Round 1 only (follow-up rounds are already narrow), and only when there are
@@ -1219,11 +1255,12 @@ export async function runJob(jobId: string) {
         const domainCount: Record<string, number> = {};
         for (const r of fresh) {
           if (picked.length >= roundReadCap) break;
+          if (ctx.seenUrls.has(r.url)) continue; // re-check at pick time — parallel aspects race
           const dc = domainCount[r.domain] ?? 0;
           if (dc >= 2) continue;
           domainCount[r.domain] = dc + 1;
           picked.push(r);
-          ctx.seenUrls.add(r.url);
+          ctx.seenUrls.add(r.url); // claim it NOW, before the slow read — not after
         }
         if (picked.length === 0 && round === 1 && contents.length === 0) {
           await ctx.emit("info", `No new sources found for “${sec.title}”`, "Proceeding with what we have");
@@ -1261,7 +1298,12 @@ export async function runJob(jobId: string) {
 
         // 2d. SUMMARIZE
         const snippetSrcs = contents.length === 0 && searchResults.length > 0
-          ? searchResults.slice(0, 6).map((r, i) => ({ n: 900 + i, title: r.title, domain: r.domain, excerpt: r.snippet }))
+          ? (() => {
+            // gate the snippet fallback too — snippet-grade citations of off-topic pages
+            // are exactly how a garbage report stays "honest-looking"
+            const g = gateByRelevance(sec.question, queries.join(" "), searchResults.slice(0, 12));
+            return g.kept.slice(0, 6).map((r, i) => ({ n: 900 + i, title: r.title, domain: r.domain, excerpt: r.snippet }));
+          })()
           : [];
         // persist snippet-based sources so citations, references and the Sources row stay honest
         if (snippetSrcs.length > 0) {
@@ -1289,7 +1331,43 @@ export async function runJob(jobId: string) {
             await ctx.emit("info", `Synthesis model unavailable for “${sec.title}” — keeping raw source excerpts as notes`, sumErr instanceof Error ? sumErr.message.slice(0, 200) : undefined);
           }
         }
-        notes = notes ? `${notes}\n\n## Round ${round} additions\n${roundNotes}` : roundNotes;
+        // 2d-2. OFF-TOPIC HANDLING — either the summarize pass marked the sources a
+        // different topic, or the gate dropped everything: this round is a MISS.
+        // Reformulate the queries (max 2 per aspect) with domain vocabulary instead of
+        // accumulating garbage notes. If reformulation is spent, the notes merge is
+        // skipped for a fully off-topic round so garbage never becomes "findings".
+        const offTopicRound = srcForSum.length > 0 && /OFF-TOPIC SOURCES/i.test(roundNotes);
+        const needReformulate =
+          (offTopicRound || (searchResults.length > 0 && fresh.length === 0 && picked.length === 0)) &&
+          reformulations < 2 &&
+          !ctx.outOfTime;
+        if (needReformulate) {
+          try {
+            const rfRes = await ctx.llm(
+              [{ role: "user", content: reformulateQueriesPrompt(sec.question, planAspect?.goal, queries, offTopicSamples) }],
+              "reformulate", false, 400, { patient: false, timeoutMs: 45_000 }
+            );
+            const newQs = (extractJsonArray(rfRes.text) ?? [])
+              .map((s) => String(s).trim())
+              .filter((s) => s.length > 4)
+              .slice(0, 4);
+            if (newQs.length > 0) {
+              queries = newQs;
+              reformulations++;
+              await ctx.emit(
+                "refine",
+                `Rewriting the queries for “${sec.title}” with proper domain vocabulary (attempt ${reformulations}/2)`,
+                `The last round matched filler words, not the question. Next round searches:\n${newQs.map((q) => `• ${q}`).join("\n")}`
+              );
+              continue; // next round with the reformulated queries — never reflect on garbage
+            }
+          } catch { /* fall through: the reflection decides with what we have */ }
+        }
+        if (!offTopicRound) {
+          notes = notes ? `${notes}\n\n## Round ${round} additions\n${roundNotes}` : roundNotes;
+        } else {
+          await ctx.emit("info", `Sources for “${sec.title}” came back off-topic this round — discarded, not folded into findings`, roundNotes.slice(0, 200));
+        }
 
         // 2e. SELF-CRITIQUE v2 — dual critic: is it sufficient? what is now solidly known? where to go next (search or walk)?
         const roundsLeft = ctx.unlimitedRounds ? "unlimited" : Math.max(0, job.depth - round);
@@ -1489,13 +1567,23 @@ export async function runJob(jobId: string) {
         rs.push(...r);
         await ctx.emit("search", `Targeted search: “${q}”`, `${r.length} results`);
       }
-      const fresh = rs.filter((r) => !ctx.seenUrls.has(r.url)).slice(0, 5);
+      // relevance-gate + URL-dedupe the follow-up reads — a weak section must be
+      // strengthened with on-topic evidence, not more filler matches
+      const gatedFollowUp = gateByRelevance(
+        sec.question,
+        w.queries.join(" "),
+        rs.filter((r) => r.url && !ctx.seenUrls.has(r.url)).filter((r, i, arr) => arr.findIndex((x) => x.url === r.url) === i),
+      );
+      const fresh = gatedFollowUp.kept.slice(0, 5);
+      if (gatedFollowUp.dropped.length > 0) {
+        await ctx.emit("refine", `Follow-up for “${w.title}”: dropped ${gatedFollowUp.dropped.length} off-topic results`, undefined, undefined, undefined, "verbose");
+      }
       const contents = await Promise.all(
         fresh.map(async (r) => {
+          ctx.seenUrls.add(r.url); // claim before the slow fetch — parallel follow-ups race
           const page = await fetchPageContent(r.url, 3200, r.excerpt);
           if (!page) return null;
           const n = ++ctx.sourceN;
-          ctx.seenUrls.add(r.url);
           await db.source.create({ data: { jobId, url: r.url, domain: r.domain || page.domain, title: r.title || page.title, snippet: r.snippet, engine: r.engine, words: page.words, used: true, sectionTitle: sec.title, quality: 60 } }).catch(() => null);
           sourcesUsed.push({ n, url: r.url, title: r.title || page.title, domain: r.domain || page.domain });
           await ctx.emit("read", `Reading ${r.domain}`, r.title, undefined, { url: r.url, n }, "verbose");
@@ -1982,11 +2070,30 @@ export async function runJob(jobId: string) {
     const durationMs = Date.now() - t0;
     const reportWords = drafts.split(/\s+/).length;
     const modelsUsed = Object.entries(ctx.byModel).map(([m, v]) => `${m} (${v.calls} calls)`);
-    const refs = sourcesUsed
+
+    // Dedupe by URL before numbering: parallel aspect workers can still read the same
+    // page in overlapping windows (the ECL run printed the same arxiv URL as both #3
+    // and #8). First occurrence keeps its slot; later duplicates remap onto it so every
+    // citation of that URL resolves to ONE reference number.
+    const refList: typeof sourcesUsed = [];
+    const refByUrl = new Map<string, number>(); // url -> position in refList (1-based)
+    const remap: Record<number, number> = {};
+    for (const s of sourcesUsed) {
+      const existing = refByUrl.get(s.url);
+      if (existing != null) {
+        remap[s.n] = existing; // duplicate read — fold onto the first occurrence
+        continue;
+      }
+      refByUrl.set(s.url, refList.length + 1);
+      remap[s.n] = refList.length + 1;
+      refList.push(s);
+    }
+    if (refList.length < sourcesUsed.length) {
+      await ctx.emit("info", `Deduplicated the reference list — ${sourcesUsed.length - refList.length} repeated page(s) folded onto their first citation`);
+    }
+    const refs = refList
       .map((s, i) => `${i + 1}. ${s.title} — *${s.domain}* — ${s.url}`)
       .join("\n");
-    const remap: Record<number, number> = {};
-    sourcesUsed.forEach((s, i) => (remap[s.n] = i + 1));
     // the claim-check ledger was recorded with the engine's internal numbering —
     // rewrite it to the report's final citation numbers so it matches what the
     // reader sees (and what the References list numbers mean)
@@ -2029,7 +2136,7 @@ export async function runJob(jobId: string) {
       refs || "*(no sources were successfully retrieved)*",
       ``,
       `---`,
-      `**Research metadata** — Duration: ${Math.round(durationMs / 1000)}s · Sources consulted: ${sourcesUsed.length} · Report words: ~${reportWords} · LLM calls: ${ctx.llmCalls} · Models: ${modelsUsed.join(", ")} · Preset: ${job.preset} · Citation integrity: ${citeStats.integrity}%`,
+      `**Research metadata** — Duration: ${Math.round(durationMs / 1000)}s · Sources consulted: ${refList.length} · Report words: ~${reportWords} · LLM calls: ${ctx.llmCalls} · Models: ${modelsUsed.join(", ")} · Preset: ${job.preset} · Citation integrity: ${citeStats.integrity}%`,
     ].join("\n");
 
     // ---------- MONITORING DIFF DIGEST (P2-2) ----------
@@ -2106,7 +2213,7 @@ export async function runJob(jobId: string) {
 
     const stats = {
       durationMs,
-      sourcesConsulted: sourcesUsed.length,
+      sourcesConsulted: refList.length,
       llmCalls: ctx.llmCalls,
       byModel: ctx.byModel,
       reportWords,

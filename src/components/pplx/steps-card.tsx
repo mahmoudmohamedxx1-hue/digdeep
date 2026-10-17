@@ -123,6 +123,7 @@ function activeLabel(lastType: string, stage: string, liveLabel?: string): strin
   if (lastType === "think") return liveLabel ? `${liveLabel}…` : "Thinking…";
   if (lastType === "search") return "Searching…";
   if (lastType === "rerank") return "Ranking sources…";
+  if (lastType === "refine") return "Refining the search — off-topic results dropped…";
   if (lastType === "read") return "Reading sources…";
   if (lastType === "walk") return "Following links…";
   if (lastType === "learning") return "Capturing key findings…";
@@ -326,7 +327,7 @@ export function StepsCard({
               );
             }
             const e = row.e;
-            const highlight = e.type === "eta" || e.type === "selfcheck" || e.type === "critique" || e.type === "agent" || e.type === "presearch" || e.type === "learning" || e.type === "walk" || e.type === "curate" || e.type === "verify" || e.type === "contradiction" || e.type === "comprehend" || e.type === "rerank" || e.type === "citecheck" || e.type === "redteam" || e.type === "debate" || e.type === "diversity" || e.type === "score" || e.type === "diff";
+            const highlight = e.type === "eta" || e.type === "selfcheck" || e.type === "critique" || e.type === "agent" || e.type === "presearch" || e.type === "learning" || e.type === "walk" || e.type === "curate" || e.type === "verify" || e.type === "contradiction" || e.type === "comprehend" || e.type === "rerank" || e.type === "refine" || e.type === "citecheck" || e.type === "redteam" || e.type === "debate" || e.type === "diversity" || e.type === "score" || e.type === "diff";
             const isError = e.type === "error";
             const degraded = !isError && isDegrade(e);
             return (

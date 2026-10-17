@@ -293,9 +293,9 @@ export function AskBox({
                 <SectionLabel>LLM backend — keyless</SectionLabel>
                 <div className="space-y-1">
                   {([
-                    ["auto", "Auto", "GLM-5.3-Flash → GLM-4.5-Flash → LLM7 → Pollinations"],
-                    ["glm", "GLM Flash", "z.ai SDK — always free, no key"],
-                    ["pool", "Keyless pool only", "LLM7 / Pollinations / your endpoints"],
+                    ["auto", "Auto", "z.ai GLM → LLM7 (GLM-5.3 · DeepSeek-V4 · MiniMax · gpt-oss) → Pollinations"],
+                    ["glm", "z.ai GLM", "z.ai SDK lane — always free, no key"],
+                    ["pool", "Keyless pool only", "LLM7 multi-model / Pollinations / your endpoints"],
                   ] as const).map(([id, label, desc]) => (
                     <button
                       key={id}
