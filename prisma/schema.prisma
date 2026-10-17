@@ -16,6 +16,7 @@ model ResearchJob {
   progress       Int          @default(0)
   preset         String       @default("standard") // quick|standard|deep|exhaustive|custom
   mode           String       @default("research") // chat|quick|research — how the engine answered this turn
+  court          Boolean      @default(false) // put the idea on trial: prosecutor + defense + jury of 12 + judge
   language       String       @default("English")
   modelPref      String       @default("auto") // auto|glm|pool
   breadth        Int          @default(3)

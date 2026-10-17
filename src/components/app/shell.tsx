@@ -165,7 +165,7 @@ const BYOK_PRESETS: { label: string; baseUrl: string; model: string }[] = [
 ];
 
 function SettingsDialog({
-  open, onOpenChange, endpoints, setEndpoints, searchSettings, setSearchSettings, onSave, savingPool, savingSearch, testEndpoint, testing, saveSearch, resolvedTheme, setTheme, mounted,
+  open, onOpenChange, endpoints, setEndpoints, searchSettings, setSearchSettings, onSave, savingPool, savingSearch, testEndpoint, testing, saveSearch, resolvedTheme, setTheme, mounted, llm7Key, setLlm7Key, hasLlm7Key, saveLlm7Key, savingLlm7Key,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -182,6 +182,11 @@ function SettingsDialog({
   resolvedTheme: string | undefined;
   setTheme: (t: string) => void;
   mounted: boolean;
+  llm7Key: string;
+  setLlm7Key: (k: string) => void;
+  hasLlm7Key: boolean;
+  saveLlm7Key: (k?: string) => void;
+  savingLlm7Key: boolean;
 }) {
   const [newInstance, setNewInstance] = useState("");
   return (
@@ -220,10 +225,46 @@ function SettingsDialog({
           <div className="rounded-[16px] border p-4">
             <p className="mb-2 text-xs font-semibold text-muted-foreground">Always-on keyless chain (auto mode order)</p>
             <div className="space-y-1.5 text-xs">
-              <div className="flex items-center gap-2"><span className="font-mono text-primary">1 · GLM-5.3-Flash</span><span className="text-muted-foreground">z.ai SDK — primary</span></div>
-              <div className="flex items-center gap-2"><span className="font-mono text-primary">2 · GLM-4.5-Flash</span><span className="text-muted-foreground">z.ai SDK — default model</span></div>
-              <div className="flex items-center gap-2"><span className="font-mono text-primary">3 · LLM7 / GLM-5.3-Flash</span><span className="text-muted-foreground">api.llm7.io — keyless</span></div>
-              <div className="flex items-center gap-2"><span className="font-mono text-primary">4 · Pollinations / gpt-oss-20b</span><span className="text-muted-foreground">text.pollinations.ai — keyless</span></div>
+              <div className="flex items-center gap-2"><span className="font-mono text-primary">1 · GLM (z.ai SDK)</span><span className="text-muted-foreground">primary lane — honest served-model attribution</span></div>
+              <div className="flex items-center gap-2"><span className="font-mono text-primary">2 · LLM7 / GLM-5.3-Flash</span><span className="text-muted-foreground">keyless · 400k ctx</span></div>
+              <div className="flex items-center gap-2"><span className="font-mono text-primary">3 · LLM7 / DeepSeek-V4-Flash</span><span className="text-muted-foreground">keyless · 400k ctx — the reliable star</span></div>
+              <div className="flex items-center gap-2"><span className="font-mono text-primary">4 · LLM7 / Nemotron-3-Nano</span><span className="text-muted-foreground">keyless · 1M-token context</span></div>
+              <div className="flex items-center gap-2"><span className="font-mono text-primary">5 · LLM7 / MiniMax-M2.7</span><span className="text-muted-foreground">keyless · 180k ctx</span></div>
+              <div className="flex items-center gap-2"><span className="font-mono text-primary">6 · LLM7 / Mistral-Nemo</span><span className="text-muted-foreground">keyless · 128k ctx</span></div>
+              <div className="flex items-center gap-2"><span className="font-mono text-primary">7 · LLM7 / gpt-oss-20b → Codestral</span><span className="text-muted-foreground">keyless · fallbacks</span></div>
+              <div className="flex items-center gap-2"><span className="font-mono text-primary">8 · Pollinations</span><span className="text-muted-foreground">text.pollinations.ai — keyless</span></div>
+            </div>
+            <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+              Every lane is free and keyless. Quota windows are honored automatically — a lane that says
+              “retry after N seconds” rests exactly that long while the next model serves.
+            </p>
+          </div>
+
+          {/* ---------- LLM7 key unlock ---------- */}
+          <div className="rounded-[16px] border p-4">
+            <p className="mb-1 text-xs font-semibold">LLM7 key — unlock the premium tier</p>
+            <p className="mb-2.5 text-[11px] leading-relaxed text-muted-foreground">
+              Free key from dashboard.llm7.io. With a key: your turbo models ride your own daily quota instead of the
+              shared anonymous pool, and the premium models (DeepSeek-V4.1 · Gemini-3/4 · Claude Haiku/Sonnet · Grok · GPT-6.1)
+              join the chain ahead of keyless — when your key has balance or quota. The keyless chain stays as failover either way.
+            </p>
+            <div className="flex gap-2">
+              <Input
+                type="password"
+                placeholder={hasLlm7Key ? "Key saved — type to replace" : "Paste your LLM7 API key"}
+                value={llm7Key}
+                onChange={(e) => setLlm7Key(e.target.value)}
+                className="h-8 flex-1 rounded-lg font-mono text-[11px]"
+                aria-label="LLM7 API key"
+              />
+              <Button variant="outline" size="sm" className="press-scale h-8 rounded-lg text-xs" disabled={savingLlm7Key || (!llm7Key.trim() && !hasLlm7Key)} onClick={() => saveLlm7Key()}>
+                {savingLlm7Key ? <Loader2 className="h-3 w-3 animate-spin" /> : hasLlm7Key ? "Replace" : "Save"}
+              </Button>
+              {hasLlm7Key && (
+                <Button variant="ghost" size="sm" className="press-scale h-8 rounded-lg text-xs text-muted-foreground" disabled={savingLlm7Key} onClick={() => { setLlm7Key(""); saveLlm7Key(""); }}>
+                  Remove
+                </Button>
+              )}
             </div>
           </div>
 
@@ -471,6 +512,9 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const [testing, setTesting] = useState<string | null>(null);
   const [savingPool, setSavingPool] = useState(false);
   const [savingSearch, setSavingSearch] = useState(false);
+  const [llm7Key, setLlm7Key] = useState("");
+  const [hasLlm7Key, setHasLlm7Key] = useState(false);
+  const [savingLlm7Key, setSavingLlm7Key] = useState(false);
 
   const mainRef = useRef<HTMLElement>(null);
 
@@ -491,6 +535,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         const d = await r.json();
         setCustomEndpoints((d.endpoints ?? []).filter((e: PoolEndpointUi) => e.id.startsWith("custom-")));
         if (d.searchSettings) setSearchSettings(d.searchSettings);
+        setHasLlm7Key(!!d.hasLlm7Key);
       }
     } catch { /* ignore */ }
   }, []);
@@ -525,6 +570,24 @@ export function Shell({ children }: { children: React.ReactNode }) {
       toast({ title: "Save failed", variant: "destructive" });
     } finally {
       setSavingPool(false);
+    }
+  };
+
+  const saveLlm7Key = async (k?: string) => {
+    const key = k !== undefined ? k : llm7Key;
+    setSavingLlm7Key(true);
+    try {
+      const r = await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "save-llm7-key", key }) });
+      if (r.ok) {
+        const d = await r.json();
+        setHasLlm7Key(!!d.hasLlm7Key);
+        setLlm7Key("");
+        toast({ title: d.hasLlm7Key ? "LLM7 key saved — premium tier unlocked" : "LLM7 key removed — back to keyless only" });
+      } else toast({ title: "Save failed", variant: "destructive" });
+    } catch {
+      toast({ title: "Save failed", variant: "destructive" });
+    } finally {
+      setSavingLlm7Key(false);
     }
   };
 
@@ -785,6 +848,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
           resolvedTheme={resolvedTheme}
           setTheme={setTheme}
           mounted={mounted}
+          llm7Key={llm7Key}
+          setLlm7Key={setLlm7Key}
+          hasLlm7Key={hasLlm7Key}
+          saveLlm7Key={saveLlm7Key}
+          savingLlm7Key={savingLlm7Key}
         />
 
         {/* favicon states + browser notifications — mounted once, route-proof */}

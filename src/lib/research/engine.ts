@@ -44,6 +44,7 @@ import {
   type Intent,
 } from "./prompts";
 import { PIPELINE_ONE_LINER } from "./self-knowledge";
+import { JURORS, prosecutionPrompt, defensePrompt, rebuttalPrompt, jurorPrompt, judgePrompt, type CourtVerdict } from "./court";
 
 const activeJobs = new Set<string>();
 
@@ -848,9 +849,22 @@ export async function runJob(jobId: string) {
     // ---------- STAGE 0: UNDERSTAND FIRST, THEN ROUTE (chat vs quick answer vs deep research) ----------
     // The selected mode (quick…unlimited) sets HOW DEEP real questions get researched —
     // it must NEVER force research onto conversational or capability questions.
+    // COURT MODE is different by design: the user explicitly asked for a trial, so the
+    // query IS the proposition — no chat/quick classification, straight to evidence.
     await updateJob(jobId, { status: "planning", stage: "Reading your message", progress: 3 });
     let intent: Intent = "research";
     let routeWhy = "";
+    if (job.court) {
+      intent = "research";
+      routeWhy = "court mode — you asked for a trial, so this proposition gets a prosecutor, a defense, a jury of 12 and a judge";
+      await ctx.emit(
+        "court",
+        "Court is in session",
+        `The proposition on trial: “${job.query.slice(0, 240)}”. Evidence is gathered first by the research engine (both for and against), then the prosecution and the defense build their cases from it, a jury of 12 independent personas votes, and the judge reads the verdict — with what to change before trying again.`,
+        undefined,
+        { phase: "opening", charge: job.query.slice(0, 300) }
+      );
+    } else {
     const selfTopic = selfKnowledgeTopic(job.query) ?? (capabilityQuestion(job.query) ? ("capabilities" as SelfTopic) : null);
     const heuristic = heuristicChatIntent(job.query);
     if (heuristic === "chat" || selfTopic) {
@@ -883,6 +897,7 @@ export async function runJob(jobId: string) {
       intent = cls.intent;
       routeWhy = cls.how;
     }
+    } // end non-court routing
     await updateJob(jobId, { mode: intent });
     if (intent === "chat") {
       await ctx.emit("info", "Routed to: chat", routeWhy);
@@ -898,8 +913,8 @@ export async function runJob(jobId: string) {
     await updateJob(jobId, { status: "planning", stage: "Understanding the question", startedAt: new Date(), progress: 4 });
     await ctx.emit(
       "info",
-      "Routed to: deep research",
-      `${routeWhy}. Mode: ${unlimited ? "UNLIMITED — no caps on aspects, rounds, sources or time; research continues until coverage is genuinely sufficient" : `breadth ${job.breadth} · depth ${job.depth} · max ${job.maxSources} sources · budget ${job.maxMinutes} min`} · backend: ${job.modelPref === "auto" ? "auto (GLM-5.3-Flash → GLM-4.5-Flash → keyless pool failover)" : job.modelPref}`
+      job.court ? "Routed to: the court" : "Routed to: deep research",
+      `${routeWhy}. Mode: ${unlimited ? "UNLIMITED — no caps on aspects, rounds, sources or time; research continues until coverage is genuinely sufficient" : `breadth ${job.breadth} · depth ${job.depth} · max ${job.maxSources} sources · budget ${job.maxMinutes} min`} · backend: ${job.modelPref === "auto" ? "auto (GLM SDK → LLM7 multi-model keyless pool → Pollinations failover)" : job.modelPref}`
     );
 
     // ---------- STAGE 1: PLAN ----------
@@ -907,9 +922,10 @@ export async function runJob(jobId: string) {
     // about DigDeep itself — this is the backstop for a router that misread a
     // capability or self-machinery question ("can you make a deep research?",
     // "i mean like brave and those engine not the ai model") as a research request.
+    // (court runs skip the guard: the user explicitly put this text on trial)
     const qLower = job.query.toLowerCase();
     const selfBackstop = selfKnowledgeTopic(job.query) ?? (capabilityQuestion(job.query) ? ("capabilities" as SelfTopic) : null);
-    if (/\b(digdeep|dig deep)\b/.test(qLower) || /\byour (capabilities|features|modes)\b/.test(qLower) || selfBackstop) {
+    if (!job.court && (/\b(digdeep|dig deep)\b/.test(qLower) || /\byour (capabilities|features|modes)\b/.test(qLower) || selfBackstop)) {
       await ctx.emit(
         "info",
         "Wait — on a closer read, this is really a question about me",
@@ -997,7 +1013,7 @@ export async function runJob(jobId: string) {
       ? Math.max(120_000, Math.min(ctx.timeLeft * 0.4, 10 * 60_000))
       : Infinity;
     const planPromise = ctx.llmLive(
-      [{ role: "user", content: planPrompt(job.query, job.breadth, job.language, threadContext || undefined, initSnippets, comprehensionDigest || undefined) }],
+      [{ role: "user", content: planPrompt(job.query, job.breadth, job.language, threadContext || undefined, initSnippets, comprehensionDigest || undefined, job.court) }],
       "plan",
       "Planning the research",
       { wantThinking: true }
@@ -1068,7 +1084,9 @@ export async function runJob(jobId: string) {
     const sectionRows = await db.researchSection.findMany({ where: { jobId }, orderBy: { order: "asc" } });
     const sourcesUsed: SourceRef[] = [];
     const readCap = job.preset === "quick" ? 3 : job.preset === "standard" ? 4 : 6;
-    const researchWeight = 64 / Math.max(1, sectionRows.length);
+    // research progress weight — computed against the LIVE queue length, because
+    // spawned aspects (dzhng recursion) grow sectionRows mid-run
+    const researchWeight = () => 64 / Math.max(1, sectionRows.length);
     const maxRounds = job.depth > 0 ? job.depth : UNLIMITED_ROUND_CAP;
     const srcCap = job.maxSources > 0 ? job.maxSources : Infinity;
 
@@ -1101,6 +1119,59 @@ export async function runJob(jobId: string) {
     // Shared state (seenUrls, claims, learnings, source numbers) is safe in single-
     // threaded JS; the source cap can overshoot by a few reads across workers — a fair
     // trade for parallelism, noted here honestly.
+    //
+    // dzhng/deep-research RECURSION (learned from the reference repo): the plan is not
+    // a static tree — a reflection that uncovers an unexpected DISTINCT research thread
+    // can SPAWN it as a new aspect. Workers pick spawned aspects from the same queue;
+    // a spawned aspect gets half the parent's read budget (breadth/2 per depth level,
+    // dzhng's signature decay) and cannot spawn further (2-level tree, bounded).
+    const aspectSpawnLevel = new Map<string, number>(); // section id -> 0 (planned) | 1 (spawned)
+    const aspectReadCap = new Map<string, number>(); // section id -> per-round read budget
+    for (const r of sectionRows) {
+      aspectSpawnLevel.set(r.id, 0);
+      aspectReadCap.set(r.id, readCap);
+    }
+    const spawnedCount = { n: 0 };
+    const spawnCap = unlimited ? UNLIMITED_ASPECT_CAP : Math.min(job.breadth + 2, 14);
+    const spawnDirection = async (from: { title: string }, dir: { title: string; question: string; why: string }) => {
+      if (spawnedCount.n >= spawnCap || ctx.outOfTime || ctx.sourceN >= srcCap) return false;
+      const title = String(dir.title).trim().slice(0, 80);
+      const question = String(dir.question).trim().slice(0, 400);
+      if (!title || !question) return false;
+      // never spawn a near-duplicate of an existing aspect (title-similarity guard)
+      const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, "").split(/\s+/).filter((w) => w.length > 3);
+      const dirWords = new Set(norm(`${title} ${question}`));
+      for (const existing of sectionRows) {
+        const exWords = new Set(norm(`${existing.title} ${existing.question}`));
+        let inter = 0;
+        for (const w of dirWords) if (exWords.has(w)) inter++;
+        if (dirWords.size > 0 && exWords.size > 0 && inter / Math.min(dirWords.size, exWords.size) > 0.6) return false;
+      }
+      const row = await db.researchSection.create({
+        data: {
+          jobId,
+          order: sectionRows.length,
+          title,
+          question,
+          queries: JSON.stringify([question.slice(0, 120), `${title} explained`]),
+          status: "pending",
+        },
+      }).catch(() => null);
+      if (!row) return false;
+      sectionRows.push(row);
+      plan.aspects.push({ title, question, goal: `Spawned mid-research from “${from.title}”: ${String(dir.why || "").slice(0, 220)}` });
+      aspectSpawnLevel.set(row.id, 1);
+      aspectReadCap.set(row.id, Math.max(2, Math.ceil(readCap / 2))); // dzhng breadth decay
+      spawnedCount.n++;
+      await ctx.emit(
+        "spawned",
+        `New research thread opened: ${title}`,
+        `While researching “${from.title}”, the reflection uncovered a distinct direction that deserves its own searches — ${String(dir.why || "").slice(0, 300)} It joins the queue with half the read budget (${Math.max(2, Math.ceil(readCap / 2))} reads/round, dzhng-style breadth decay).`,
+        undefined,
+        { spawned: title, from: from.title, level: 1, aspectCount: sectionRows.length }
+      );
+      return true;
+    };
     let nextSi = 0;
     let aspectsDone = 0;
     let stopAll = false;
@@ -1123,7 +1194,9 @@ export async function runJob(jobId: string) {
         }
         const sec = sectionRows[si];
         const aspectT0 = Date.now();
-        await updateJob(jobId, { stage: `Researching: ${sec.title}`, progress: Math.round(8 + aspectsDone * researchWeight) });
+        const thisReadCap = aspectReadCap.get(sec.id) ?? readCap;
+        const canSpawnThis = (aspectSpawnLevel.get(sec.id) ?? 0) === 0 && spawnedCount.n < spawnCap;
+        await updateJob(jobId, { stage: `Researching: ${sec.title}`, progress: Math.round(8 + aspectsDone * researchWeight()) });
       const planAspect = plan.aspects[si];
       await ctx.emit("section", `Aspect ${si + 1}/${sectionRows.length}: ${sec.title}`, planAspect?.goal ? `${sec.question}\n\nGoal: ${planAspect.goal}` : sec.question);
       let queries: string[] = JSON.parse(sec.queries || "[]");
@@ -1140,7 +1213,7 @@ export async function runJob(jobId: string) {
         if (ctx.outOfTime) break;
         roundsDone = round;
         // dzhng breadth decay: each follow-up round goes narrower but deeper
-        const roundReadCap = Math.max(2, Math.ceil(readCap / round));
+        const roundReadCap = Math.max(2, Math.ceil(thisReadCap / round));
         if (round > 1) {
           await ctx.emit("info", `Round ${round} on “${sec.title}” — narrowing to ${roundReadCap} reads per pass (breadth decays as evidence accumulates)`, undefined, undefined, undefined, "verbose");
         }
@@ -1380,7 +1453,7 @@ export async function runJob(jobId: string) {
             .filter((l, i, arr) => arr.findIndex((x) => x.url === l.url) === i)
             .slice(0, 10);
           const reflRes = await ctx.llmLive(
-            [{ role: "user", content: reflectPrompt(sec.title, sec.question, notes, roundsLeft, linkCandidates, ctx.allLearnings) }],
+            [{ role: "user", content: reflectPrompt(sec.title, sec.question, notes, roundsLeft, linkCandidates, ctx.allLearnings, canSpawnThis) }],
             "reflect",
             `Self-reviewing: ${sec.title}`,
             { wantThinking: true }
@@ -1422,6 +1495,14 @@ export async function runJob(jobId: string) {
             await ctx.emit("contradiction", `Sources disagree: ${c.claim.slice(0, 80)}`, c.positions, reflRes.model, { ...c });
           }
           const followUps = (Array.isArray(refl?.followUps) ? refl.followUps : []) as { type?: string; value?: string; reason?: string }[];
+          // dzhng recursion: an unexpected DISTINCT research thread becomes its own aspect
+          if (canSpawnThis && Array.isArray(refl?.newDirections)) {
+            const dir = (refl.newDirections as { title?: unknown; question?: unknown; why?: unknown }[])
+              .filter((d) => typeof d?.title === "string" && typeof d?.question === "string" && String(d.title).trim().length > 3)
+              .map((d) => ({ title: String(d.title), question: String(d.question), why: String(d.why ?? "") }))
+              .slice(0, 1)[0];
+            if (dir) await spawnDirection(sec, dir); // fire-and-forget safe: workers pick it from sectionRows
+          }
           const searchFollowUps = followUps
             .filter((f) => f && (f.type ?? "search") === "search" && typeof f.value === "string" && f.value.trim().length > 2)
             .map((f) => String(f.value).trim())
@@ -1468,7 +1549,7 @@ export async function runJob(jobId: string) {
         ctx.aspectTimes.push(Date.now() - aspectT0);
         await ctx.emit("section", `“${sec.title}” researched`, `${roundsDone} round(s) of search → read → synthesize`, undefined, { done: sec.title });
         aspectsDone++;
-        await updateJob(jobId, { progress: Math.round(8 + aspectsDone * researchWeight) });
+        await updateJob(jobId, { progress: Math.round(8 + aspectsDone * researchWeight()) });
 
         // ---- HONEST LIVE CHECK-IN (parallelism-aware) ----
         const done = aspectsDone;
@@ -1793,6 +1874,155 @@ export async function runJob(jobId: string) {
       } catch { /* curation is an enhancement, never fatal */ }
     }
 
+    // ---------- STAGE 3.8: THE COURT (alexyc9381/court-skill, adapted) ----------
+    // The proposition goes on trial OVER the gathered evidence: prosecution builds the
+    // strongest honest case it fails, defense the strongest honest case it holds, each
+    // answers the other, a jury of 12 independent personas votes, the judge reads the
+    // verdict with conditions. Briefs must cite [n] — the trial is grounded in the same
+    // audited evidence as every digdeep report. Graceful degradation at every step:
+    // a trial that cannot run falls back to the standard report, honestly noted.
+    let court: CourtVerdict | null = null;
+    if (job.court && !ctx.outOfTime) {
+      await updateJob(jobId, { status: "critiquing", stage: "The trial — building the case", progress: 76 });
+      // the evidence record both sides argue from: every aspect's findings + the graded learnings
+      const courtSections = await db.researchSection.findMany({ where: { jobId }, orderBy: { order: "asc" } });
+      const evidenceRecord = [
+        ...courtSections.filter((s) => s.findings).map((s) => `### ${s.title}\n${s.findings!.slice(0, 4200)}`),
+        ...(ctx.allLearnings.length ? [`### Verified findings (evidence-graded)\n${ctx.allLearnings.slice(0, 24).map((l) => `- ${l}`).join("\n")}`] : []),
+        ...(ctx.contradictions.length ? [`### Points where sources disagree\n${ctx.contradictions.map((c) => `- ${c.claim} — ${c.positions}`).join("\n")}`] : []),
+        `### Source register (cite as [n])\n${sourcesUsed.slice(0, 40).map((s) => `[${s.n}] ${s.title} — ${s.domain}`).join("\n")}`,
+      ].join("\n\n").slice(0, 26_000);
+
+      // C1 + C2 — the two briefs (sequential: the docket reads prosecution first)
+      let prosecutionBrief = "";
+      let defenseBrief = "";
+      try {
+        const proRes = await ctx.llmLive(prosecutionPrompt(job.query, evidenceRecord, job.language), "court-prosecution", "The prosecution is building its case", { wantThinking: true, maxTokens: 1400 });
+        prosecutionBrief = proRes.text.trim();
+        await ctx.emit("court", "The prosecution rests", prosecutionBrief.slice(0, 1600), proRes.model, { phase: "prosecution" });
+      } catch (proErr) {
+        await ctx.emit("info", "The prosecution could not build its case (models unavailable) — the trial cannot proceed fairly", proErr instanceof Error ? proErr.message.slice(0, 200) : undefined);
+      }
+      if (prosecutionBrief) {
+        try {
+          const defRes = await ctx.llmLive(defensePrompt(job.query, evidenceRecord, job.language), "court-defense", "The defense is building its case", { wantThinking: true, maxTokens: 1400 });
+          defenseBrief = defRes.text.trim();
+          await ctx.emit("court", "The defense rests", defenseBrief.slice(0, 1600), defRes.model, { phase: "defense" });
+        } catch (defErr) {
+          await ctx.emit("info", "The defense could not build its case — a one-sided trial is no trial; the verdict will note this honestly", defErr instanceof Error ? defErr.message.slice(0, 200) : undefined);
+        }
+      }
+
+      // C3 — rebuttals (each side answers the other's strongest points, parallel)
+      let rebuttals: { by: "prosecution" | "defense"; text: string }[] = [];
+      if (prosecutionBrief && defenseBrief && !ctx.outOfTime) {
+        const [proReb, defReb] = await Promise.allSettled([
+          ctx.llm(rebuttalPrompt(job.query, "prosecution", prosecutionBrief, defenseBrief, evidenceRecord, job.language), "court-rebuttal", false, 500, { patient: false, timeoutMs: 60_000 }),
+          ctx.llm(rebuttalPrompt(job.query, "defense", defenseBrief, prosecutionBrief, evidenceRecord, job.language), "court-rebuttal", false, 500, { patient: false, timeoutMs: 60_000 }),
+        ]);
+        if (proReb.status === "fulfilled" && proReb.value.text.trim()) {
+          rebuttals.push({ by: "prosecution", text: proReb.value.text.trim() });
+          await ctx.emit("court", "Prosecution's rebuttal", proReb.value.text.trim().slice(0, 1200), proReb.value.model, { phase: "rebuttal", by: "prosecution" });
+        }
+        if (defReb.status === "fulfilled" && defReb.value.text.trim()) {
+          rebuttals.push({ by: "defense", text: defReb.value.text.trim() });
+          await ctx.emit("court", "Defense's rebuttal", defReb.value.text.trim().slice(0, 1200), defReb.value.model, { phase: "rebuttal", by: "defense" });
+        }
+      }
+
+      // C4 — the jury: 12 independent personas (6 on the quick preset, court-skill --quick)
+      const quickCourt = job.preset === "quick";
+      const jury = quickCourt ? JURORS.filter((_, i) => i % 2 === 0) : JURORS;
+      const rebuttalText = rebuttals.map((r) => `${r.by === "prosecution" ? "PROSECUTION" : "DEFENSE"}: ${r.text}`).join("\n\n") || "(no rebuttals)";
+      const jurorVotes: { name: string; lens: string; vote: "GUILTY" | "NOT GUILTY"; reason: string }[] = [];
+      if (prosecutionBrief && defenseBrief) {
+        await ctx.emit("court", `The jury is deliberating — ${jury.length} independent personas reading the record`, "Each juror sees the same evidence and briefs but votes through their own lens: the accountant, the first-time customer, the competitor, the retired judge, the statistician… The vote spread is the honest signal.", undefined, { phase: "jury", jurors: jury.length });
+        // bounded concurrency: 4 jurors vote at a time — 12 simultaneous calls would
+        // hammer the keyless chain into cooldown for every other step of the trial
+        const JUROR_CONCURRENCY = 4;
+        for (let i = 0; i < jury.length; i += JUROR_CONCURRENCY) {
+          if (ctx.outOfTime) break;
+          const batch = jury.slice(i, i + JUROR_CONCURRENCY);
+          const results = await Promise.allSettled(
+            batch.map((j) => ctx.llm(jurorPrompt(job.query, j, evidenceRecord, prosecutionBrief, defenseBrief, rebuttalText, job.language), "court-juror", false, 120, { patient: false, timeoutMs: 45_000 }))
+          );
+          results.forEach((r, k) => {
+            const juror = batch[k];
+            if (r.status === "fulfilled") {
+              const v = extractJson(r.value.text);
+              const vote = String(v?.vote).toUpperCase() === "GUILTY" ? "GUILTY" : "NOT GUILTY";
+              const reason = String(v?.reason || r.value.text).slice(0, 240).trim() || "(no reason given)";
+              jurorVotes.push({ name: juror.name, lens: juror.lens, vote, reason });
+              ctx.emit("court", `Juror voted ${vote} — ${juror.name}`, reason, r.value.model, { phase: "juror", juror: juror.name, vote, reason }).catch(() => {});
+            } else {
+              ctx.emit("info", `${juror.name} could not vote (model unavailable) — the verdict proceeds with ${jury.length - 1 - jurorVotes.length} juror(s)`, undefined, undefined, undefined, "verbose").catch(() => {});
+            }
+          });
+        }
+        const guilty = jurorVotes.filter((v) => v.vote === "GUILTY").length;
+        const notGuilty = jurorVotes.length - guilty;
+        if (jurorVotes.length > 0) {
+          await ctx.emit("court", `The jury has voted: ${guilty} guilty · ${notGuilty} not guilty`, `${jurorVotes.length} of ${jury.length} jurors returned a verdict${jurorVotes.length < jury.length ? " — the missing votes are noted honestly, not invented" : ""}.`, undefined, { phase: "votes", guilty, notGuilty, returned: jurorVotes.length, expected: jury.length });
+        }
+
+        // C5 — the judge reads the verdict (charges that stuck, defense wins, conditions)
+        if (jurorVotes.length > 0 && !ctx.outOfTime) {
+          let judge: { chargesStuck?: string[]; defenseWins?: string[]; conditions?: string[]; summary?: string } | null = null;
+          try {
+            const judgeRes = await ctx.llm(judgePrompt(job.query, evidenceRecord, prosecutionBrief, defenseBrief, rebuttalText, jurorVotes, job.language), "court-judge", false, 800, { patient: false, timeoutMs: 60_000 });
+            judge = extractJson(judgeRes.text);
+            if (judge?.summary) {
+              await ctx.emit("court", "The judge reads the verdict", String(judge.summary).slice(0, 1200), judgeRes.model, { phase: "judge", ...judge });
+            }
+          } catch (judgeErr) {
+            await ctx.emit("info", "The judge could not read the verdict — the raw vote stands without commentary", judgeErr instanceof Error ? judgeErr.message.slice(0, 160) : undefined);
+          }
+          const verdict: CourtVerdict = {
+            charge: job.query.slice(0, 600),
+            verdict: guilty > notGuilty ? "GUILTY" : "NOT GUILTY",
+            guilty,
+            notGuilty,
+            jurors: jurorVotes,
+            prosecutionBrief,
+            defenseBrief,
+            rebuttals,
+            chargesStuck: (judge?.chargesStuck ?? []).map((c) => String(c).slice(0, 300)).slice(0, 5),
+            defenseWins: (judge?.defenseWins ?? []).map((c) => String(c).slice(0, 300)).slice(0, 5),
+            conditions: (judge?.conditions ?? []).map((c) => String(c).slice(0, 300)).slice(0, 6),
+            judgeSummary: String(judge?.summary ?? `The jury voted ${guilty} to ${notGuilty}.`).slice(0, 800),
+            quick: quickCourt,
+          };
+          court = verdict;
+          await ctx.emit(
+            "court",
+            `VERDICT: ${verdict.verdict} — ${guilty} to ${notGuilty}`,
+            `${verdict.judgeSummary}${verdict.conditions.length ? `\n\nWhat to change before trying again:\n${verdict.conditions.map((c) => `• ${c}`).join("\n")}` : ""}`,
+            undefined,
+            { phase: "verdict", verdict: verdict.verdict, guilty, notGuilty }
+          );
+        }
+      }
+      if (!court && prosecutionBrief) {
+        // partial trial (defense or jury failed) — keep what exists, honestly
+        court = {
+          charge: job.query.slice(0, 600),
+          verdict: "NOT GUILTY",
+          guilty: 0,
+          notGuilty: 0,
+          jurors: [],
+          prosecutionBrief,
+          defenseBrief,
+          rebuttals,
+          chargesStuck: [],
+          defenseWins: [],
+          conditions: [],
+          judgeSummary: "The trial could not complete — one or more parties (defense, jury, or judge) were unavailable under model throttling. The briefs are published; no verdict was rendered, and none is invented.",
+          quick: quickCourt,
+        };
+        await ctx.emit("info", "The trial is incomplete — briefs published, verdict withheld", "Honesty over theater: without both sides and a jury there is no verdict. Re-run when the free models are less throttled, or add an LLM7 key in settings.");
+      }
+    }
+
     // ---------- STAGE 4: SYNTHESIS ----------
     if (await ctx.isCancelled()) throw new Cancelled();
 
@@ -1858,7 +2088,7 @@ export async function runJob(jobId: string) {
         // the report being typed, one section at a time. Bounded by the hard clock: a
         // stalled draft falls back to findings instead of freezing the whole report.
         const draftRes = await ctx.llmLive(
-          [{ role: "user", content: draftSectionPrompt(job.query, sec.title, sec.question, sec.findings ?? "(no findings — rely on general knowledge and clearly mark it as background)", srcs, words, job.language, evidenceNotesFor(sec.title), adversarialNotesFor(sec.title)) }],
+          [{ role: "user", content: draftSectionPrompt(job.query, sec.title, sec.question, sec.findings ?? "(no findings — rely on general knowledge and clearly mark it as background)", srcs, words, job.language, evidenceNotesFor(sec.title), adversarialNotesFor(sec.title), ctx.allLearnings) }],
           "draft",
           `Writing: ${sec.title}`,
           { streamTo: sec.id, fast: { patient: false, timeoutMs: Math.min(60_000, Math.max(20_000, ctx.hardLeft - 15_000)) } }
@@ -2021,24 +2251,42 @@ export async function runJob(jobId: string) {
       }
     }
     await updateJob(jobId, { stage: "Writing executive summary & conclusion", progress: 95 });
+    // Court runs: the verdict IS the executive summary and the judge's instructions are
+    // the conclusion — no LLM calls needed for either (instant, honest, already graded).
+    const courtExecMd = court
+      ? [
+          `**VERDICT: ${court.verdict} — ${court.guilty} to ${court.notGuilty}${court.jurors.length ? ` (${court.jurors.length} jurors returned)` : " (jury unavailable)"}.** ${court.judgeSummary}`,
+          ...(court.chargesStuck.length ? [``, `**Charges that stuck:**`, ...court.chargesStuck.map((c) => `- ${c}`)] : []),
+          ...(court.defenseWins.length ? [``, `**What the defense established:**`, ...court.defenseWins.map((c) => `- ${c}`)] : []),
+          ...(court.conditions.length ? [``, `**What to change before trying again:**`, ...court.conditions.map((c) => `- ${c}`)] : []),
+        ].join("\n")
+      : "";
     const [execR, concR, titleR, relatedR] = await Promise.allSettled([
       // bounded: on a capped serverless run the tail must not ride patient cooldown
       // waits — a missed summary degrades honestly, a frozen function loses the report.
       // Clamped to the hard clock so even a late-starting tail still persists.
-      ctx.llm([{ role: "user", content: execSummaryPrompt(job.query, drafts, job.language, job.preset) }], "exec-summary", false, undefined, { patient: false, timeoutMs: Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
-      ctx.llm([{ role: "user", content: conclusionPrompt(job.query, drafts, job.language) }], "conclusion", false, undefined, { patient: false, timeoutMs: Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
+      court
+        ? Promise.resolve({ text: "", model: "", backendId: "court", latencyMs: 0 } as LlmResult)
+        : ctx.llm([{ role: "user", content: execSummaryPrompt(job.query, drafts, job.language, job.preset, ctx.allLearnings) }], "exec-summary", false, undefined, { patient: false, timeoutMs: Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
+      court
+        ? Promise.resolve({ text: "", model: "", backendId: "court", latencyMs: 0 } as LlmResult)
+        : ctx.llm([{ role: "user", content: conclusionPrompt(job.query, drafts, job.language) }], "conclusion", false, undefined, { patient: false, timeoutMs: Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
       ctx.llm([{ role: "user", content: titlePrompt(job.query, plan.restate, job.language) }], "title", false, 60, { patient: false, timeoutMs: Math.min(60_000, Math.max(10_000, ctx.hardLeft - 20_000)) }),
       ctx.llm([{ role: "user", content: relatedPrompt(job.query, finalSections.map((s) => s.title), job.language) }], "related", false, 300, { patient: false, timeoutMs: Math.min(60_000, Math.max(10_000, ctx.hardLeft - 20_000)) }),
     ]);
-    const execText = execR.status === "fulfilled" ? execR.value.text : "*(Executive summary unavailable — LLM backends were exhausted; see section content below.)*";
-    const concText = concR.status === "fulfilled" ? concR.value.text : "";
+    const execText = court
+      ? courtExecMd
+      : execR.status === "fulfilled"
+        ? execR.value.text
+        : "*(Executive summary unavailable — LLM backends were exhausted; see section content below.)*";
+    const concText = court ? "" : concR.status === "fulfilled" ? concR.value.text : "";
     const titleText = titleR.status === "fulfilled" ? titleR.value.text : job.query.slice(0, 80);
     const relatedQuestions =
       relatedR.status === "fulfilled" ? (extractJsonArray(relatedR.value.text) ?? fallbackRelated(job.query, finalSections.map((s) => s.question))) : fallbackRelated(job.query, finalSections.map((s) => s.question));
-    if (execR.status === "rejected") await ctx.emit("info", "Executive summary step failed — continuing with sections", String(execR.reason ?? "").slice(0, 300));
-    if (concR.status === "rejected") await ctx.emit("info", "Conclusion step failed — continuing without it", String(concR.reason ?? "").slice(0, 300));
-    await ctx.emit("draft", "Executive summary written", execText.slice(0, 400), execR.status === "fulfilled" ? execR.value.model : undefined);
-    if (concText) await ctx.emit("draft", "Conclusion written", concText.slice(0, 400), concR.status === "fulfilled" ? concR.value.model : undefined);
+    if (!court && execR.status === "rejected") await ctx.emit("info", "Executive summary step failed — continuing with sections", String(execR.reason ?? "").slice(0, 300));
+    if (!court && concR.status === "rejected") await ctx.emit("info", "Conclusion step failed — continuing without it", String(concR.reason ?? "").slice(0, 300));
+    await ctx.emit("draft", court ? "Verdict summary written (from the trial itself)" : "Executive summary written", execText.slice(0, 400), !court && execR.status === "fulfilled" ? execR.value.model : undefined);
+    if (!court && concText) await ctx.emit("draft", "Conclusion written", concText.slice(0, 400), concR.status === "fulfilled" ? concR.value.model : undefined);
 
     // ---------- "WHERE SOURCES DISAGREE" — the honest-disagreement section ----------
     // (beyond Perplexity: contested and cross-check-refuted claims are surfaced in the
@@ -2120,6 +2368,53 @@ export async function runJob(jobId: string) {
     const body = finalSections
       .map((s, i) => `## ${i + 1}. ${s.title}\n\n${(s.draftMd || "").replace(/\[(\d+)\]/g, (_, d) => `[${remap[Number(d)] ?? d}]`)}`)
       .join("\n\n");
+    // ---- court sections: the trial record, placed ahead of the evidence body ----
+    // (briefs carry [n] citations in the engine's numbering — remapped exactly like the drafts)
+    const remapCites = (md: string) => md.replace(/\[(\d+)\]/g, (_, d) => `[${remap[Number(d)] ?? d}]`);
+    const courtSectionsMd = court
+      ? [
+          `## The Prosecution's Case`,
+          ``,
+          remapCites(court.prosecutionBrief),
+          ``,
+          `## The Defense's Case`,
+          ``,
+          remapCites(court.defenseBrief || "*(The defense could not build its case — model backends were unavailable.)*"),
+          ``,
+          ...(court.rebuttals.length
+            ? [
+                `## Rebuttals`,
+                ``,
+                ...court.rebuttals.flatMap((r) => [`**${r.by === "prosecution" ? "The prosecution answers" : "The defense answers"}**`, ``, remapCites(r.text), ``]),
+              ]
+            : []),
+          ...(court.jurors.length
+            ? [
+                `## The Jury`,
+                ``,
+                `| Juror | Vote | What decided them |`,
+                `| --- | --- | --- |`,
+                ...court.jurors.map((j) => `| ${j.name} | **${j.vote}** | ${j.reason.replace(/\|/g, "/")} |`),
+                ``,
+                `*Each juror read the same record through a different lens — the vote spread, not any single opinion, is the signal (${court.guilty} guilty · ${court.notGuilty} not guilty). ${court.quick ? "Quick trial: 6 jurors." : "Full jury: 12 personas."}*`,
+                ``,
+              ]
+            : []),
+          ...(court.chargesStuck.length || court.defenseWins.length || court.conditions.length
+            ? [
+                `## The Judge's Instructions`,
+                ``,
+                ...(court.chargesStuck.length ? [`**Charges that stuck** — the defense never answered these:`, ``, ...court.chargesStuck.map((c) => `- ${c}`), ``] : []),
+                ...(court.defenseWins.length ? [`**What the defense established** — the prosecution failed to break these:`, ``, ...court.defenseWins.map((c) => `- ${c}`), ``] : []),
+                ...(court.conditions.length ? [`**Conditions — what to change before trying again:**`, ``, ...court.conditions.map((c) => `- ${c}`), ``] : []),
+              ]
+            : []),
+          `## The Evidence Record`,
+          ``,
+          `*The research below is the evidence the trial argued from — gathered by the standard deep-research pipeline, cited [n], and audited like every digdeep report.*`,
+          ``,
+        ]
+      : [];
     let reportMd = [
       `# ${titleText.replace(/["'`#]/g, "").trim()}`,
       ``,
@@ -2127,6 +2422,7 @@ export async function runJob(jobId: string) {
       ``,
       execText,
       ``,
+      ...(court ? courtSectionsMd : []),
       body,
       ``,
       ...(concText ? [`## Conclusion`, ``, concText, ``] : []),
@@ -2136,7 +2432,7 @@ export async function runJob(jobId: string) {
       refs || "*(no sources were successfully retrieved)*",
       ``,
       `---`,
-      `**Research metadata** — Duration: ${Math.round(durationMs / 1000)}s · Sources consulted: ${refList.length} · Report words: ~${reportWords} · LLM calls: ${ctx.llmCalls} · Models: ${modelsUsed.join(", ")} · Preset: ${job.preset} · Citation integrity: ${citeStats.integrity}%`,
+      `**Research metadata** — Duration: ${Math.round(durationMs / 1000)}s · Sources consulted: ${refList.length} · Report words: ~${reportWords} · LLM calls: ${ctx.llmCalls} · Models: ${modelsUsed.join(", ")} · Preset: ${job.preset} · Citation integrity: ${citeStats.integrity}%${court ? ` · Trial verdict: ${court.verdict} (${court.guilty}–${court.notGuilty})` : ""}`,
     ].join("\n");
 
     // ---------- MONITORING DIFF DIGEST (P2-2) ----------
@@ -2243,6 +2539,8 @@ export async function runJob(jobId: string) {
       ...(claimVerdict ? { claimVerdict } : {}),
       reranked: ctx.rerankRuns,
       parallelAspects: concurrency,
+      spawnedAspects: spawnedCount.n,
+      ...(court ? { court } : {}),
       redTeamAttacks: redTeamAttacks.length,
       debated,
       docsUsed: docEntries.length,
@@ -2252,7 +2550,15 @@ export async function runJob(jobId: string) {
       finishedAt: new Date().toISOString(),
     };
     await updateJob(jobId, { status: "completed", stage: "Completed", progress: 100, reportMd, stats: JSON.stringify(stats), completedAt: new Date() });
-    await ctx.emit("done", "Research complete", `Report ready — ${sourcesUsed.length} sources, ~${reportWords.toLocaleString()} words, ${ctx.llmCalls} LLM calls, ${fmtMin(durationMs)} total${quality ? `, self-scored ${quality.overall}/10` : ""}${citeStats.integrity < 100 ? `, citation integrity ${citeStats.integrity}%` : " with verified citations"}`, undefined, stats);
+    await ctx.emit(
+      "done",
+      court ? `The trial is over — ${court.verdict}, ${court.guilty} to ${court.notGuilty}` : "Research complete",
+      court
+        ? `Verdict delivered — ${sourcesUsed.length} sources, ${court.jurors.length} jurors voted, ${ctx.llmCalls} LLM calls, ${fmtMin(durationMs)} total${court.conditions.length ? `. What to change before trying again: ${court.conditions[0].slice(0, 140)}${court.conditions.length > 1 ? "…" : ""}` : ""}`
+        : `Report ready — ${sourcesUsed.length} sources, ~${reportWords.toLocaleString()} words, ${ctx.llmCalls} LLM calls, ${fmtMin(durationMs)} total${quality ? `, self-scored ${quality.overall}/10` : ""}${citeStats.integrity < 100 ? `, citation integrity ${citeStats.integrity}%` : " with verified citations"}${spawnedCount.n > 0 ? `, ${spawnedCount.n} aspect${spawnedCount.n > 1 ? "s" : ""} spawned mid-research (recursive deep-dive)` : ""}`,
+      undefined,
+      stats
+    );
   } catch (err) {
     if (err instanceof Cancelled) {
       await updateJob(jobId, { status: "cancelled", stage: "Cancelled", completedAt: new Date() }).catch(() => {});

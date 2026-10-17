@@ -44,6 +44,7 @@ export async function POST(req: NextRequest) {
         query: query.slice(0, 600),
         threadId: typeof body.threadId === "string" && body.threadId.length > 0 ? body.threadId : null,
         preset,
+        court: body.court === true,
         language: ["English", "Arabic", "Chinese", "Spanish", "French", "German", "Auto-match topic"].includes(body.language) ? body.language : "English",
         modelPref: ["auto", "glm", "pool"].includes(body.modelPref) ? body.modelPref : "auto",
         breadth: body.breadth != null ? clamp(body.breadth, 1, 50, p.breadth) : p.breadth,
@@ -71,7 +72,7 @@ export async function GET(req: NextRequest) {
       const jobs = await db.researchJob.findMany({
         where: { threadId },
         orderBy: { createdAt: "asc" },
-        select: { id: true, query: true, status: true, stage: true, progress: true, preset: true, mode: true, createdAt: true, completedAt: true, modelPref: true, language: true },
+        select: { id: true, query: true, status: true, stage: true, progress: true, preset: true, mode: true, court: true, createdAt: true, completedAt: true, modelPref: true, language: true },
       });
       return NextResponse.json({ jobs, threadId });
     }

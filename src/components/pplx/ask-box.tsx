@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, ChevronDown, FileText, Gauge, Infinity as InfinityIcon, Loader2, Paperclip, Plus, Settings2, Square, X, BrainCircuit } from "lucide-react";
+import { ArrowUp, ChevronDown, FileText, Gavel, Gauge, Infinity as InfinityIcon, Loader2, Paperclip, Plus, Settings2, Square, X, BrainCircuit } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Slider } from "@/components/ui/slider";
@@ -96,6 +96,7 @@ export function AskBox({
   placeholder = "Ask anything…",
   mode, onMode, adv, advTouched, onAdv, language, onLanguage, modelPref, onModelPref,
   showThinking, onShowThinking, onManagePool, stopMode = false, onStop, stopping = false,
+  court = false, onCourt,
   docs, onDocs, inputId, placeholderStream,
 }: {
   value: string;
@@ -116,6 +117,8 @@ export function AskBox({
   onModelPref: (m: "auto" | "glm" | "pool") => void;
   showThinking: boolean;
   onShowThinking: (b: boolean) => void;
+  court?: boolean;
+  onCourt?: (b: boolean) => void;
   onManagePool: () => void;
   stopMode?: boolean;
   onStop?: () => void;
@@ -293,7 +296,7 @@ export function AskBox({
                 <SectionLabel>LLM backend — keyless</SectionLabel>
                 <div className="space-y-1">
                   {([
-                    ["auto", "Auto", "z.ai GLM → LLM7 (GLM-5.3 · DeepSeek-V4 · MiniMax · gpt-oss) → Pollinations"],
+                    ["auto", "Auto", "z.ai GLM → LLM7 (GLM-5.3 · DeepSeek-V4 · Nemotron-1M · MiniMax · Mistral · gpt-oss) → Pollinations"],
                     ["glm", "z.ai GLM", "z.ai SDK lane — always free, no key"],
                     ["pool", "Keyless pool only", "LLM7 multi-model / Pollinations / your endpoints"],
                   ] as const).map(([id, label, desc]) => (
@@ -355,6 +358,35 @@ export function AskBox({
         </Popover>
 
         <div className="ml-auto flex items-center gap-1.5">
+          {/* court mode — put the idea on trial: prosecutor vs defense, jury of 12, judge */}
+          {onCourt && (
+            <button
+              className={`press-scale hidden h-9 items-center gap-1.5 rounded-full border px-3 text-[13px] font-medium transition-colors sm:flex ${
+                court
+                  ? "border-primary/45 bg-primary/10 text-primary"
+                  : "border-transparent text-muted-foreground hover:bg-accent hover:text-foreground"
+              }`}
+              onClick={() => onCourt(!court)}
+              aria-pressed={court}
+              aria-label="Court mode — put the idea on trial"
+              title="Court mode — the proposition gets a prosecutor, a defense, a jury of 12 and a judge, over real cited evidence"
+            >
+              <Gavel className="h-4 w-4" />
+              Court
+            </button>
+          )}
+          {onCourt && (
+            <button
+              className={`press-scale flex h-11 w-11 items-center justify-center rounded-full transition-colors sm:hidden sm:h-9 sm:w-9 ${
+                court ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-accent hover:text-foreground"
+              }`}
+              onClick={() => onCourt(!court)}
+              aria-pressed={court}
+              aria-label="Court mode"
+            >
+              <Gavel className="h-[18px] w-[18px]" />
+            </button>
+          )}
           {/* depth selector — labeled pill on sm+, icon button on phones so the
               mode is always reachable from the composer */}
           <DropdownMenu>

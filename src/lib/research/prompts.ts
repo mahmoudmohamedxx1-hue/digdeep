@@ -169,7 +169,8 @@ export function planPrompt(
   language: string,
   threadContext?: string,
   initialSnippets?: string,
-  comprehension?: string
+  comprehension?: string,
+  court?: boolean
 ): string {
   const breadthRule =
     breadth > 0
@@ -184,10 +185,13 @@ export function planPrompt(
   const comp = comprehension
     ? `\nA comprehension pass on the request already established:\n"""\n${comprehension.slice(0, 2200)}\n"""\nThe plan MUST deliver the intent and pass the success criteria listed there, and should resolve the ambiguities it flagged.\n`
     : "";
+  const courtBlock = court
+    ? `\nTHIS IS A COURT RUN: the proposition above goes ON TRIAL after the evidence is gathered. The plan must gather evidence BOTH WAYS — evidence that supports the proposition AND evidence against it. Cover: has anything like this worked before (track record, base rates, named examples); who tried it and failed, and why; what it costs, who pays, and when cash runs out; who competes and how they respond; the specific assumptions the proposition rests on and whether the record confirms or breaks each one; regulatory/legal/safety exposure; and honest success/failure statistics for plans of this kind. The briefs a prosecutor and a defender write from your findings must never be able to complain the record is one-sided.\n`
+    : "";
   return `A user wants an exhaustive, well-cited research report on:
 
 "${query}"
-${comp}${context}${scout}
+${comp}${context}${scout}${courtBlock}
 Design a research plan. THINK FROM KNOWLEDGE FIRST: state what you already confidently know about this topic, then aim the research at what is genuinely uncertain, fast-changing, or contested.
 
 Respond with ONLY valid JSON (no markdown fences, no commentary) with this exact shape:
@@ -262,7 +266,10 @@ Rewrite the search queries so a real domain expert would run them. Rules:
 Respond with ONLY a valid JSON array of query strings (no fences).`;
 }
 
-/** Reflect v3 — dual critic (WebWalker) + EVIDENCE-GRADED learnings + contradiction detection.
+/** Reflect v4 — dual critic (WebWalker) + EVIDENCE-GRADED learnings + contradiction
+ *  detection + NEW-DIRECTION spawning (dzhng/deep-research recursion): when a round
+ *  uncovers an unexpected direction that deserves its OWN research thread — wider than
+ *  a follow-up query inside this aspect — the reflection can spawn it as a new aspect.
  *  Grading: verified (multiple independent sources) / likely (one strong primary source) /
  *  single-source (one source, unconfirmed) / contested (sources disagree). */
 export function reflectPrompt(
@@ -271,7 +278,8 @@ export function reflectPrompt(
   notes: string,
   depthLeft: number | "unlimited",
   linkCandidates?: { url: string; text: string }[],
-  priorLearnings?: string[]
+  priorLearnings?: string[],
+  canSpawn?: boolean
 ): string {
   const budget =
     depthLeft === "unlimited"
@@ -306,9 +314,16 @@ Self-critique the evidence HONESTLY — do not flatter the work. Then distill wh
   "followUps": [
     {"type": "search", "value": "a new web search query", "reason": "which gap this targets"},
     {"type": "walk", "value": "one of the candidate URLs (or a URL seen in the notes) worth visiting directly", "reason": "why visiting this page beats another search"}
+  ],
+  "newDirections": [
+    {"title": "short aspect name (2-5 words)", "question": "the research question this NEW aspect should answer", "why": "one sentence: what this round uncovered that is bigger than a follow-up query — a distinct thread worth its own searches"}
   ]
 }
-Grading rules: "verified" needs agreement from 2+ INDEPENDENT domains in the notes; "likely" = one authoritative primary source; "single-source" = one source alone, unconfirmed; "contested" = sources genuinely disagree (and then also list it under contradictions). followUps: 0-3 max, mix search and walk as genuinely useful, empty if sufficient. Learnings may be empty if nothing new was nailed down.`;
+Grading rules: "verified" needs agreement from 2+ INDEPENDENT domains in the notes; "likely" = one authoritative primary source; "single-source" = one source alone, unconfirmed; "contested" = sources genuinely disagree (and then also list it under contradictions). followUps: 0-3 max, mix search and walk as genuinely useful, empty if sufficient. Learnings may be empty if nothing new was nailed down.${
+    canSpawn
+      ? "\nnewDirections: only when this round genuinely opened an unexpected DISTINCT research thread (e.g. a named competitor technology, a newly-relevant regulation, a surprising mechanism) that the current aspect's question does not cover — max 1, empty otherwise. Never use it to rephrase the current aspect."
+      : ""
+  }`;
 }
 
 /** Cross-verification of a load-bearing claim — a fresh evidence check against NEW sources
@@ -564,9 +579,13 @@ export function draftSectionPrompt(
   words: [number, number],
   language: string,
   evidenceNotes?: string,
-  adversarialNotes?: string
+  adversarialNotes?: string,
+  crossLearnings?: string[]
 ): string {
   const refs = sources.map((s) => `[${s.n}] ${s.title} — ${s.domain} (${s.url})`).join("\n");
+  const cross = (crossLearnings ?? []).length
+    ? `\nFindings nailed down in OTHER aspects of this same report (verified across sources — you may rely on them as established, citing this section's own sources where they overlap):\n${(crossLearnings ?? []).slice(0, 14).map((l) => `- ${l}`).join("\n")}\n`
+    : "";
   const evid = evidenceNotes
     ? `\nEvidence-strength notes for claims in this section (from the reflection pass — reflect them in how confidently you state each claim):\n"""\n${evidenceNotes.slice(0, 1800)}\n"""\nState verified claims plainly. For single-source or contested claims, say so inline ("one source reports…", "sources disagree on…") instead of asserting them as settled.\n`
     : "";
@@ -580,7 +599,7 @@ Research question: "${question}"
 
 Accumulated verified findings:
 ${findings.slice(0, 9000)}
-${evid}${adv}
+${cross}${evid}${adv}
 Sources available for citation (use ONLY these numbers):
 ${refs}
 
@@ -593,9 +612,12 @@ Write the section body in ${language}:
 - Do NOT write a reference list — only cite with [n].`;
 }
 
-export function execSummaryPrompt(query: string, drafts: string, language: string, preset: string): string {
+export function execSummaryPrompt(query: string, drafts: string, language: string, preset: string, learnings?: string[]): string {
+  const learned = (learnings ?? []).length
+    ? `\nDense findings verified across the whole research (each is already evidence-graded — reflect them in the summary's key findings):\n${(learnings ?? []).slice(0, 16).map((l) => `- ${l}`).join("\n")}\n`
+    : "";
   return `Research report on: "${query}"
-
+${learned}
 Section drafts (in order):
 ${drafts.slice(0, 14000)}
 

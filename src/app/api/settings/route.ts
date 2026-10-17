@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { getPoolEndpoints, invalidateEndpointsCache, getBackendHealthSnapshot, type PoolEndpoint } from "@/lib/research/llm";
+import { getPoolEndpoints, invalidateEndpointsCache, invalidateLlm7KeyCache, getBackendHealthSnapshot, type PoolEndpoint } from "@/lib/research/llm";
 import { getSearchSettings, invalidateSearchSettingsCache, type SearchSettings } from "@/lib/research/search";
 
 export const dynamic = "force-dynamic";
@@ -14,6 +14,11 @@ function maskEndpoint(e: PoolEndpoint) {
 export async function GET() {
   const endpoints = (await getPoolEndpoints(true)).map(maskEndpoint);
   const ss = await getSearchSettings(true);
+  const llm7KeyRow = await db.setting.findUnique({ where: { key: "llm7_key" } });
+  let hasLlm7Key = false;
+  try {
+    hasLlm7Key = !!llm7KeyRow && !!JSON.parse(llm7KeyRow.value);
+  } catch { hasLlm7Key = false; }
   const searchSettings: SearchSettings & { hasBraveKey: boolean; hasGoogleKey: boolean } = {
     ...ss,
     braveKey: undefined,
@@ -21,7 +26,7 @@ export async function GET() {
     hasBraveKey: !!ss.braveKey,
     hasGoogleKey: !!ss.googleCseKey,
   };
-  return NextResponse.json({ endpoints, health: getBackendHealthSnapshot(), searchSettings, glm: { id: "glm-flash", label: "GLM-4.5-Flash", model: "GLM-4.5-Flash", enabled: true } });
+  return NextResponse.json({ endpoints, health: getBackendHealthSnapshot(), searchSettings, hasLlm7Key, glm: { id: "glm-flash", label: "GLM-4.5-Flash", model: "GLM-4.5-Flash", enabled: true } });
 }
 
 export async function POST(req: NextRequest) {
@@ -72,6 +77,16 @@ export async function POST(req: NextRequest) {
       await db.setting.upsert({ where: { key: "pool_endpoints" }, update: { value: JSON.stringify(clean) }, create: { key: "pool_endpoints", value: JSON.stringify(clean) } });
       invalidateEndpointsCache();
       return NextResponse.json({ ok: true, endpoints: clean.map(maskEndpoint) });
+    }
+    if (body.action === "save-llm7-key") {
+      // key semantics: string with content = set; "" = remove; absent = keep
+      const row = await db.setting.findUnique({ where: { key: "llm7_key" } });
+      const prev = row ? (() => { try { return JSON.parse(row.value); } catch { return ""; } })() : "";
+      const key = typeof body.key === "string" ? body.key.trim() : String(prev ?? "");
+      await db.setting.upsert({ where: { key: "llm7_key" }, update: { value: JSON.stringify(key) }, create: { key: "llm7_key", value: JSON.stringify(key) } });
+      invalidateLlm7KeyCache();
+      invalidateEndpointsCache();
+      return NextResponse.json({ ok: true, hasLlm7Key: !!key });
     }
     if (body.action === "save-search") {
       const ss = await getSearchSettings(true);

@@ -18,6 +18,7 @@ interface SettingsState {
   adv: AdvParams;
   advTouched: boolean;
   showThinking: boolean;
+  court: boolean;
   sidebarOpen: boolean;
 
   applyMode: (m: string) => void;
@@ -26,6 +27,7 @@ interface SettingsState {
   setLanguage: (l: string) => void;
   setModelPref: (m: "auto" | "glm" | "pool") => void;
   setShowThinking: (b: boolean) => void;
+  setCourt: (b: boolean) => void;
   setSidebarOpen: (b: boolean) => void;
   toggleSidebar: () => void;
 }
@@ -39,6 +41,7 @@ export const useSettings = create<SettingsState>()(
       adv: { ...MODE_PARAMS.standard },
       advTouched: false,
       showThinking: true,
+      court: false,
       sidebarOpen: true,
 
       applyMode: (m) =>
@@ -48,6 +51,7 @@ export const useSettings = create<SettingsState>()(
       setLanguage: (l) => set({ language: l }),
       setModelPref: (m) => set({ modelPref: m }),
       setShowThinking: (b) => set({ showThinking: b }),
+      setCourt: (b) => set({ court: b }),
       setSidebarOpen: (b) => set({ sidebarOpen: b }),
       toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
     }),
@@ -76,6 +80,7 @@ export const useSettings = create<SettingsState>()(
         adv: s.adv,
         advTouched: s.advTouched,
         showThinking: s.showThinking,
+        court: s.court,
       }),
     }
   )

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import {
-  BadgeCheck, Check, ChevronDown, Clock, Globe2, Scale, Swords,
+  BadgeCheck, Check, ChevronDown, Clock, Gavel, Globe2, Scale, Swords,
   MessagesSquare, XCircle, ArrowLeftRight,
 } from "lucide-react";
 import type { JobItem } from "@/components/research/types";
@@ -239,6 +239,14 @@ export function VerdictStrip({ job }: { job: JobItem }) {
           <Scale className="h-3.5 w-3.5 text-primary/80" aria-hidden />
           Verdict
         </span>
+        {stats.court && (
+          <Cell
+            icon={<Gavel className="h-3.5 w-3.5" aria-hidden />}
+            label="trial verdict"
+            value={<>{stats.court.verdict}{stats.court.jurors.length > 0 ? ` ${stats.court.guilty}–${stats.court.notGuilty}` : ""}</>}
+            toneCls={stats.court.verdict === "GUILTY" ? "text-[#c4261e] dark:text-[#ff6961]" : "text-[#1e7a33] dark:text-[#4ade80]"}
+          />
+        )}
         {integrity != null && (
           <Cell
             icon={<BadgeCheck className="h-3.5 w-3.5" aria-hidden />}

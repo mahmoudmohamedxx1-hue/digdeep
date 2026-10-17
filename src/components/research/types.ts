@@ -44,6 +44,7 @@ export interface JobItem {
   progress: number;
   preset: string;
   mode?: string; // chat | quick | research — how this turn was answered
+  court?: boolean; // this turn was a trial: prosecutor + defense + jury + judge
   language: string;
   modelPref: string;
   breadth: number;
@@ -76,6 +77,21 @@ export interface JobItem {
     citationsChecked?: number;
     citationsRepaired?: number;
     citationsDropped?: number;
+    /** aspects spawned mid-research by the reflection (dzhng recursive deep-dive) */
+    spawnedAspects?: number;
+    /** the trial verdict, when this run was a court run */
+    court?: {
+      charge: string;
+      verdict: "GUILTY" | "NOT GUILTY";
+      guilty: number;
+      notGuilty: number;
+      jurors: { name: string; lens: string; vote: "GUILTY" | "NOT GUILTY"; reason: string }[];
+      chargesStuck: string[];
+      defenseWins: string[];
+      conditions: string[];
+      judgeSummary: string;
+      quick: boolean;
+    };
     /** per-citation audit trail — which sources received re-anchored citations,
      *  which citation numbers were dropped as unsupported, which were flagged weak */
     citationAudit?: { reanchoredTo?: number[]; dropped?: number[]; flagged?: number[] };

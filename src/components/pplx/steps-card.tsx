@@ -3,9 +3,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle, ArrowDownWideNarrow, BadgeCheck, Bot, Brain, CheckCircle2, ChevronDown,
-  Clock, FileText, FlaskConical, Footprints, Gauge, GitCompare, Info, Lightbulb,
-  ListChecks, Loader2, MessagesSquare, PenLine, PieChart, Scale, Search, ShieldCheck,
-  ShieldQuestion, Square, Swords, Target,
+  Clock, FileText, FlaskConical, Footprints, Gauge, GitBranch, GitCompare, Gavel, Info,
+  Lightbulb, ListChecks, Loader2, MessagesSquare, PenLine, PieChart, Scale, Search,
+  ShieldAlert, ShieldCheck, ShieldQuestion, Square, Swords, Target, Users,
 } from "lucide-react";
 import type { EventItem } from "@/components/research/types";
 import { BorderBeam, CountUp, FadeIn } from "@/components/magic";
@@ -17,6 +17,7 @@ const STEP_ICON: Record<string, React.ReactNode> = {
   comprehend: <Brain className="h-3.5 w-3.5" />,
   search: <Search className="h-3.5 w-3.5" />,
   rerank: <ArrowDownWideNarrow className="h-3.5 w-3.5" />,
+  spawned: <GitBranch className="h-3.5 w-3.5" />,
   read: <FileText className="h-3.5 w-3.5" />,
   walk: <Footprints className="h-3.5 w-3.5" />,
   learning: <Lightbulb className="h-3.5 w-3.5" />,
@@ -32,6 +33,7 @@ const STEP_ICON: Record<string, React.ReactNode> = {
   critique: <FlaskConical className="h-3.5 w-3.5" />,
   redteam: <Swords className="h-3.5 w-3.5" />,
   debate: <MessagesSquare className="h-3.5 w-3.5" />,
+  court: <Gavel className="h-3.5 w-3.5" />,
   diversity: <PieChart className="h-3.5 w-3.5" />,
   score: <Gauge className="h-3.5 w-3.5" />,
   diff: <GitCompare className="h-3.5 w-3.5" />,
@@ -137,6 +139,8 @@ function activeLabel(lastType: string, stage: string, liveLabel?: string): strin
   if (lastType === "critique" || lastType === "gap") return "Critiquing evidence…";
   if (lastType === "redteam") return "Red-teaming the evidence…";
   if (lastType === "debate") return "Debating contested claims…";
+  if (lastType === "court") return "The trial is in session…";
+  if (lastType === "spawned") return "Opening a new research thread…";
   if (lastType === "diversity") return "Reviewing source diversity…";
   if (lastType === "score") return "Grading the report…";
   if (lastType === "diff") return "Diffing against the last run…";
@@ -327,7 +331,7 @@ export function StepsCard({
               );
             }
             const e = row.e;
-            const highlight = e.type === "eta" || e.type === "selfcheck" || e.type === "critique" || e.type === "agent" || e.type === "presearch" || e.type === "learning" || e.type === "walk" || e.type === "curate" || e.type === "verify" || e.type === "contradiction" || e.type === "comprehend" || e.type === "rerank" || e.type === "refine" || e.type === "citecheck" || e.type === "redteam" || e.type === "debate" || e.type === "diversity" || e.type === "score" || e.type === "diff";
+            const highlight = e.type === "eta" || e.type === "selfcheck" || e.type === "critique" || e.type === "agent" || e.type === "presearch" || e.type === "learning" || e.type === "walk" || e.type === "curate" || e.type === "verify" || e.type === "contradiction" || e.type === "comprehend" || e.type === "rerank" || e.type === "refine" || e.type === "citecheck" || e.type === "redteam" || e.type === "debate" || e.type === "diversity" || e.type === "score" || e.type === "diff" || e.type === "court" || e.type === "spawned";
             const isError = e.type === "error";
             const degraded = !isError && isDegrade(e);
             return (

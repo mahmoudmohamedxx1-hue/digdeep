@@ -122,6 +122,8 @@ export default function HomePage() {
           onModelPref={settings.setModelPref}
           showThinking={settings.showThinking}
           onShowThinking={settings.setShowThinking}
+          court={settings.court}
+          onCourt={settings.setCourt}
           onManagePool={() => window.dispatchEvent(new CustomEvent("digdeep:open-settings"))}
           docs={docs}
           onDocs={setDocs}

@@ -54,22 +54,71 @@ interface BackendHealth {
   lastLatencyMs: number;
 }
 
-/** Built-in keyless backends — the primary chain: every visitor can research without
- *  any key, and no shared server key gets burned by anonymous traffic.
- *  LLM7's keyless lane is a CHAIN, not one model: the catalog lists 66 models but only
- *  its turbo tier serves keyless (pro tier returns pro_access_required even when the
- *  catalog says usage_based_only:false — live-probed, see scripts/probe_llm7_models.sh).
- *  GLM-5.3-Flash is the flagship flash but is frequently "model_temporarily_unavailable"
- *  keyless — DeepSeek-V4-Flash-0731 (400k ctx, same price) is the reliable star, verified
- *  serving good IFRS-9 answers. Order = best-answer-first, so a busy model falls through
- *  to the next keyless lane instead of stalling the run. */
+/** LLM7 keyless turbo tier — live-probed (scripts/probe_llm7_full.sh, Oct 2026):
+ *  exactly these 7 chat models serve without any key (every other catalog entry
+ *  returns missing_api_key — catalog flags lie, live probes don't). Order =
+ *  best-answer-first, so a busy model falls through to the next keyless lane
+ *  instead of stalling the run. nemotron-3-nano:30b carries a 1M-token context —
+ *  the widest of the tier — which makes it a strong early lane for long research
+ *  contexts even though it lacks JSON mode. */
+const LLM7_KEYLESS_MODELS: { model: string; label: string; note: string }[] = [
+  { model: "GLM-5.3-Flash", label: "GLM-5.3-Flash", note: "flagship flash, 400k ctx — frequently busy" },
+  { model: "DeepSeek-V4-Flash-0731", label: "DeepSeek-V4-Flash", note: "the reliable star, 400k ctx" },
+  { model: "nemotron-3-nano:30b", label: "Nemotron-3-Nano-30B", note: "1M-token context, reasoning" },
+  { model: "minimax-m2.7", label: "MiniMax-M2.7", note: "180k ctx" },
+  { model: "mistral-Nemo-Instruct-2407", label: "Mistral-Nemo", note: "128k ctx, 100% availability" },
+  { model: "gpt-oss:20b", label: "gpt-oss-20b", note: "128k ctx — last-resort generalist" },
+  { model: "codestral-latest", label: "Codestral", note: "32k ctx, code-leaning — final fallback" },
+];
+
 const BUILTIN_POOL: PoolEndpoint[] = [
-  { id: "llm7-glm53", label: "LLM7 · GLM-5.3-Flash · keyless", baseUrl: "https://api.llm7.io/v1/chat/completions", model: "GLM-5.3-Flash", enabled: true },
-  { id: "llm7-dsv4", label: "LLM7 · DeepSeek-V4-Flash · keyless", baseUrl: "https://api.llm7.io/v1/chat/completions", model: "DeepSeek-V4-Flash-0731", enabled: true },
-  { id: "llm7-minimax", label: "LLM7 · MiniMax-M2.7 · keyless", baseUrl: "https://api.llm7.io/v1/chat/completions", model: "minimax-m2.7", enabled: true },
-  { id: "llm7-gptoss", label: "LLM7 · gpt-oss-20b · keyless", baseUrl: "https://api.llm7.io/v1/chat/completions", model: "gpt-oss:20b", enabled: true },
+  ...LLM7_KEYLESS_MODELS.map(
+    (m) =>
+      ({
+        id: `llm7-${m.model.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`,
+        label: `LLM7 · ${m.label} · keyless`,
+        baseUrl: "https://api.llm7.io/v1/chat/completions",
+        model: m.model,
+        enabled: true,
+      }) as PoolEndpoint
+  ),
   { id: "pollinations", label: "Pollinations · keyless", baseUrl: "https://text.pollinations.ai/openai", model: "openai", enabled: true },
 ];
+
+/** LLM7 premium tier — locked behind the user's own (free) LLM7 dashboard key.
+ *  A key changes two things: (a) the keyless turbo lanes above ride the user's
+ *  PERSONAL daily quota instead of the shared anonymous pool (which exhausts
+ *  daily — live probe showed "Retry after 13397 seconds"), and (b) these pro
+ *  models become reachable when the key has balance/quota. Order = best value
+ *  for research first (DeepSeek-V4.1 reasoning + 1M ctx, cheap Gemini-3, Claude
+ *  Haiku writing, Grok, then the premium writers). */
+const LLM7_PREMIUM_MODELS: { model: string; label: string }[] = [
+  { model: "DeepSeek-V4.1-Flash", label: "DeepSeek-V4.1-Flash" },
+  { model: "gemini-3-flash", label: "Gemini-3-Flash" },
+  { model: "claude-haiku-5-5", label: "Claude-Haiku-5.5" },
+  { model: "grok-4.7", label: "Grok-4.7" },
+  { model: "claude-sonnet-5", label: "Claude-Sonnet-5" },
+  { model: "gemini-4-argon", label: "Gemini-4-Argon" },
+  { model: "gpt-6.1-sol", label: "GPT-6.1-Sol" },
+];
+
+let llm7KeyCache: { at: number; key: string } | null = null;
+/** The user's LLM7 dashboard key (Setting "llm7_key") — empty string when absent. */
+async function getLlm7Key(): Promise<string> {
+  if (llm7KeyCache && Date.now() - llm7KeyCache.at < 30_000) return llm7KeyCache.key;
+  let key = "";
+  try {
+    const row = await db.setting.findUnique({ where: { key: "llm7_key" } });
+    if (row) key = JSON.parse(row.value);
+  } catch { key = ""; }
+  if (typeof key !== "string") key = "";
+  llm7KeyCache = { at: Date.now(), key };
+  return key;
+}
+
+export function invalidateLlm7KeyCache() {
+  llm7KeyCache = null;
+}
 
 /** Z.ai official API backstop — activated only when ZAI_API_KEY is set (server-side
  *  env var on Vercel; NEVER committed to the repo, never sent to the client).
@@ -151,7 +200,28 @@ export async function getPoolEndpoints(force = false): Promise<PoolEndpoint[]> {
   const zai = zaiEnvBackends();
   const builtinUrls = new Set([...BUILTIN_POOL, ...zai].map((e) => e.baseUrl));
   const custom = (Array.isArray(stored) ? stored : []).filter((e) => e?.baseUrl && !builtinUrls.has(e.baseUrl));
-  const data = [...BUILTIN_POOL, ...zai, ...custom];
+  // LLM7 key unlock: with the user's dashboard key, (a) the premium tier joins the
+  // chain ahead of keyless and (b) the turbo lanes send the key so they ride the
+  // user's personal daily quota instead of the shared anonymous pool.
+  const llm7Key = await getLlm7Key();
+  let builtin: PoolEndpoint[] = BUILTIN_POOL;
+  if (llm7Key) {
+    const premium: PoolEndpoint[] = LLM7_PREMIUM_MODELS.map((m) => ({
+      id: `llm7pro-${m.model.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`,
+      label: `LLM7 · ${m.label} · your key`,
+      baseUrl: "https://api.llm7.io/v1/chat/completions",
+      model: m.model,
+      enabled: true,
+      key: llm7Key,
+    }));
+    builtin = [
+      ...premium,
+      ...BUILTIN_POOL.map((e) =>
+        e.baseUrl === "https://api.llm7.io/v1/chat/completions" ? { ...e, key: llm7Key, label: e.label.replace("keyless", "your key") } : e
+      ),
+    ];
+  }
+  const data = [...builtin, ...zai, ...custom];
   endpointsCache = { at: Date.now(), data };
   return data;
 }
@@ -241,7 +311,17 @@ async function callOpenAiCompatible(
         ...(maxTokens ? { max_tokens: maxTokens } : {}),
       }),
     });
-    if (!res.ok) throw new Error(`${ep.label} HTTP ${res.status}`);
+    if (!res.ok) {
+      // surface the server's own error message (LLM7 quota errors carry the exact
+      // "Retry after N seconds" text the cooldown logic parses — an HTTP status
+      // alone would hide it)
+      let detail = "";
+      try {
+        const j = (await res.json()) as { error?: { message?: string; code?: string } };
+        detail = [j?.error?.code, j?.error?.message].filter(Boolean).join(": ").slice(0, 300);
+      } catch { /* non-JSON body */ }
+      throw new Error(`${ep.label} HTTP ${res.status}${detail ? ` — ${detail}` : ""}`);
+    }
     const data = (await res.json()) as {
       choices?: { message?: { content?: string; reasoning_content?: string } }[];
       model?: string;
@@ -330,6 +410,27 @@ export async function llmComplete(messages: ChatMsg[], opts: LlmOptions): Promis
         } catch (err) {
           h.failures++;
           h.lastError = err instanceof Error ? err.message : String(err);
+          // Error-class-aware cooldown — LLM7 tells us exactly how long to back off:
+          //   "Daily token quota exceeded. Retry after 13397 seconds."  → honor it
+          //   (bounded to 30 min; hammering a quota-exhausted lane burns the daily
+          //   pool faster and wastes a round-trip on every call).
+          // Hard-access errors (invalid key, pro access) will never heal by retrying
+          // within a run — long cooldown so the lane stops costing wall-clock.
+          const quota = /retry after (\d+)\s*second/i.exec(h.lastError);
+          const hardAccess = /invalid_api_key|pro_access_required|missing_api_key|unsupported_model_feature/i.test(h.lastError);
+          if (quota) {
+            const waitS = Math.min(Number(quota[1]) + 5, 1800);
+            h.cooldownUntil = Date.now() + waitS * 1000;
+            h.failures = 0; // the lane isn't unhealthy — it's quota-resting
+            errors.push(`${be.label}: quota — resting ${Math.round(waitS / 60)} min (server said so)`);
+            break; // no in-lane retry: the server just told us it cannot serve
+          }
+          if (hardAccess) {
+            h.cooldownUntil = Date.now() + 30 * 60_000;
+            h.failures = 0;
+            errors.push(`${be.label}: ${h.lastError} (unreachable keyless — skipping for 30 min)`);
+            break;
+          }
           if (h.failures >= 4) {
             h.cooldownUntil = Date.now() + COOLDOWN_MS;
             errors.push(`${be.label}: ${h.lastError} (cooling down)`);
@@ -531,7 +632,14 @@ async function callOpenAiStream(
         ...(maxTokens ? { max_tokens: maxTokens } : {}),
       }),
     });
-    if (!res.ok) throw new Error(`${ep.label} HTTP ${res.status}`);
+    if (!res.ok) {
+      let detail = "";
+      try {
+        const j = (await res.json()) as { error?: { message?: string; code?: string } };
+        detail = [j?.error?.code, j?.error?.message].filter(Boolean).join(": ").slice(0, 300);
+      } catch { /* non-JSON body */ }
+      throw new Error(`${ep.label} HTTP ${res.status}${detail ? ` — ${detail}` : ""}`);
+    }
     const ct = res.headers.get("content-type") || "";
     if (res.body && (ct.includes("text/event-stream") || ct.includes("text/plain"))) {
       clearTimeout(timer); // headers are in — the body phase is guarded by the idle-watch instead
@@ -596,7 +704,16 @@ export async function llmStreamComplete(
     } catch (err) {
       h.failures++;
       h.lastError = err instanceof Error ? err.message : String(err);
-      if (h.failures >= 4) {
+      // same error-class awareness as llmComplete: honor quota retry-after, skip
+      // hard-access errors for 30 min (they cannot heal inside a run)
+      const quota = /retry after (\d+)\s*second/i.exec(h.lastError);
+      if (quota) {
+        h.cooldownUntil = Date.now() + Math.min(Number(quota[1]) + 5, 1800) * 1000;
+        h.failures = 0;
+      } else if (/invalid_api_key|pro_access_required|missing_api_key|unsupported_model_feature/i.test(h.lastError)) {
+        h.cooldownUntil = Date.now() + 30 * 60_000;
+        h.failures = 0;
+      } else if (h.failures >= 4) {
         h.cooldownUntil = Date.now() + COOLDOWN_MS;
       }
     }
