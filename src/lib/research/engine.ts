@@ -1159,7 +1159,7 @@ export async function runJob(jobId: string) {
       }).catch(() => null);
       if (!row) return false;
       sectionRows.push(row);
-      plan.aspects.push({ title, question, goal: `Spawned mid-research from “${from.title}”: ${String(dir.why || "").slice(0, 220)}` });
+      plan.aspects.push({ title, question, goal: `Spawned mid-research from “${from.title}”: ${String(dir.why || "").slice(0, 220)}`, queries: [] });
       aspectSpawnLevel.set(row.id, 1);
       aspectReadCap.set(row.id, Math.max(2, Math.ceil(readCap / 2))); // dzhng breadth decay
       spawnedCount.n++;

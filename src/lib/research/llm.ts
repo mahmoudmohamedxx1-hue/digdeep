@@ -90,16 +90,26 @@ const BUILTIN_POOL: PoolEndpoint[] = [
  *  PERSONAL daily quota instead of the shared anonymous pool (which exhausts
  *  daily — live probe showed "Retry after 13397 seconds"), and (b) these pro
  *  models become reachable when the key has balance/quota. Order = best value
- *  for research first (DeepSeek-V4.1 reasoning + 1M ctx, cheap Gemini-3, Claude
- *  Haiku writing, Grok, then the premium writers). */
+ *  for research first: DeepSeek-V4.1 reasoning + 1M ctx, GPT-6, Claude Sonnet
+ *  5.5 writing, Gemini-3.8 flash (cheap+fast), Kimi-K3 agentic, then the rest
+ *  by strength-per-cost. Live-probed against the catalog (scripts/
+ *  probe_llm7_keyless_now.sh, Oct 2026): every entry below answers "Missing
+ *  API key" keyless, i.e. reachable with a key; hard-access failures skip in
+ *  one round-trip and cool down 30 min, so deep lanes cost nothing when the
+ *  key lacks balance. */
 const LLM7_PREMIUM_MODELS: { model: string; label: string }[] = [
   { model: "DeepSeek-V4.1-Flash", label: "DeepSeek-V4.1-Flash" },
-  { model: "gemini-3-flash", label: "Gemini-3-Flash" },
+  { model: "gpt-6-sol", label: "GPT-6-Sol" },
+  { model: "claude-sonnet-5-5", label: "Claude-Sonnet-5.5" },
+  { model: "gemini-3.8-flash-high", label: "Gemini-3.8-Flash-High" },
+  { model: "kimi-k3", label: "Kimi-K3" },
   { model: "claude-haiku-5-5", label: "Claude-Haiku-5.5" },
+  { model: "deepseek-v4-pro", label: "DeepSeek-V4-Pro" },
   { model: "grok-4.7", label: "Grok-4.7" },
-  { model: "claude-sonnet-5", label: "Claude-Sonnet-5" },
+  { model: "minimax-m3", label: "MiniMax-M3" },
+  { model: "glm-5.3", label: "GLM-5.3" },
   { model: "gemini-4-argon", label: "Gemini-4-Argon" },
-  { model: "gpt-6.1-sol", label: "GPT-6.1-Sol" },
+  { model: "claude-opus-5-5", label: "Claude-Opus-5.5" },
 ];
 
 let llm7KeyCache: { at: number; key: string } | null = null;
@@ -261,7 +271,7 @@ async function callGlm(
   wantThinking: boolean,
   maxTokens?: number,
   timeoutMs = 150_000
-): Promise<{ text: string; reasoning?: string }> {
+): Promise<{ text: string; reasoning?: string; servedModel?: string }> {
   if (!cachedZai) cachedZai = await ZAI.create();
   const completion = (await Promise.race([
     cachedZai.chat.completions.create({
@@ -271,7 +281,7 @@ async function callGlm(
       ...(maxTokens ? { max_tokens: maxTokens } : {}),
     }),
     new Promise<never>((_, rej) => setTimeout(() => rej(new Error(`GLM timeout (${Math.round(timeoutMs / 1000)}s)`)), timeoutMs)),
-  ])) as { choices?: { message?: { content?: string; reasoning_content?: string; reasoning?: string } }[] };
+  ])) as { model?: string; choices?: { message?: { content?: string; reasoning_content?: string; reasoning?: string } }[] };
   const msg = completion.choices?.[0]?.message;
   const text = msg?.content ?? "";
   if (!text.trim()) throw new Error("GLM returned empty response");
@@ -544,7 +554,7 @@ async function consumeStream(
   servedModel?: string
 ): Promise<StreamOutcome> {
   if (!body || typeof (body as ReadableStream).getReader !== "function") {
-    const data = body as { choices?: { message?: { content?: string; reasoning_content?: string } }[] };
+    const data = body as { model?: string; choices?: { message?: { content?: string; reasoning_content?: string } }[] };
     const text = data?.choices?.[0]?.message?.content ?? "";
     if (!text.trim()) throw new Error(`${label} empty response`);
     const reasoning = data.choices?.[0]?.message?.reasoning_content || undefined;

@@ -363,7 +363,7 @@ export default function ThreadPage() {
     if (pinnedRef.current) {
       el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [turns?.length, lastTurn?.job?.status, lastTurn?.sections?.length]);
 
   // Content growth doesn't fire scroll events — the typing animation can pour
@@ -395,7 +395,7 @@ export default function ThreadPage() {
     const saved = sessionStorage.getItem(draftKey);
     if (saved && !followQueryRef.current) setFollowQuery(saved);
     // restore runs once per resolved thread — never clobbers what the user typed
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [draftKey]);
   useEffect(() => {
     if (!draftKey) return;
