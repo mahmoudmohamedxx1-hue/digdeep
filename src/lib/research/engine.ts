@@ -1045,17 +1045,23 @@ export async function runJob(jobId: string) {
       ? Math.max(120_000, Math.min(ctx.timeLeft * 0.4, 10 * 60_000))
       : Infinity;
     const planPromise = ctx.llmLive(
-      [{ role: "user", content: planPrompt(job.query, job.breadth, job.language, threadContext || undefined, initSnippets, comprehensionDigest || undefined, job.court) }],
+      [{ role: "user", content: planPrompt(job.query, SERVERLESS ? Math.min(job.breadth + 1, 5) : job.breadth, job.language, threadContext || undefined, initSnippets, comprehensionDigest || undefined, job.court) }],
       "plan",
       "Planning the research",
-      // v2.4.0: on the serverless clock the plan must not ride patient cooldowns for
-      // minutes — fast-fail at 40s and let the fallback plan carry the run (a generic
-      // plan with real research beats a perfect plan that eats the research window)
-      SERVERLESS ? { wantThinking: true, fast: { patient: false, timeoutMs: 40_000 } } : { wantThinking: true }
+      // v2.4.7: on the serverless clock the plan must not ride patient cooldowns for
+      // minutes — fast-fail at 30s (rescue adds ~18s worst) and let the fallback plan
+      // carry the run; also ask for breadth+1 aspects (4 parallel workers make the
+      // extra aspect nearly free, and coverage is the grader's most common deduction)
+      SERVERLESS ? { wantThinking: true, fast: { patient: false, timeoutMs: 30_000 } } : { wantThinking: true }
     );
     planPromise.catch(() => {}); // the underlying ride resolves on its own; its catch trips the breaker
     try {
-      planRes = await (Number.isFinite(planRideCapMs)
+      planRes = await (SERVERLESS
+        ? Promise.race([
+            planPromise,
+            new Promise<never>((_, rej) => setTimeout(() => rej(new Error("plan budget cap hit — moving on with a generic plan")), 45_000)),
+          ])
+        : Number.isFinite(planRideCapMs)
         ? Promise.race([
             planPromise,
             new Promise<never>((_, rej) => setTimeout(() => rej(new Error("plan budget cap hit — moving on with a generic plan")), planRideCapMs)),
@@ -1123,9 +1129,9 @@ export async function runJob(jobId: string) {
     // research always gets at least 25s (one parallel round); reserve: the full tail
     // (drafts + bundle + grade + one improve round). Past a slow plan the tail
     // compresses by degrading gracefully — grade/round skip, the report persists.
-    // v2.4.3: reserve 180s for the tail (drafts 40s + bundle 35s + assembly 5s +
-    // grade 25s + one lean round 65s + final write 10s) — 15s more research than v2.4.2.
-    if (SERVERLESS) ctx.researchCutoffAt = Math.max(Date.now() + 25_000, ctx.hardStop - 180_000);
+    // v2.4.3: reserve 175s for the tail (drafts 50s + bundle 35s + assembly 5s +
+    // grade 25s + one lean round 55s + final write 10s) — research gets what's left.
+    if (SERVERLESS) ctx.researchCutoffAt = Math.max(Date.now() + 20_000, ctx.hardStop - 175_000);
     await updateJob(jobId, { status: "researching", progress: 8 });
     const sectionRows = await db.researchSection.findMany({ where: { jobId }, orderBy: { order: "asc" } });
     const sourcesUsed: SourceRef[] = [];

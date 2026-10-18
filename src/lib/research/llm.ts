@@ -368,6 +368,9 @@ export interface LlmOptions {
 export async function llmComplete(messages: ChatMsg[], opts: LlmOptions): Promise<LlmResult> {
   // fast mode: single pass, one attempt per backend, short per-call timeout — for intent routing etc.
   const fast = opts.timeoutMs != null && opts.patient === false;
+  // v2.4.7: the rescue pass applies only to substantive calls (≥15s budget) — tiny
+  // routing calls (classify 12s, role 12s) fail fast without it; their worst case
+  // doubled with the rescue and planning variance grew to 135s.
   // v2.4.2: a fast timeout must bound the WHOLE CHAIN, not each backend — with ~19
   // backends a per-backend 30s ceiling lets one throttled call ride 9+ minutes and
   // freeze the serverless function with the report unpersisted. The chain deadline
@@ -380,7 +383,7 @@ export async function llmComplete(messages: ChatMsg[], opts: LlmOptions): Promis
   // counts together; a momentary hot window (not a real cooldown) kills pass 1,
   // and the rescue pass recovers it. Without this, one bad window turned every
   // tail call into findings-fallback + an unscored report.
-  const maxRounds = fast ? 2 : opts.patient === false ? 1 : 40;
+  const maxRounds = fast ? (opts.timeoutMs != null && opts.timeoutMs >= 15_000 ? 2 : 1) : opts.patient === false ? 1 : 40;
   const rideStart = Date.now();
   let lastError = "";
   for (let round = 0; round < maxRounds; round++) {
