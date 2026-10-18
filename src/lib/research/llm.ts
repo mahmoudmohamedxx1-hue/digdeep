@@ -375,14 +375,20 @@ export async function llmComplete(messages: ChatMsg[], opts: LlmOptions): Promis
   const chainDeadline = fast && opts.timeoutMs != null ? Date.now() + opts.timeoutMs : Number.POSITIVE_INFINITY;
   // Patient mode: up to 40 rounds (with 20-120s waits ≈ 15-80 min of patience) so a fully
   // throttled free-tier window never kills an hours-long research run the user asked for.
-  const maxRounds = fast ? 1 : opts.patient === false ? 1 : 40;
+  // v2.4.4: fast calls get TWO passes — pass 1, an 8s stagger, then ONE rescue
+  // pass with a +10s deadline grace. Parallel tail calls trip lanes into failure
+  // counts together; a momentary hot window (not a real cooldown) kills pass 1,
+  // and the rescue pass recovers it. Without this, one bad window turned every
+  // tail call into findings-fallback + an unscored report.
+  const maxRounds = fast ? 2 : opts.patient === false ? 1 : 40;
   const rideStart = Date.now();
   let lastError = "";
   for (let round = 0; round < maxRounds; round++) {
+    const roundDeadline = round === 0 ? chainDeadline : chainDeadline + 10_000;
     const backends = await orderedBackends(opts.pref ?? "auto", opts.purpose);
     const errors: string[] = [];
     for (const be of backends) {
-      if (Date.now() >= chainDeadline) {
+      if (Date.now() >= roundDeadline) {
         errors.push(`chain deadline (${opts.timeoutMs}ms) hit — ${be.label} not tried`);
         break;
       }
@@ -406,7 +412,7 @@ export async function llmComplete(messages: ChatMsg[], opts: LlmOptions): Promis
           const isGlm = be.baseUrl === "z-ai-sdk";
           // v2.4.2: in fast mode the per-call timeout is clamped to the chain's
           // remaining budget (3s floor) — the whole chain must fit opts.timeoutMs.
-          const callTimeout = fast ? Math.max(3_000, chainDeadline - Date.now()) : undefined;
+          const callTimeout = fast ? Math.max(3_000, roundDeadline - Date.now()) : undefined;
           const out: Served = isGlm
             ? await callGlm(
                 GLM_SDK_MODELS.find((m) => m.id === be.id)?.model,
@@ -465,6 +471,11 @@ export async function llmComplete(messages: ChatMsg[], opts: LlmOptions): Promis
     }
     lastError = errors.join(" | ");
     if (round < maxRounds - 1) {
+      if (fast) {
+        // v2.4.4: the fast rescue stagger — short wait, then one more pass
+        await new Promise((r) => setTimeout(r, 8_000));
+        continue;
+      }
       // ride-budget bound: a budgeted run must not let one step's patience eat the whole clock
       if (opts.maxWaitMs != null && Date.now() - rideStart >= opts.maxWaitMs) {
         throw new Error(`All LLM backends failed [${opts.purpose}] — ride budget of ${Math.round(opts.maxWaitMs / 1000)}s exhausted. ${lastError}`);
@@ -749,8 +760,14 @@ export async function llmStreamComplete(
     }
   }
   // Nothing could stream — ride the patient non-streaming chain instead.
+  // v2.4.4: the fallback gets HALF the fast budget — the stream pass already spent
+  // its share probing headers; the non-streaming rescue must stay inside the wall
+  // time the caller budgeted for the whole call.
   forward({ attempt: "start" });
-  const r = await llmComplete(messages, opts);
+  const r = await llmComplete(messages, {
+    ...opts,
+    ...(fastStream && opts.timeoutMs != null ? { timeoutMs: Math.max(10_000, Math.round(opts.timeoutMs / 2)) } : {}),
+  });
   if (r.reasoning && !streamedAny) forward({ reasoning: r.reasoning });
   return r;
 }

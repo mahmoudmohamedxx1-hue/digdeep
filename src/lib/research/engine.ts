@@ -1085,7 +1085,7 @@ export async function runJob(jobId: string) {
     const aspectsTotal = plan.aspects.length;
     const roundsEst = job.depth > 0 ? job.depth : 2.5; // unlimited: rounds depend on gaps found
     const perAspectEstMs = 150_000;
-    const concurrency = Math.min(aspectsTotal, unlimited || job.preset === "exhaustive" ? ASPECT_CONCURRENCY.heavy : ASPECT_CONCURRENCY.budgeted);
+    const concurrency = Math.min(aspectsTotal, SERVERLESS ? Math.max(ASPECT_CONCURRENCY.heavy, Math.min(aspectsTotal, 4)) : unlimited || job.preset === "exhaustive" ? ASPECT_CONCURRENCY.heavy : ASPECT_CONCURRENCY.budgeted);
     let estMs = Math.ceil(aspectsTotal / concurrency) * roundsEst * perAspectEstMs + 180_000;
     // a budgeted run can never take longer than its remaining budget — clamp and say so
     const budgetExhausted = ctx.hasTimeBudget && ctx.timeLeft < estMs;
