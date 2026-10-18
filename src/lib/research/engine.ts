@@ -461,9 +461,9 @@ async function classifyIntent(
         [{ role: "user", content: classifyPrompt(query, recentTurns, preset) }],
         "classify",
         "Understanding your message",
-        { wantThinking: true, maxTokens: 800, fast: { patient: false, timeoutMs: 18_000 } }
+        { wantThinking: true, maxTokens: 800, fast: { patient: false, timeoutMs: !!process.env.VERCEL ? 12_000 : 18_000 } }
       ),
-      new Promise<never>((_, rej) => setTimeout(() => rej(new Error("classify timeout")), 40_000)),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error("classify timeout")), !!process.env.VERCEL ? 22_000 : 40_000)),
     ]);
     const text = res.text.trim();
     // Strict parse first: the RESTATE/INTENT/STRATEGY lines may themselves contain the
@@ -2153,11 +2153,15 @@ export async function runJob(jobId: string) {
             // the section streams into the UI as it is written — the user literally watches
             // the report being typed. Bounded by the hard clock: a stalled draft falls
             // back to findings instead of freezing the whole report.
+            // v2.4.5: PATIENT drafts on the serverless clock — the ride waits out lane
+            // cooldowns (bounded by the hard stop) so a mid-tail 429 window recovers
+            // instead of falling back to raw findings; per-call capped at 60s. Good
+            // lanes: first try succeeds instantly, same as before.
             const draftRes = await ctx.llmLive(
               [{ role: "user", content: draftSectionPrompt(job.query, sec.title, sec.question, sec.findings ?? "(no findings — rely on general knowledge and clearly mark it as background)", srcs, words, job.language, evidenceNotesFor(sec.title), adversarialNotesFor(sec.title), ctx.allLearnings) }],
               "draft",
               `Writing: ${sec.title}`,
-              { streamTo: sec.id, fast: { ...(SERVERLESS ? { patient: false as const } : {}), timeoutMs: SERVERLESS ? Math.min(40_000, Math.max(20_000, ctx.hardLeft - 15_000)) : Math.min(60_000, Math.max(20_000, ctx.hardLeft - 15_000)) } }
+              { streamTo: sec.id, ...(SERVERLESS ? { fast: { timeoutMs: 60_000 } } : {}) }
             );
             draftText = draftRes.text;
             draftModel = draftRes.model;
@@ -2312,6 +2316,19 @@ export async function runJob(jobId: string) {
       const reportV0 = [`# ${job.query.slice(0, 80)}`, ``, bodyV0, ``, `## References`, ``, refsV0 || "*(no sources were successfully retrieved)*"].join("\n");
       await updateJob(jobId, { reportMd: reportV0 }).catch(() => {});
     }
+    // v2.4.5: the bundle is POLISH — when the clock is short (blackout recovery spent
+    // it on the drafts), skip straight to assembly + grade; a graded report with no
+    // exec summary beats a polished zombie.
+    if (ctx.hardLeft < 60_000 && !court) {
+      await ctx.emit("info", "Clock is short — skipping the summary polish, going straight to grading", "The drafts and references are done; the executive summary and conclusion are skipped so the self-score still fits the function budget.");
+    }
+    // v2.4.5: hoisted extractors with honest fallbacks — set by the bundle when it
+    // runs, kept as fallbacks when the clock was too short for the polish pass
+    let execText = court ? courtExecMd : "*(Executive summary unavailable — the function clock ran out during the polish pass; see section content below.)*";
+    let concText = court ? "" : "";
+    let titleText = job.query.slice(0, 80);
+    let relatedQuestions = fallbackRelated(job.query, finalSections.map((s) => s.question));
+    if (ctx.hardLeft >= 60_000 || court) {
     const [auditR, execR, concR, titleR, relatedR] = await Promise.allSettled([
       // v2.4.0: the citation audit rides IN the bundle (it only needs the drafts)
       auditWork(),
@@ -2328,19 +2345,20 @@ export async function runJob(jobId: string) {
       ctx.llm([{ role: "user", content: relatedPrompt(job.query, finalSections.map((s) => s.title), job.language) }], "related", false, 300, { ...(SERVERLESS ? { patient: false as const } : {}), timeoutMs: SERVERLESS ? 15_000 : Math.min(60_000, Math.max(10_000, ctx.hardLeft - 20_000)) }),
     ]);
     if (auditR.status === "rejected") await ctx.emit("info", "Citation audit step failed — continuing with the drafts as written", String(auditR.reason ?? "").slice(0, 300));
-    let execText = court
+    execText = court
       ? courtExecMd
-      : execR.status === "fulfilled"
+      : execR.status === "fulfilled" && execR.value.text.trim()
         ? execR.value.text
         : "*(Executive summary unavailable — LLM backends were exhausted; see section content below.)*";
-    let concText = court ? "" : concR.status === "fulfilled" ? concR.value.text : "";
-    const titleText = titleR.status === "fulfilled" ? titleR.value.text : job.query.slice(0, 80);
-    const relatedQuestions =
+    concText = court ? "" : concR.status === "fulfilled" ? concR.value.text : "";
+    titleText = titleR.status === "fulfilled" ? titleR.value.text : job.query.slice(0, 80);
+    relatedQuestions =
       relatedR.status === "fulfilled" ? (extractJsonArray(relatedR.value.text) ?? fallbackRelated(job.query, finalSections.map((s) => s.question))) : fallbackRelated(job.query, finalSections.map((s) => s.question));
     if (!court && execR.status === "rejected") await ctx.emit("info", "Executive summary step failed — continuing with sections", String(execR.reason ?? "").slice(0, 300));
     if (!court && concR.status === "rejected") await ctx.emit("info", "Conclusion step failed — continuing without it", String(concR.reason ?? "").slice(0, 300));
     await ctx.emit("draft", court ? "Verdict summary written (from the trial itself)" : "Executive summary written", execText.slice(0, 400), !court && execR.status === "fulfilled" ? execR.value.model : undefined);
     if (!court && concText) await ctx.emit("draft", "Conclusion written", concText.slice(0, 400), concR.status === "fulfilled" ? concR.value.model : undefined);
+    }
 
     // post-audit drafts — the audit (inside the bundle above) may have re-anchored
     // or dropped citation markers; everything downstream sees the repaired text
@@ -2582,18 +2600,20 @@ export async function runJob(jobId: string) {
     // written from partial evidence on an expired budget still DESERVES an honest
     // score (locally hardLeft is Infinity, so budget-exhausted runs now grade too).
     if (ctx.hardLeft >= (SERVERLESS ? 40_000 : 50_000) || !ctx.outOfTime) {
+    // v2.4.5: two-attempt grade on the serverless clock — a fast first pass (25s),
+    // then, if the lanes were throttled, ONE patient ride that waits out the cooldown
+    // window (bounded by the hard stop via the ride budget). The score is the report's
+    // headline number; it deserves the recovery wait more than any polish step.
+    const gradeAttempts: Array<{ wantThinking: boolean; maxTokens: number; fast?: { patient?: boolean; timeoutMs: number } }> = SERVERLESS
+      ? [{ wantThinking: false, maxTokens: 2000, fast: { patient: false, timeoutMs: 25_000 } }, { wantThinking: false, maxTokens: 2000, fast: { timeoutMs: 45_000 } }]
+      : [{ wantThinking: false, maxTokens: 2000, fast: { timeoutMs: 60_000 } }];
+    for (const attempt of gradeAttempts) {
     try {
       const scoreRes = await ctx.llmLive(
         [{ role: "user", content: qualityScorePrompt(job.query, comprehensionCriteria, reportMd, job.language) }],
         "score",
         "Grading my own report",
-        // v2.3.0: wantThinking OFF and a 2000-token budget — with thinking on, the
-        // 900-token ceiling was consumed by reasoning and the JSON never arrived
-        // (the live RAG run finished with quality:null for exactly this reason).
-        // NOT fast/patient:false — the tail of a run is exactly when the free lanes
-        // are hottest (429s); the grader must ride out the cooldown window instead
-        // of dying and leaving the report unscored. maxWaitMs comes from the ride budget.
-        { wantThinking: false, maxTokens: 2000, fast: { ...(SERVERLESS ? { patient: false as const } : {}), timeoutMs: SERVERLESS ? 25_000 : 60_000 } }
+        attempt
       );
       const q = extractJson(scoreRes.text);
       if (q && typeof q.overall === "number") {
@@ -2619,8 +2639,14 @@ export async function runJob(jobId: string) {
           scoreRes.model,
           { ...quality }
         );
+        break;
       }
-    } catch { /* the score is an enhancement — its absence is not fatal */ }
+    } catch {
+      if (attempt === gradeAttempts[gradeAttempts.length - 1]) break; // the last attempt failed — publish unscored, honestly
+      if (ctx.hardLeft < 55_000) break; // no room for the patient ride
+      await ctx.emit("info", "Grade pass was throttled — riding the cooldown window to still score the report", "The free lanes just hit a 429 window. The grader waits it out (bounded by the function clock) instead of publishing an unscored report.", undefined, undefined, "verbose");
+    }
+    }
     }
 
     // ---------- STAGE 5.5: EARN THE TARGET SCORE (v2.3.0) ----------
@@ -2886,6 +2912,8 @@ ${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
         }
 
         // (e) rebuild references + body + summary/conclusion + the report itself
+        // v2.4.5: serverlessRegrade is hoisted here so (f) can consume the parallel re-grade
+        let serverlessRegrade: { q2: ReturnType<typeof extractJson>; model: string } | null = null;
         {
           const refByUrl2 = new Map<string, number>();
           const remap2: Record<number, number> = {};
@@ -2899,10 +2927,33 @@ ${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
           }
           refs = refList.map((s, i) => `${i + 1}. ${s.title} — *${s.domain}* — ${s.url}`).join("\n");
           const drafts2 = draftsArr.join("\n\n");
-          // v2.4.0: on the serverless clock the rebuild SKIPS exec/conclusion
-          // regeneration (30s+ each and the re-grade would never fit) — the existing
-          // summary stands; only the rewritten sections and references change.
-          if (!SERVERLESS) {
+          // v2.4.5: on the serverless clock the re-grade, the fresh exec summary and
+          // the fresh conclusion run as ONE parallel block (serially they cannot all
+          // fit the reserve). The re-grade sees the rebuilt body + refs; the fresh
+          // summary/conclusion land in the published artifact right after.
+          if (SERVERLESS) {
+            const body2pre = finalSections
+              .map((s, i) => `## ${i + 1}. ${s.title}\n\n${(s.draftMd || "").replace(/\[(\d+)\]/g, (_, d) => `[${remap2[Number(d)] ?? d}]`)}`)
+              .join("\n\n");
+            const report2pre = [
+              `# ${titleText.replace(/["'`#]/g, "").trim()}`, ``, `## Executive Summary`, ``, execText, ``, body2pre, ``,
+              ...(concText ? [`## Conclusion`, ``, concText, ``] : []),
+              `## References`, ``, refs || "*(no sources were successfully retrieved)*",
+            ].join("\n");
+            const [rg, ex2, cc2] = await Promise.allSettled([
+              ctx.llmLive(
+                [{ role: "user", content: qualityScorePrompt(job.query, comprehensionCriteria, report2pre, job.language) }],
+                "score",
+                `Re-grading after round ${qualityRounds}`,
+                { wantThinking: false, maxTokens: 2000, fast: { patient: false, timeoutMs: 25_000 } }
+              ),
+              ctx.llm([{ role: "user", content: execSummaryPrompt(job.query, drafts2, job.language, job.preset, ctx.allLearnings) }], "exec-summary", false, undefined, { patient: false as const, timeoutMs: 20_000 }),
+              ctx.llm([{ role: "user", content: conclusionPrompt(job.query, drafts2, job.language) }], "conclusion", false, undefined, { patient: false as const, timeoutMs: 20_000 }),
+            ]);
+            if (rg.status === "fulfilled") serverlessRegrade = { q2: extractJson(rg.value.text), model: rg.value.model };
+            if (ex2.status === "fulfilled" && (ex2.value as LlmResult).text.trim()) execText = (ex2.value as LlmResult).text;
+            if (cc2.status === "fulfilled" && (cc2.value as LlmResult).text.trim()) concText = (cc2.value as LlmResult).text;
+          } else {
           const [exec2, conc2] = await Promise.allSettled([
             ctx.llm([{ role: "user", content: execSummaryPrompt(job.query, drafts2, job.language, job.preset, ctx.allLearnings) }], "exec-summary", false, undefined, { timeoutMs: Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
             ctx.llm([{ role: "user", content: conclusionPrompt(job.query, drafts2, job.language) }], "conclusion", false, undefined, { timeoutMs: Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
@@ -2936,8 +2987,14 @@ ${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
           if (diffMd) reportMd = reportMd.replace("## References", `## What changed since the last run\n\n${diffMd}\n\n## References`);
         }
 
-        // (f) re-grade with the SAME rubric — the score only counts if it was earned
+        // (f) re-grade with the SAME rubric — the score only counts if it was earned.
+        // v2.4.5: on serverless the re-grade already ran inside the parallel block
+        // above (serverlessRegrade) — locally it runs here, serially, as always.
         let regraded: QualityScore | null = null;
+        let q2: ReturnType<typeof extractJson> = null;
+        if (SERVERLESS && serverlessRegrade) {
+          q2 = serverlessRegrade.q2;
+        } else {
         try {
           const scoreRes2 = await ctx.llmLive(
             [{ role: "user", content: qualityScorePrompt(job.query, comprehensionCriteria, reportMd, job.language) }],
@@ -2945,8 +3002,10 @@ ${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
             `Re-grading after round ${qualityRounds}`,
             { wantThinking: false, maxTokens: 2000, fast: { ...(SERVERLESS ? { patient: false as const } : {}), timeoutMs: SERVERLESS ? 25_000 : 60_000 } }
           );
-          const q2 = extractJson(scoreRes2.text);
-          if (q2 && typeof q2.overall === "number") {
+          q2 = extractJson(scoreRes2.text);
+        } catch { q2 = null; }
+        }
+        if (q2 && typeof q2.overall === "number") {
             regraded = {
               overall: Math.max(0, Math.min(10, Math.round(Number(q2.overall) * 10) / 10)),
               dims: (Array.isArray(q2.dims) ? q2.dims : []).slice(0, 4).map((d: { name?: unknown; score?: unknown; note?: unknown }) => ({
@@ -2962,8 +3021,7 @@ ${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
               biggestWeakness: String(q2.biggestWeakness ?? "").slice(0, 300),
               repairQueries: (Array.isArray(q2.repairQueries) ? q2.repairQueries : []).map((x: unknown) => String(x).slice(0, 160)).filter((x: string) => x.length > 3).slice(0, 3),
             };
-          }
-        } catch { regraded = null; }
+        }
         if (!regraded) {
           await ctx.emit("info", "Re-grade unavailable — keeping the improved report and the previous score", undefined, undefined, "verbose");
           break;
