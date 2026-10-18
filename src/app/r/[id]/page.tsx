@@ -337,49 +337,90 @@ export default function ThreadPage() {
     return extractHeadings(parsed.body);
   }, [lastTurn?.job]);
 
-  // ---------- scrolling: jump FAB + bottom-follow while streaming ----------
-  // Follow state is INTENT, not distance: a completed-view swap can grow the
-  // page 200px in one mutation batch, which distance checks misread as "the
-  // user scrolled away". So the scroll listener tracks the reader's intent
-  // (scroll up = unfollow, reach the bottom = refollow) and the observer obeys it.
+  // ---------- scrolling: intent-aware follow + jump pill ----------
+  // Follow is INTENT, not distance. The old distance hysteresis (unpin only
+  // past 160px away) misread a small upward scroll as "still at the bottom",
+  // so the DOM observer kept snapping the reader back down mid-scroll — the
+  // page "fought" anyone who tried to scroll up while streaming. Now ANY
+  // upward movement (delta < -3px, i.e. real intent, not sub-pixel jitter)
+  // releases the pin instantly; touching the bottom re-pins. Programmatic
+  // smooth scrolls are tracked in jumpingRef so their own animation frames
+  // are never misread as reader intent, and never outlive ~1s (content grows
+  // under a flight and moves the target — the observer must resume after).
   const pinnedRef = useRef(true);
+  const lastTopRef = useRef(-1);
+  const jumpingRef = useRef(false);
+
+  const scrollToBottom = useCallback(
+    (smooth = true) => {
+      const el = mainRef?.current;
+      if (!el) return;
+      pinnedRef.current = true;
+      if (smooth) {
+        jumpingRef.current = true;
+        setTimeout(() => {
+          jumpingRef.current = false;
+        }, 900);
+        el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+      } else {
+        jumpingRef.current = false;
+        el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
+      }
+    },
+    [mainRef]
+  );
+
   useEffect(() => {
     const el = mainRef?.current;
     if (!el || turns == null) return;
     pinnedRef.current = true;
+    lastTopRef.current = -1;
+    jumpingRef.current = false;
     const onScroll = () => {
       const away = el.scrollHeight - el.scrollTop - el.clientHeight;
-      if (away >= 160) pinnedRef.current = false;
-      if (away <= 40) pinnedRef.current = true;
-      setShowJump(away >= 140);
+      const delta = el.scrollTop - lastTopRef.current;
+      lastTopRef.current = el.scrollTop;
+      if (delta < -3) {
+        // upward movement — the reader's intent beats everything, including
+        // an in-flight programmatic scroll
+        jumpingRef.current = false;
+        pinnedRef.current = false;
+      } else if (jumpingRef.current) {
+        if (away <= 8) jumpingRef.current = false; // our smooth flight landed
+      } else if (away <= 24) {
+        pinnedRef.current = true; // touched bottom — follow again
+      }
+      // show the pill once meaningfully away, hide only clearly near bottom
+      // (hysteresis keeps it from flickering at the threshold)
+      setShowJump((prev) => (prev ? !(pinnedRef.current || away <= 90) : !pinnedRef.current && away >= 140));
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
   }, [turns == null, mainRef]);
 
+  // A new turn or a completed-view swap grows the page by whole sections at
+  // once — when the reader is pinned, land on the new bottom instantly. (A
+  // smooth chase across thousands of fresh pixels is the rubber-band lag.)
   useEffect(() => {
     const el = mainRef?.current;
     if (!el || !turns) return;
-    if (pinnedRef.current) {
-      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    if (pinnedRef.current && !jumpingRef.current) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
     }
-     
   }, [turns?.length, lastTurn?.job?.status, lastTurn?.sections?.length]);
 
   // Content growth doesn't fire scroll events — the typing animation can pour
-  // text past the fold with no follow and no jump button. Watch the DOM: while
-  // the reader is pinned, stay glued to the newest line (instant, like chat
-  // apps); the moment they scroll away, stop following and surface the jump
-  // button instead.
+  // text past the fold with no follow and no jump pill. Watch the DOM: while
+  // the reader is pinned (and no smooth flight is running), stay glued to the
+  // newest line, instant like every chat app. The moment they scroll away,
+  // stop following — no setState in here: the scrollTop write itself fires
+  // the scroll handler above, which owns the pill.
   useEffect(() => {
     const el = mainRef?.current;
     if (!el || turns == null) return;
     const mo = new MutationObserver(() => {
-      if (pinnedRef.current) {
+      if (pinnedRef.current && !jumpingRef.current) {
         el.scrollTop = el.scrollHeight; // instant — a smooth queue would lag behind every frame
-        setShowJump(false);
-      } else {
-        setShowJump(el.scrollHeight - el.scrollTop - el.clientHeight >= 140);
       }
     });
     mo.observe(el, { childList: true, subtree: true, characterData: true });
@@ -430,10 +471,7 @@ export default function ThreadPage() {
     setFollowQuery("");
     setFollowDocs([]);
     void refreshHistory();
-    requestAnimationFrame(() => {
-      const el = mainRef?.current;
-      if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-    });
+    requestAnimationFrame(() => scrollToBottom(true));
   };
 
   const stopJob = async (jobId: string) => {
@@ -515,7 +553,7 @@ export default function ThreadPage() {
   // ---------- loading ----------
   if (turns == null) {
     return (
-      <div className="mx-auto w-full max-w-[768px] space-y-3.5 px-4 pb-20 pt-7" aria-label="Loading thread">
+      <div className="mx-auto w-full max-w-[min(768px,75%)] space-y-3.5 px-4 pb-20 pt-7" aria-label="Loading thread">
         <div className="flex justify-end">
           <div className="skeleton-line h-10 w-2/3 rounded-[22px]" />
         </div>
@@ -529,18 +567,6 @@ export default function ThreadPage() {
 
   return (
     <div>
-      {/* jump to latest — appears when you scroll up mid-stream */}
-      {showJump && (
-        <button
-          onClick={() => mainRef?.current?.scrollTo({ top: mainRef.current.scrollHeight, behavior: "smooth" })}
-          className="glass spring-pop press-scale fixed bottom-[104px] left-1/2 z-30 flex h-10 w-10 -translate-x-1/2 items-center justify-center rounded-full text-foreground shadow-elev-2"
-          aria-label="Jump to latest"
-          title="Jump to latest"
-        >
-          <ChevronDown className="h-5 w-5" />
-        </button>
-      )}
-
       {/* desktop toolbar — glass over content, back + thread title */}
       <div className="glass-nav sticky top-0 z-30 hidden items-center gap-1 px-4 py-2 md:flex">
         <Button variant="ghost" size="icon" className="press-scale h-9 w-9 shrink-0 rounded-[12px]" onClick={() => router.push("/")} aria-label="Back to home" title="Back">
@@ -564,7 +590,7 @@ export default function ThreadPage() {
       {isShared && (
         <div
           role="note"
-          className="mx-auto mb-2 mt-3 flex w-full max-w-[768px] items-start gap-2.5 rounded-[16px] border border-border/70 bg-muted/40 px-4 py-3 sm:mt-4"
+          className="mx-auto mb-2 mt-3 flex w-full max-w-[min(768px,75%)] items-start gap-2.5 rounded-[16px] border border-border/70 bg-muted/40 px-4 py-3 sm:mt-4"
         >
           <Eye className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
           <p className="text-[12.5px] leading-relaxed text-muted-foreground">
@@ -576,8 +602,11 @@ export default function ThreadPage() {
       )}
 
       <div className="mx-auto flex w-full max-w-[1140px] justify-center gap-7 px-4 pb-40 pt-5 sm:pt-6">
-        {/* turns — one chat flow; date separators mark day boundaries */}
-        <div className="mx-auto w-full max-w-[768px] space-y-8">
+        {/* turns — one chat flow; date separators mark day boundaries.
+            75% cap: the chat window never runs edge-to-edge — on wide-enough
+            screens the 768px cap already holds it well under 75%; below that,
+            75% keeps a centered reading column instead of a full-bleed one. */}
+        <div className="mx-auto w-full max-w-[min(768px,75%)] space-y-8">
           {turns.map((t, i) => {
             const day = t.job?.createdAt ? dayKey(t.job.createdAt) : null;
             const prevDay = i > 0 && turns[i - 1].job?.createdAt ? dayKey(turns[i - 1].job!.createdAt!) : null;
@@ -659,61 +688,79 @@ export default function ThreadPage() {
         )}
       </div>
 
-      {/* follow-up input (pinned bottom dock) — or the read-only CTA on shared snapshots */}
+      {/* follow-up input (pinned bottom dock) — or the read-only CTA on shared
+          snapshots. The jump pill hangs inside the dock's relative wrapper so
+          it sits exactly above the composer, centered on the chat column —
+          not the viewport (at xl the column sits left of center, beside the
+          evidence rail, and a viewport-centered button missed it). */}
       <div className="glass-dock sticky bottom-0 z-20">
-        {isShared ? (
-          <div className="mx-auto flex w-full max-w-[768px] flex-wrap items-center justify-center gap-2 px-4 py-3">
-            <p className="mr-1 text-[12.5px] text-muted-foreground">This snapshot is read-only.</p>
-            <Button
-              size="sm"
-              className="press-scale rounded-full"
-              onClick={() => {
-                const q = turns[0]?.job?.query;
-                if (q) sessionStorage.setItem("digdeep:prefill", q);
-                router.push("/");
-              }}
+        <div className="relative mx-auto w-full max-w-[min(768px,75%)]">
+          {showJump && (
+            <button
+              onClick={() => scrollToBottom(true)}
+              className="glass spring-pop press-scale absolute -top-[54px] left-1/2 z-30 flex h-9 -translate-x-1/2 items-center gap-2 rounded-full px-4 text-[12.5px] font-medium text-foreground shadow-elev-2"
+              aria-label="Jump to latest"
+              title="Jump to latest"
             >
-              <Plus className="h-3.5 w-3.5" /> Start a new research from this question
-            </Button>
-          </div>
-        ) : (
-          <div className="mx-auto w-full max-w-[768px] px-4 py-3">
-            <AskBox
-              value={followQuery}
-              onChange={setFollowQuery}
-              onSubmit={() => void submitFollowUp()}
-              busy={starting}
-              compact
-              placeholder={anyActive ? "Working… you can stop it, or queue a follow-up" : "Ask a follow-up…"}
-              mode={settings.mode}
-              onMode={settings.applyMode}
-              adv={settings.adv}
-              advTouched={settings.advTouched}
-              onAdv={settings.changeAdv}
-              language={settings.language}
-              onLanguage={settings.setLanguage}
-              modelPref={settings.modelPref}
-              onModelPref={settings.setModelPref}
-              showThinking={settings.showThinking}
-              onShowThinking={settings.setShowThinking}
-              court={settings.court}
-              onCourt={settings.setCourt}
-              onManagePool={() => window.dispatchEvent(new CustomEvent("digdeep:open-settings"))}
-              docs={followDocs}
-              onDocs={setFollowDocs}
-              stopMode={anyActive}
-              onStop={() => void stopAllActive()}
-              stopping={stoppingAll}
-              inputId="follow-input"
-            />
-            <p className="kbd-hints mt-2 flex items-center justify-center gap-x-3 gap-y-1 px-4 text-[11px] text-muted-foreground">
-              <span className="inline-flex items-center gap-1"><kbd>/</kbd> focus</span>
-              <span className="inline-flex items-center gap-1"><kbd>⌘K</kbd> commands</span>
-              <span className="inline-flex items-center gap-1"><kbd>J</kbd>/<kbd>K</kbd> claim evidence</span>
-              <span className="inline-flex items-center gap-1"><kbd>Esc</kbd> close</span>
-            </p>
-          </div>
-        )}
+              {anyActive && <span className="pplx-dot h-1.5 w-1.5 rounded-full bg-primary" aria-hidden />}
+              {anyActive ? "Live · jump to latest" : "Jump to latest"}
+              <ChevronDown className="h-4 w-4" />
+            </button>
+          )}
+          {isShared ? (
+            <div className="flex flex-wrap items-center justify-center gap-2 px-4 py-3">
+              <p className="mr-1 text-[12.5px] text-muted-foreground">This snapshot is read-only.</p>
+              <Button
+                size="sm"
+                className="press-scale rounded-full"
+                onClick={() => {
+                  const q = turns[0]?.job?.query;
+                  if (q) sessionStorage.setItem("digdeep:prefill", q);
+                  router.push("/");
+                }}
+              >
+                <Plus className="h-3.5 w-3.5" /> Start a new research from this question
+              </Button>
+            </div>
+          ) : (
+            <div className="px-4 py-3">
+              <AskBox
+                value={followQuery}
+                onChange={setFollowQuery}
+                onSubmit={() => void submitFollowUp()}
+                busy={starting}
+                compact
+                placeholder={anyActive ? "Working… you can stop it, or queue a follow-up" : "Ask a follow-up…"}
+                mode={settings.mode}
+                onMode={settings.applyMode}
+                adv={settings.adv}
+                advTouched={settings.advTouched}
+                onAdv={settings.changeAdv}
+                language={settings.language}
+                onLanguage={settings.setLanguage}
+                modelPref={settings.modelPref}
+                onModelPref={settings.setModelPref}
+                showThinking={settings.showThinking}
+                onShowThinking={settings.setShowThinking}
+                court={settings.court}
+                onCourt={settings.setCourt}
+                onManagePool={() => window.dispatchEvent(new CustomEvent("digdeep:open-settings"))}
+                docs={followDocs}
+                onDocs={setFollowDocs}
+                stopMode={anyActive}
+                onStop={() => void stopAllActive()}
+                stopping={stoppingAll}
+                inputId="follow-input"
+              />
+              <p className="kbd-hints mt-2 flex items-center justify-center gap-x-3 gap-y-1 px-4 text-[11px] text-muted-foreground">
+                <span className="inline-flex items-center gap-1"><kbd>/</kbd> focus</span>
+                <span className="inline-flex items-center gap-1"><kbd>⌘K</kbd> commands</span>
+                <span className="inline-flex items-center gap-1"><kbd>J</kbd>/<kbd>K</kbd> claim evidence</span>
+                <span className="inline-flex items-center gap-1"><kbd>Esc</kbd> close</span>
+              </p>
+            </div>
+          )}
+        </div>
       </div>
       {/* claim evidence bottom sheet — phones and tablets (below xl rail). Closing returns focus to the claim chip. */}
       <Drawer
@@ -772,9 +819,6 @@ export default function ThreadPage() {
     registerJob(res.id, nt);
     watch(res.id);
     void refreshHistory();
-    requestAnimationFrame(() => {
-      const el = mainRef?.current;
-      if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-    });
+    requestAnimationFrame(() => scrollToBottom(true));
   }
 }

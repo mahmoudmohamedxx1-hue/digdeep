@@ -113,8 +113,8 @@ export function AskBox({
   onAdv: (a: AdvParams) => void;
   language: string;
   onLanguage: (l: string) => void;
-  modelPref: "auto" | "glm" | "pool";
-  onModelPref: (m: "auto" | "glm" | "pool") => void;
+  modelPref: "auto" | "llm7" | "glm" | "pool";
+  onModelPref: (m: "auto" | "llm7" | "glm" | "pool") => void;
   showThinking: boolean;
   onShowThinking: (b: boolean) => void;
   court?: boolean;
@@ -249,7 +249,7 @@ export function AskBox({
             <button
               className={`press-scale flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors max-sm:h-11 max-sm:w-11 ${advDirty || !showThinking ? "text-primary hover:bg-primary/10" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}
               aria-label="Research settings"
-              title="Research settings — budgets, language, backend, visible thinking"
+              title="Research settings — budgets, language, model route, visible thinking"
             >
               <Settings2 className="h-[18px] w-[18px]" />
             </button>
@@ -291,14 +291,17 @@ export function AskBox({
                 </button>
               </div>
 
-              {/* backend */}
+              {/* main model route — which family leads the run; the other
+                  rides behind it as the failover helper (auto = GLM leads,
+                  llm7 = pool leads), or pin one family exclusively */}
               <div>
-                <SectionLabel>LLM backend — keyless</SectionLabel>
+                <SectionLabel>Main model — route &amp; failover</SectionLabel>
                 <div className="space-y-1">
                   {([
-                    ["auto", "Auto", "z.ai GLM → LLM7 (GLM-5.3 · DeepSeek-V4 · Nemotron-1M · MiniMax · Mistral · gpt-oss) → Pollinations"],
-                    ["glm", "z.ai GLM", "z.ai SDK lane — always free, no key"],
-                    ["pool", "Keyless pool only", "LLM7 multi-model / Pollinations / your endpoints"],
+                    ["auto", "GLM main · LLM7 helps", "z.ai GLM leads every step; the LLM7 multi-model pool (DeepSeek-V4 · Nemotron-1M · MiniMax · Mistral · gpt-oss) + Pollinations take over when it throttles"],
+                    ["llm7", "LLM7 main · GLM helps", "The LLM7 multi-model pool leads; z.ai GLM rides behind it as the failover lane — the mirror route of the default"],
+                    ["glm", "GLM only", "z.ai GLM lane exclusively — no LLM7 (needs the SDK lane or a server Z.ai key)"],
+                    ["pool", "Pool only", "LLM7 / Pollinations keyless pool exclusively — no GLM"],
                   ] as const).map(([id, label, desc]) => (
                     <button
                       key={id}

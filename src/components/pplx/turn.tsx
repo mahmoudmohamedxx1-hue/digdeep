@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { memo, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import { copyText } from "@/lib/utils";
 import { StepsCard, ChatThinking } from "@/components/pplx/steps-card";
@@ -31,7 +31,7 @@ function CopyQuestion({ text }: { text: string }) {
   );
 }
 
-export function ThreadTurn({
+function ThreadTurnImpl({
   turn, showThinking, now, elapsedMs, onStop, onRetry, onFollowUp, onRerun, animate,
   onSelectClaim, selectedClaimId,
 }: {
@@ -121,3 +121,19 @@ export function ThreadTurn({
     </article>
   );
 }
+
+/** Memoized: a live poller tick replaces the turns array, but finished turns
+ *  keep their object identity — so everything except the streaming turn skips
+ *  re-rendering (that per-tick, whole-list re-render was the scroll jank while
+ *  reading). The comparator ignores the inline callbacks (stable closures over
+ *  jobId + setters) and the per-second clock on finished turns (only live turns
+ *  read `now` — their elapsed/timestamps must keep ticking). */
+export const ThreadTurn = memo(
+  ThreadTurnImpl,
+  (a, b) =>
+    a.turn === b.turn &&
+    a.showThinking === b.showThinking &&
+    a.animate === b.animate &&
+    a.selectedClaimId === b.selectedClaimId &&
+    (a.animate ? a.now === b.now : true)
+);

@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
         preset,
         court: body.court === true,
         language: ["English", "Arabic", "Chinese", "Spanish", "French", "German", "Auto-match topic"].includes(body.language) ? body.language : "English",
-        modelPref: ["auto", "glm", "pool"].includes(body.modelPref) ? body.modelPref : "auto",
+        modelPref: ["auto", "llm7", "glm", "pool"].includes(body.modelPref) ? body.modelPref : "auto",
         breadth: body.breadth != null ? clamp(body.breadth, 1, 50, p.breadth) : p.breadth,
         depth: body.depth != null ? clamp(body.depth, 1, 20, p.depth) : p.depth,
         maxSources: body.maxSources != null ? clamp(body.maxSources, 4, 1000, p.maxSources) : p.maxSources,

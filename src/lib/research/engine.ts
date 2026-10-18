@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { llmComplete, llmStreamComplete, type ChatMsg, type LlmResult, type ModelPref, type StreamDelta } from "./llm";
+import { llmComplete, llmStreamComplete, MODEL_PREF_ROUTES, type ChatMsg, type LlmResult, type ModelPref, type StreamDelta } from "./llm";
 import { capabilityQuestion, heuristicChatIntent, selfKnowledgeTopic, type SelfTopic } from "./intent-heuristics";
 import { searchAll, fetchPageContent, domainOf, type SearchResult } from "./search";
 import { gateByRelevance } from "./relevance";
@@ -1164,7 +1164,7 @@ export async function runJob(jobId: string) {
     await ctx.emit(
       "info",
       job.court ? "Routed to: the court" : "Routed to: deep research",
-      `${routeWhy}. Mode: ${unlimited ? "UNLIMITED — no caps on aspects, rounds, sources or time; research continues until coverage is genuinely sufficient" : `breadth ${job.breadth} · depth ${job.depth} · max ${job.maxSources} sources · budget ${job.maxMinutes} min`} · backend: ${job.modelPref === "auto" ? "auto (GLM SDK → LLM7 multi-model keyless pool → Pollinations failover)" : job.modelPref}`
+      `${routeWhy}. Mode: ${unlimited ? "UNLIMITED — no caps on aspects, rounds, sources or time; research continues until coverage is genuinely sufficient" : `breadth ${job.breadth} · depth ${job.depth} · max ${job.maxSources} sources · budget ${job.maxMinutes} min`} · route: ${MODEL_PREF_ROUTES[job.modelPref as ModelPref]?.route ?? job.modelPref}`
     );
 
     // ---------- STAGE 1: PLAN ----------

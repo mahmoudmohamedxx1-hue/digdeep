@@ -4,7 +4,19 @@ import path from "node:path";
 import ZAI from "z-ai-web-dev-sdk";
 import { db } from "@/lib/db";
 
-export type ModelPref = "auto" | "glm" | "pool";
+/** The user's chosen model route. "auto" = GLM leads, the keyless pool helps
+ *  (failover); "llm7" = the pool leads, GLM helps — the mirror route. "glm" /
+ *  "pool" pin to one family only. */
+export type ModelPref = "auto" | "llm7" | "glm" | "pool";
+
+/** Human-readable route descriptions — shown in the run's first activity line
+ *  and reused by the UI so the wording never drifts between the two. */
+export const MODEL_PREF_ROUTES: Record<ModelPref, { label: string; route: string }> = {
+  auto: { label: "GLM main", route: "z.ai GLM leads every step → LLM7 multi-model keyless pool (DeepSeek-V4 · Nemotron-1M · MiniMax · Mistral · gpt-oss) → Pollinations failover" },
+  llm7: { label: "LLM7 main", route: "LLM7 multi-model keyless pool leads → Pollinations → z.ai GLM failover" },
+  glm: { label: "GLM only", route: "z.ai GLM lane only (SDK, or the official API backstop on Vercel)" },
+  pool: { label: "Pool only", route: "keyless pool only (LLM7 / Pollinations + your custom endpoints)" },
+};
 
 export interface ChatMsg {
   role: "system" | "user" | "assistant";
@@ -254,6 +266,9 @@ async function orderedBackends(pref: ModelPref, purpose?: string): Promise<PoolE
   // official Z.ai API backstop — so the GLM preference still works on Vercel.
   if (pref === "glm") return glms.length > 0 ? glms : zaiEnvBackends();
   if (pref === "pool") return pool;
+  // "llm7" pref: the multi-model keyless pool leads every step and z.ai GLM
+  // rides behind it as the failover lane — the mirror image of "auto".
+  if (pref === "llm7") return [...pool, ...glms];
   // Frontier synthesis (P2-4): an endpoint flagged role:"synthesis" (a user's own
   // paid key) is tried FIRST for report-writing steps — the free keyless chain stays
   // right behind it as failover, and every other step still runs keyless.

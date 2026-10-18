@@ -1,5 +1,46 @@
 # Changelog
 
+## v2.6.0 — the chat stops fighting you + you pick the model route (2026-10-19)
+
+- **Scrolling up no longer gets yanked back down.** The old follow logic used
+  distance hysteresis: scrolling up less than 160px still counted as "at the
+  bottom", so while anything streamed, the DOM observer kept snapping the
+  reader to the bottom mid-scroll — the page fought you. Follow is now pure
+  intent: ANY upward movement (>3px, real intent, not sub-pixel jitter)
+  releases the pin instantly; touching the bottom re-pins. Verified in-browser
+  against a live run with injected 2× content growth: position held at
+  exactly 400px through 1750→3610px of growth, zero yank events.
+- **The jump-to-latest button is a real affordance now.** It was a lone 40px
+  circle fixed to the viewport center — which on xl screens isn't even the
+  chat column's center (the evidence rail shifts it left). Now a labeled glass
+  pill ("Live · jump to latest" while a run streams, pulsing dot included)
+  hangs exactly above the composer, centered on the chat column at every
+  breakpoint, with show/hide hysteresis (appears ≥140px away, hides ≤90px) so
+  it never flickers at the threshold. Click = smooth flight to the bottom
+  (bounded 900ms so a moving target can't strand it) and following resumes.
+- **Choose the main model.** The composer's Research settings now offer four
+  routes: **GLM main · LLM7 helps** (the default), **LLM7 main · GLM helps**
+  (new — the mirror route: the keyless multi-model pool leads every step,
+  z.ai GLM rides behind as failover), plus the two single-family pins. The
+  choice flows end-to-end: store → POST body → `job.modelPref` → the engine's
+  backend ordering (`orderedBackends`) → the run's first activity line
+  ("route: LLM7 multi-model keyless pool leads → Pollinations → z.ai GLM
+  failover"). Verified live: a run started with the new route persisted
+  `modelPref: llm7` and printed the mirror-route line.
+- **The chat window is 75%, not 100%.** Wherever the chat column would run
+  edge-to-edge (phones, small tablets — every viewport below ~1024px), it now
+  caps at `min(768px, 75%)` — a centered reading column instead of a full-bleed
+  one. Home hero, composer, suggestions, thread turns, shared banner, loading
+  skeleton and the bottom dock all share the same cap so everything stays
+  aligned. Desktop (≥1024px) is unchanged: the 768px cap already held it well
+  under 75%. Measured: 600px viewport → 71% column, 375px → 75% dock, zero
+  horizontal overflow.
+- **Scrolling is smoother while a run streams.** Every poller tick (1.2s) and
+  every per-second clock tick re-rendered *every* turn in the thread — the
+  jank you felt while scrolling a busy thread. `ThreadTurn` is memoized now:
+  finished turns keep their object identity and skip re-rendering entirely;
+  only the live turn re-renders (its elapsed/timestamps must tick).
+
 ## v2.0.5 — one brand color everywhere + a light mode that actually toggles (2026-10-10)
 
 - **The animated logo now wears the brand color.** It was silver/periwinkle

@@ -14,7 +14,9 @@ import { listHistory } from "@/lib/idb-store";
 interface SettingsState {
   mode: string;
   language: string;
-  modelPref: "auto" | "glm" | "pool";
+  /** which model family leads the run: GLM → pool ("auto"), pool → GLM ("llm7"),
+   *  or a single family ("glm" / "pool") */
+  modelPref: "auto" | "llm7" | "glm" | "pool";
   adv: AdvParams;
   advTouched: boolean;
   showThinking: boolean;
@@ -25,7 +27,7 @@ interface SettingsState {
   changeAdv: (a: AdvParams) => void;
   resetAdv: () => void;
   setLanguage: (l: string) => void;
-  setModelPref: (m: "auto" | "glm" | "pool") => void;
+  setModelPref: (m: "auto" | "llm7" | "glm" | "pool") => void;
   setShowThinking: (b: boolean) => void;
   setCourt: (b: boolean) => void;
   setSidebarOpen: (b: boolean) => void;
