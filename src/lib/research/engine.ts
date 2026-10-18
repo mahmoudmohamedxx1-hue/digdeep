@@ -2753,6 +2753,11 @@ export async function runJob(jobId: string) {
     ]);
     if (auditR.status === "rejected") await ctx.emit("info", "Citation audit step failed — continuing with the drafts as written", String(auditR.reason ?? "").slice(0, 300));
     if (bundleMode === "full" || court) auditDone = true; // v2.5.0: never re-audit on resume — repaired drafts persist
+    // v2.5.3: bundleDone is honest — a bundle whose summary/title actually failed
+    // (placeholders) does NOT count as done; the next slice re-runs it (the audit
+    // still skips via auditDone) so the grader never sees a placeholder summary.
+    if (court) bundleDoneState = true;
+    else bundleDoneState = execR.status === "fulfilled" && !!(execR.value as LlmResult).text.trim() && titleR.status === "fulfilled" && !!(titleR.value as LlmResult).text.trim();
     execText = court
       ? courtExecMd
       : execR.status === "fulfilled" && execR.value.text.trim()
@@ -3007,10 +3012,11 @@ export async function runJob(jobId: string) {
     // ---------- STAGE 5: SELF-SCORE (P1-1) — grade the finished report ----------
     // digdeep grades its own report against the comprehension pass's success
     // criteria on four dimensions, and publishes the score — including bad ones.
-    // v2.5.0: the score is the report's headline number — when this slice is
-    // nearly out of clock but slices remain, checkpoint and let a fresh slice
-    // grade (and improve) instead of publishing an unscored report.
-    if (SERVERLESS && outOfSlice() && !runExhausted() && !quality) {
+    // v2.5.3: the grade + its patient ride need a COMFORTABLE slice — the 7.3 run's
+    // successor lost its score entirely because the bundle ate the clock and the
+    // grade hard-stopped at <15s. With ≥65s left we checkpoint; a fresh slice
+    // grades (and improves) with the full ~5-min clock.
+    if (SERVERLESS && ctx.hardLeft < 65_000 && !runExhausted() && !quality) {
       await persist("tail");
       await updateJob(jobId, { stage: "Slice boundary — grading in a fresh slice", progress: 96 }).catch(() => {});
       return;
