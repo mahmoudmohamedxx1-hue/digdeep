@@ -972,7 +972,7 @@ export async function runJob(jobId: string) {
           [{ role: "user", content: comprehensionPrompt(job.query, threadContext || undefined, docs.map((d) => ({ name: d.name }))) }],
           "comprehend",
           "Understanding the question",
-          { wantThinking: true, maxTokens: 1200, fast: { patient: false, timeoutMs: 45_000 } }
+          { wantThinking: true, maxTokens: 1200, fast: { patient: false, timeoutMs: SERVERLESS ? 25_000 : 45_000 } }
         );
         const comp = extractJson(res.text);
         if (comp && (comp.restate || comp.intent || comp.successCriteria)) {
@@ -1001,7 +1001,7 @@ export async function runJob(jobId: string) {
     // Fast-fail: the persona is a nice-to-have — never let it block the pipeline for minutes.
     let agentName = "";
     try {
-      const roleRes = await ctx.llm([{ role: "user", content: roleChooserPrompt(job.query) }], "role", false, 400, { patient: false, timeoutMs: 30_000 });
+      const roleRes = await ctx.llm([{ role: "user", content: roleChooserPrompt(job.query) }], "role", false, 400, { patient: false, timeoutMs: SERVERLESS ? 12_000 : 30_000 });
       const role = extractJson(roleRes.text);
       if (role?.role) {
         ctx.rolePrompt = String(role.role).slice(0, 900);
@@ -1440,7 +1440,7 @@ export async function runJob(jobId: string) {
         let roundNotes = "";
         if (srcForSum.length > 0) {
           try {
-            const sumRes = await ctx.llm([{ role: "user", content: summarizePrompt(sec.title, sec.question, srcForSum, round) }], "summarize", false);
+            const sumRes = await ctx.llm([{ role: "user", content: summarizePrompt(sec.title, sec.question, srcForSum, round) }], "summarize", false, undefined, SERVERLESS ? { patient: false, timeoutMs: 30_000 } : undefined);
             roundNotes = sumRes.text;
             await ctx.emit("summary", `Synthesized findings on “${sec.title}”`, roundNotes.slice(0, 2400), sumRes.model, { section: sec.title, round, sources: srcForSum.length });
           } catch (sumErr) {
@@ -1501,7 +1501,7 @@ export async function runJob(jobId: string) {
             [{ role: "user", content: reflectPrompt(sec.title, sec.question, notes, roundsLeft, linkCandidates, ctx.allLearnings, canSpawnThis) }],
             "reflect",
             `Self-reviewing: ${sec.title}`,
-            { wantThinking: true }
+            SERVERLESS ? { wantThinking: true, fast: { patient: false, timeoutMs: 25_000 } } : { wantThinking: true }
           );
           const refl = extractJson(reflRes.text);
           // dzhng: dense learnings with entities/numbers/dates accumulate across aspects.
@@ -1666,6 +1666,13 @@ export async function runJob(jobId: string) {
     await updateJob(jobId, { status: "critiquing", stage: "Critically reviewing my own evidence", progress: 74 });
     const doneSections = await db.researchSection.findMany({ where: { jobId }, orderBy: { order: "asc" } });
     let critRes: { text: string; model: string; reasoning?: string } | null = null;
+    // v2.4.1: on the serverless clock the critique pass (a patient-ride LLM call that
+    // regularly eats 60-90s) is folded into the post-grade improvement round — same
+    // gap-repair function, time-boxed, AFTER the report exists. Self-hosted runs keep
+    // the full pre-write critique + weak-section re-research.
+    if (SERVERLESS) {
+      await ctx.emit("info", "Serverless clock — critique runs as the post-grade improvement round", "The formal critique pass and its follow-up re-research run on self-hosted deployments; here the same gap-repair happens inside the time-boxed quality round after grading, so the report, score and improvement all fit the function budget.", undefined, undefined, "verbose");
+    } else {
     try {
       critRes = await ctx.llmLive(
         [{ role: "user", content: critiquePrompt(job.query, doneSections.filter((s) => s.findings).map((s) => ({ title: s.title, findings: s.findings ?? "" }))) }],
@@ -1675,6 +1682,7 @@ export async function runJob(jobId: string) {
       );
     } catch (critErr) {
       await ctx.emit("info", "Critique model unavailable — skipping the formal critique pass", critErr instanceof Error ? critErr.message.slice(0, 200) : undefined);
+    }
     }
     const critique = critRes ? extractJson(critRes.text) : null;
     await ctx.emit("critique", `Self-critique verdict: ${critique?.verdict ?? "skipped (model unavailable)"}`, critique?.reasoning ?? critRes?.text.slice(0, 600) ?? "", critRes?.model, { weak: critique?.weakSections?.map((w: any) => w.title) ?? [] });
@@ -1745,7 +1753,7 @@ export async function runJob(jobId: string) {
     // writing instruction: strengthen with evidence, hedge honestly, or attribute.
     const heavyPreset = unlimited || ["deep", "exhaustive"].includes(job.preset);
     let redTeamAttacks: { section: string; claim: string; attack: string; severity: string }[] = [];
-    if (heavyPreset && !ctx.outOfTime) {
+    if (heavyPreset && !ctx.outOfTime && !SERVERLESS) {
       try {
         const rtRes = await ctx.llmLive(
           [{ role: "user", content: redTeamPrompt(job.query, doneSections.filter((s) => s.findings).map((s) => ({ title: s.title, findings: s.findings ?? "" }))) }],
@@ -1788,7 +1796,7 @@ export async function runJob(jobId: string) {
       .filter((c) => !c.verified && (c.grade === "single-source" || c.grade === "contested") && c.claim.length > 25)
       .slice(0, 3);
     const refuted: { claim: string; correction: string; reasoning: string }[] = [];
-    if (toVerify.length > 0 && !ctx.outOfTime) {
+    if (toVerify.length > 0 && !ctx.outOfTime && !SERVERLESS) {
       await ctx.emit(
         "verify",
         `Cross-checking ${toVerify.length} load-bearing claim${toVerify.length > 1 ? "s" : ""} against fresh sources`,
@@ -1841,7 +1849,7 @@ export async function runJob(jobId: string) {
     // structured debate over fresh evidence. Training-free multi-agent debate
     // measurably improves fact-checking (FC-MAD line); bounded to 2 claims, deep+ presets.
     let debated = 0;
-    if (heavyPreset && !ctx.outOfTime) {
+    if (heavyPreset && !ctx.outOfTime && !SERVERLESS) {
       // debate targets: contested or cross-check-unclear claims that no verdict has settled yet
       const debateClaims = ctx.claims
         .filter((c) => c.claim.length > 25 && (c.grade === "contested" || c.verified === "unclear") && !["confirmed", "refuted"].includes(c.verified ?? "") && !(c.verified ?? "").startsWith("debate"))
@@ -1895,7 +1903,7 @@ export async function runJob(jobId: string) {
         const keep = Math.min(sourcesUsed.length, unlimited ? 30 : 20);
         const curRes = await ctx.llm(
           [{ role: "user", content: curateSourcesPrompt(job.query, sourcesUsed.map((s) => ({ n: s.n, title: s.title, domain: s.domain })), keep) }],
-          "curate", false, 500, { patient: false, timeoutMs: 60_000 }
+          "curate", false, 500, { patient: false, timeoutMs: SERVERLESS ? 20_000 : 60_000 }
         );
         const ranked = (extractJsonArray(curRes.text) ?? [])
           .map((x) => Number(x))
