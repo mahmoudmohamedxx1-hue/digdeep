@@ -1509,7 +1509,11 @@ export async function runJob(jobId: string) {
 
         // 2e. SELF-CRITIQUE v2 — dual critic: is it sufficient? what is now solidly known? where to go next (search or walk)?
         const roundsLeft = ctx.unlimitedRounds ? "unlimited" : Math.max(0, job.depth - round);
-        const canReflect = (ctx.unlimitedRounds || (job.depth - round) > 0) && !!notes && !ctx.outOfTime;
+          const canReflect = (ctx.unlimitedRounds || (job.depth - round) > 0) && !!notes && !ctx.outOfTime
+            // v2.4.8: deep past the serverless cutoff, the reflection's outputs (round-2
+            // queries, walks, spawns) can never be used — single-round serverless runs
+            // skip it and save its full latency for the grade + improve tail
+            && !(Date.now() > ctx.researchCutoffAt + 25_000);
         if (canReflect && notes && !ctx.outOfTime) {
           try {
           // WebWalker: offer harvested links as walk candidates
@@ -2335,11 +2339,15 @@ export async function runJob(jobId: string) {
       const reportV0 = [`# ${job.query.slice(0, 80)}`, ``, bodyV0, ``, `## References`, ``, refsV0 || "*(no sources were successfully retrieved)*"].join("\n");
       await updateJob(jobId, { reportMd: reportV0 }).catch(() => {});
     }
-    // v2.4.5: the bundle is POLISH — when the clock is short (blackout recovery spent
-    // it on the drafts), skip straight to assembly + grade; a graded report with no
-    // exec summary beats a polished zombie.
-    if (ctx.hardLeft < 60_000 && !court) {
+    // v2.4.5: the bundle is POLISH — its size adapts to the clock left after the
+    // drafts (research overshoot varies 40-100s): FULL (audit+exec+conclusion+title+
+    // related) when ≥110s remain, LITE (exec+title, 20s caps) when 60-110s, SKIPPED
+    // below that — the grade is the priority; polish gets whatever truly remains.
+    const bundleMode: "full" | "lite" | "skip" = ctx.hardLeft >= 110_000 ? "full" : ctx.hardLeft >= 60_000 ? "lite" : "skip";
+    if (bundleMode === "skip" && !court) {
       await ctx.emit("info", "Clock is short — skipping the summary polish, going straight to grading", "The drafts and references are done; the executive summary and conclusion are skipped so the self-score still fits the function budget.");
+    } else if (bundleMode === "lite" && !court) {
+      await ctx.emit("info", "Clock is tight — running the lite polish (summary + title only)", "The citation audit, conclusion and related questions are skipped so the self-score and one improvement round still fit the function budget.", undefined, undefined, "verbose");
     }
     // v2.4.5: hoisted extractors with honest fallbacks — set by the bundle when it
     // runs, kept as fallbacks when the clock was too short for the polish pass
@@ -2347,21 +2355,30 @@ export async function runJob(jobId: string) {
     let concText = court ? "" : "";
     let titleText = job.query.slice(0, 80);
     let relatedQuestions = fallbackRelated(job.query, finalSections.map((s) => s.question));
-    if (ctx.hardLeft >= 60_000 || court) {
+    if (bundleMode !== "skip" || court) {
+    const liteCaps = bundleMode === "lite";
     const [auditR, execR, concR, titleR, relatedR] = await Promise.allSettled([
-      // v2.4.0: the citation audit rides IN the bundle (it only needs the drafts)
-      auditWork(),
+      // v2.4.0: the citation audit rides IN the bundle (it only needs the drafts);
+      // the lite bundle skips it (the claim-check ledger below still runs — it is pure
+      // computation and catches the same weak anchors)
+      bundleMode === "full" || court
+        ? auditWork()
+        : Promise.resolve(undefined),
       // bounded: on a capped serverless run the tail must not ride patient cooldown
       // waits — a missed summary degrades honestly, a frozen function loses the report.
       // Clamped to the hard clock so even a late-starting tail still persists.
       court
         ? Promise.resolve({ text: "", model: "", backendId: "court", latencyMs: 0 } as LlmResult)
-        : ctx.llm([{ role: "user", content: execSummaryPrompt(job.query, draftsPre, job.language, job.preset, ctx.allLearnings) }], "exec-summary", false, undefined, { ...(SERVERLESS ? { patient: false as const } : {}), timeoutMs: SERVERLESS ? Math.min(25_000, Math.max(12_000, ctx.hardLeft - 20_000)) : Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
-      court
+        : ctx.llm([{ role: "user", content: execSummaryPrompt(job.query, draftsPre, job.language, job.preset, ctx.allLearnings) }], "exec-summary", false, undefined, { ...(SERVERLESS ? { patient: false as const } : {}), timeoutMs: liteCaps ? 20_000 : SERVERLESS ? Math.min(25_000, Math.max(12_000, ctx.hardLeft - 20_000)) : Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
+      bundleMode === "full" || court
+      ? court
         ? Promise.resolve({ text: "", model: "", backendId: "court", latencyMs: 0 } as LlmResult)
-        : ctx.llm([{ role: "user", content: conclusionPrompt(job.query, draftsPre, job.language) }], "conclusion", false, undefined, { ...(SERVERLESS ? { patient: false as const } : {}), timeoutMs: SERVERLESS ? Math.min(25_000, Math.max(12_000, ctx.hardLeft - 20_000)) : Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
-      ctx.llm([{ role: "user", content: titlePrompt(job.query, plan.restate, job.language) }], "title", false, 60, { ...(SERVERLESS ? { patient: false as const } : {}), timeoutMs: SERVERLESS ? 15_000 : Math.min(60_000, Math.max(10_000, ctx.hardLeft - 20_000)) }),
-      ctx.llm([{ role: "user", content: relatedPrompt(job.query, finalSections.map((s) => s.title), job.language) }], "related", false, 300, { ...(SERVERLESS ? { patient: false as const } : {}), timeoutMs: SERVERLESS ? 15_000 : Math.min(60_000, Math.max(10_000, ctx.hardLeft - 20_000)) }),
+        : ctx.llm([{ role: "user", content: conclusionPrompt(job.query, draftsPre, job.language) }], "conclusion", false, undefined, { ...(SERVERLESS ? { patient: false as const } : {}), timeoutMs: liteCaps ? 20_000 : SERVERLESS ? Math.min(25_000, Math.max(12_000, ctx.hardLeft - 20_000)) : Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) })
+      : Promise.resolve({ text: "", model: "", backendId: "skipped", latencyMs: 0 } as LlmResult),
+      ctx.llm([{ role: "user", content: titlePrompt(job.query, plan.restate, job.language) }], "title", false, 60, { ...(SERVERLESS ? { patient: false as const } : {}), timeoutMs: liteCaps ? 15_000 : SERVERLESS ? 15_000 : Math.min(60_000, Math.max(10_000, ctx.hardLeft - 20_000)) }),
+      bundleMode === "full" || court
+        ? ctx.llm([{ role: "user", content: relatedPrompt(job.query, finalSections.map((s) => s.title), job.language) }], "related", false, 300, { ...(SERVERLESS ? { patient: false as const } : {}), timeoutMs: SERVERLESS ? 15_000 : Math.min(60_000, Math.max(10_000, ctx.hardLeft - 20_000)) })
+        : Promise.resolve({ text: "", model: "", backendId: "skipped", latencyMs: 0 } as LlmResult),
     ]);
     if (auditR.status === "rejected") await ctx.emit("info", "Citation audit step failed — continuing with the drafts as written", String(auditR.reason ?? "").slice(0, 300));
     execText = court
