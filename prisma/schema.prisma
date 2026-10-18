@@ -29,6 +29,10 @@ model ResearchJob {
   docs           String? // JSON [{name, text}] — user-attached ground-truth documents (P2-3)
   error          String?
   cancelRequested Boolean     @default(false)
+  // v2.5.0 continuation engine: cross-slice resume state + instance lease
+  checkpoint     String? // JSON EngineCheckpoint — phase cursor + volatile ctx state
+  leaseUntil     DateTime? // single-run guard across serverless instances
+  sliceN         Int      @default(0) // how many 300s slices this run has consumed
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   startedAt      DateTime?

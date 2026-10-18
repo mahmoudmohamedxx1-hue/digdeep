@@ -44,6 +44,10 @@ const COLUMNS: Array<[string, string, string]> = [
   ["ResearchJob", "cancelRequested", `ALTER TABLE "ResearchJob" ADD COLUMN IF NOT EXISTS "cancelRequested" BOOLEAN NOT NULL DEFAULT false`],
   ["ResearchJob", "startedAt", `ALTER TABLE "ResearchJob" ADD COLUMN IF NOT EXISTS "startedAt" TIMESTAMP(3)`],
   ["ResearchJob", "completedAt", `ALTER TABLE "ResearchJob" ADD COLUMN IF NOT EXISTS "completedAt" TIMESTAMP(3)`],
+  // v2.5.0 continuation engine
+  ["ResearchJob", "checkpoint", `ALTER TABLE "ResearchJob" ADD COLUMN IF NOT EXISTS "checkpoint" TEXT`],
+  ["ResearchJob", "leaseUntil", `ALTER TABLE "ResearchJob" ADD COLUMN IF NOT EXISTS "leaseUntil" TIMESTAMP(3)`],
+  ["ResearchJob", "sliceN", `ALTER TABLE "ResearchJob" ADD COLUMN IF NOT EXISTS "sliceN" INTEGER NOT NULL DEFAULT 0`],
   // --- ActivityEvent ---
   ["ActivityEvent", "seq", `ALTER TABLE "ActivityEvent" ADD COLUMN IF NOT EXISTS "seq" INTEGER NOT NULL DEFAULT 0`],
   ["ActivityEvent", "ts", `ALTER TABLE "ActivityEvent" ADD COLUMN IF NOT EXISTS "ts" TIMESTAMP(3) NOT NULL DEFAULT now()`],

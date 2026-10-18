@@ -108,7 +108,7 @@ class LLMRouter {
           detail:
             name === 'freellmpool'
               ? freellmpool.getStatusDetail()
-              : { reason: available ? 'platform SDK ready' : 'SDK init failed' },
+              : { reason: available ? 'platform SDK ready' : 'z.ai platform SDK is unavailable on this deployment (it needs the sandbox runtime) — the research engine uses the LLM7 keyless pool + Pollinations failover here; self-hosting enables this lane' },
         }
       })
     )

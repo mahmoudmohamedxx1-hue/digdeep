@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { after } from "next/server";
 import { db } from "@/lib/db";
-import { runJob, markStaleJobs } from "@/lib/research/engine";
+import { runJob, markStaleJobs, engineAlive } from "@/lib/research/engine";
 
 export const dynamic = "force-dynamic";
-// retry restarts a full engine run past the response — same serverless budget
-// contract as POST /api/research
+// v2.5.0: every poll can carry a continuation slice — same 300s ceiling as the
+// initial POST. The engine checkpoints at slice boundaries and resumes here.
 export const maxDuration = 300;
 
 const ACTIVE = ["queued", "planning", "researching", "critiquing", "synthesizing"];
@@ -18,6 +18,16 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     after(markStaleJobs().catch(() => {}));
     const job = await db.researchJob.findUnique({ where: { id } });
     if (!job) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+    // ── v2.5.0 CONTINUATION TRIGGER ────────────────────────────────────────
+    // An active job with no live engine on THIS instance gets re-triggered in
+    // `after()`: either it was never started (queued), or a previous slice's
+    // function clock ended at a checkpoint boundary. runJob internally guards
+    // with the cross-instance lease + this-instance heartbeat, so a poll while
+    // an engine is genuinely running anywhere is a cheap no-op.
+    if (ACTIVE.includes(job.status) && !engineAlive(id)) {
+      after(runJob(id).catch((e) => console.error("[engine-resume]", id, e)));
+    }
 
     const [events, sources, sections] = await Promise.all([
       db.activityEvent.findMany({ where: { jobId: id, seq: { gt: sinceSeq } }, orderBy: { seq: "desc" }, take: 250 }),
@@ -74,12 +84,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (body.action === "retry") {
       if (ACTIVE.includes(job.status)) return NextResponse.json({ error: "Job still active" }, { status: 400 });
       // wipe previous run artifacts so the engine starts clean
+      // (v2.5.0: the continuation checkpoint, lease and slice counter too)
       await db.activityEvent.deleteMany({ where: { jobId: id } });
       await db.source.deleteMany({ where: { jobId: id } });
       await db.researchSection.deleteMany({ where: { jobId: id } });
       await db.researchJob.update({
         where: { id },
-        data: { status: "queued", stage: "Queued", cancelRequested: false, error: null, progress: 0, reportMd: null, stats: null, plan: null, startedAt: null, completedAt: null },
+        data: { status: "queued", stage: "Queued", cancelRequested: false, error: null, progress: 0, reportMd: null, stats: null, plan: null, startedAt: null, completedAt: null, checkpoint: null, leaseUntil: null, sliceN: 0 },
       });
       // restart the run past the response — same contract as the initial POST
       after(runJob(id).catch(() => {}));

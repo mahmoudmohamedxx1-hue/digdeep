@@ -196,6 +196,8 @@ Design a research plan. THINK FROM KNOWLEDGE FIRST: state what you already confi
 
 COVERAGE RULE (this is graded): every success criterion from the comprehension pass MUST be covered by at least one aspect — a report that leaves a criterion unanswered scores poorly on coverage no matter how good the writing is. If the criteria span more dimensions than the aspect count allows, choose aspects that each cover a DISTINCT criterion cluster, and say in each aspect's goal which criteria it delivers.
 
+QUERY SPECIFICITY RULE (this is graded): every search query must name CONCRETE entities — specific products, companies, standards, versions, researchers, dates or numbers (e.g. "IBM Heron qubit count 2025", "SLS HTTP/3 support Chrome", "GLP-1 semaglutide kidney outcomes trial"). NEVER write filler queries like "X overview", "what is X" or "X explained" — those match marketing pages and empty repos, not evidence. Use the topic's real vocabulary (name the tools, the standards bodies, the flagship products, the key people) so the searches hit primary sources.
+
 Respond with ONLY valid JSON (no markdown fences, no commentary) with this exact shape:
 {
   "restate": "1-2 sentences: what the user really needs to know and why it matters",

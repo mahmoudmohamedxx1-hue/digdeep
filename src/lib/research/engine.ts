@@ -46,8 +46,30 @@ import {
 } from "./prompts";
 import { PIPELINE_ONE_LINER } from "./self-knowledge";
 import { JURORS, prosecutionPrompt, defensePrompt, rebuttalPrompt, jurorPrompt, judgePrompt, type CourtVerdict } from "./court";
+import {
+  acquireLease,
+  releaseLease,
+  renewLease,
+  loadCheckpoint,
+  saveCheckpoint,
+  phaseAtLeast,
+  type EngineCheckpoint,
+  type EnginePhase,
+} from "./checkpoint";
+import { applySourceQualityGate } from "./sourcequality";
 
-const activeJobs = new Set<string>();
+/** v2.5.0 continuation: activeJobs now carries a heartbeat — a frozen slice's
+ * entry goes stale so the poller's resume attempt is allowed on warm instances
+ * (the platform can freeze an after() task mid-flight without running finally). */
+const activeJobs = new Map<string, number>();
+const ACTIVE_STALE_MS = 25_000;
+
+/** True when an engine for this job looks alive ON THIS INSTANCE (fresh
+ * heartbeat). The GET route consults this before re-triggering runJob. */
+export function engineAlive(jobId: string): boolean {
+  const beat = activeJobs.get(jobId);
+  return !!beat && Date.now() - beat < ACTIVE_STALE_MS;
+}
 
 // Safety rails for "unlimited" (-1) mode: literal infinity would hang the server forever.
 const UNLIMITED_ASPECT_CAP = 50;
@@ -171,6 +193,8 @@ class Ctx {
   llmBlackoutUntil = 0;
   deadline: number; // Infinity when unlimited
   hasTimeBudget: boolean;
+  /** v2.5.0: last lease renewal (throttle) */
+  lastLeaseRenew = 0;
   /** Absolute wall-clock death time of the serverless function (Infinity elsewhere).
    *  Every patient LLM ride is clamped against it and enhancement stages skip fast
    *  when squeezed — the platform freezes the function mid-flight at maxDuration,
@@ -226,6 +250,14 @@ class Ctx {
   }
 
   async emit(type: string, title: string, detail?: string, model?: string, meta?: unknown, level: "normal" | "verbose" = "normal") {
+    // v2.5.0 continuation: every event is a heartbeat — it proves this instance's
+    // engine is alive (activeJobs freshness) and renews the cross-instance lease
+    // (throttled to every 8s; the lease outlives the throttle by design).
+    activeJobs.set(this.jobId, Date.now());
+    if (Date.now() - this.lastLeaseRenew > 8_000) {
+      this.lastLeaseRenew = Date.now();
+      await renewLease(this.jobId).catch(() => {});
+    }
     await db.activityEvent.create({
       data: { jobId: this.jobId, seq: this.seq++, type, title, detail: detail?.slice(0, 8000), model, meta: meta ? JSON.stringify(meta) : undefined, level },
     });
@@ -799,34 +831,44 @@ async function runQuickLane(
   await ctx.emit("done", "Quick answer ready", `Answered in ${Math.round(durationMs / 1000)}s · ${sourcesUsed.length} sources · ${ctx.llmCalls} LLM calls — ask a follow-up or say “go deeper” for the full pipeline`, undefined, stats);
 }
 
-/** Main entry: runs the full research pipeline for a job. Fire-and-forget safe. */
+/** Main entry: runs the full research pipeline for a job. Fire-and-forget safe.
+ *  v2.5.0 continuation: on serverless the engine runs in ~5-min SLICES. When a
+ *  slice's function clock ends, it persists a checkpoint and returns; the
+ *  client's live-poller hits GET /api/research/[id], which re-triggers runJob —
+ *  the next slice resumes from the checkpoint (aspects, drafts, grading, the
+ *  improve loop — all phase-gated). The ABSOLUTE budget (job.maxMinutes, from
+ *  the first slice's start) spans slices, so a 30-min research budget is really
+ *  30 minutes of research, not 113 seconds squeezed inside one function. */
 export async function runJob(jobId: string) {
-  if (activeJobs.has(jobId)) return;
-  activeJobs.add(jobId);
-  const t0 = Date.now();
+  if (engineAlive(jobId)) return; // live engine on THIS instance — never double-run
+  activeJobs.set(jobId, Date.now());
+  let leaseHeld = false;
   try {
     const job = await db.researchJob.findUnique({ where: { id: jobId } });
     if (!job) return;
+    // cross-instance single-run guard: exactly one instance may hold the lease
+    leaseHeld = await acquireLease(jobId);
+    if (!leaseHeld) return;
 
     const unlimited = job.breadth < 0 || job.depth < 0 || job.maxSources < 0 || job.maxMinutes < 0;
     // ── serverless wall-clock (Vercel) ─────────────────────────────────────
-    // On a long-lived server the engine trusts the preset's time budget. On a
-    // serverless function the whole pipeline must finish inside ONE invocation
-    // (the function is frozen when the request completes), so the budget is
-    // clamped to what the platform allows and the run degrades gracefully:
-    // research until the clock runs out, then write the best report the
-    // gathered evidence supports — and say so honestly in the event stream.
+    // v2.5.0: the budget is no longer clamped to one invocation. Each slice
+    // gets a fresh 288s function clock (hardStop) while the RESEARCH budget
+    // is absolute — anchored at the first slice's t0, restored from the
+    // checkpoint on every resume. The tail (drafts → grade → improve) still
+    // reserves the last 175s of the ABSOLUTE deadline.
     const SERVERLESS = !!process.env.VERCEL;
-    // v2.4.0 serverless time-phasing: the function is frozen by the platform at
-    // maxDuration (300s Hobby). The engine now RESERVES the tail explicitly:
-    //   hardStop 288s  (12s final-write margin)
-    //   research cutoff hardStop-195s  → parallel drafts (45s) + bundle (30s) +
-    //   assembly (5s) + grade (30s) + ONE earn-the-score round (72s) fit in the reserve
-    // so a capped run still drafts, grades AND improves instead of dying at 95%.
-    const SERVERLESS_CAP_MS = Math.max(60_000, Number(process.env.DIGDEEP_SERVERLESS_BUDGET_MS) || 200_000);
     const rawBudgetMs = unlimited ? Infinity : Math.max(3, job.maxMinutes) * 60_000;
-    const budgetMs = SERVERLESS ? Math.min(rawBudgetMs, SERVERLESS_CAP_MS) : rawBudgetMs;
-    const budgetMinutes = budgetMs === Infinity ? -1 : Math.max(1, Math.floor(budgetMs / 60_000));
+
+    // ── v2.5.0 continuation state: load the checkpoint, restore ctx ────────
+    const cp = await loadCheckpoint(job);
+    const resuming = !!cp;
+    const resumePhase: EnginePhase | undefined = cp?.phase;
+    const t0 = cp?.t0 ?? Date.now();
+    const absoluteDeadline = cp?.absoluteDeadline ?? (unlimited ? null : t0 + rawBudgetMs);
+    const budgetMinutes = unlimited ? -1 : Math.max(1, Math.floor(rawBudgetMs / 60_000));
+    const sliceN = (job.sliceN ?? 0) + 1;
+    const MAX_SLICES = 12; // runaway guard: ~60 min of serverless compute per run
 
     const maxSeq = await db.activityEvent.aggregate({ where: { jobId }, _max: { seq: true } });
     const ctx = new Ctx(jobId, job.modelPref as ModelPref, (maxSeq._max.seq ?? 0) + 1, {
@@ -834,20 +876,150 @@ export async function runJob(jobId: string) {
       depth: job.depth,
       maxSources: job.maxSources,
       anyUnlimited: unlimited,
-      // the platform freezes the function at maxDuration (300s Hobby) — leave a
-      // safety margin so the final report write always makes it to the database
-      ...(SERVERLESS ? { hardStopMs: 288_000 } : {}),
+      // each SLICE gets a fresh function clock — the platform freezes at 300s.
+      // (DIGDEEP_SLICE_MS shortens the slice for local continuation testing.)
+      ...(SERVERLESS ? { hardStopMs: Math.max(30_000, Number(process.env.DIGDEEP_SLICE_MS) || 288_000) } : {}),
     });
-    // (the research cutoff is anchored at Stage-2 entry below — after the plan lands,
-    // with a 25s floor, so a slow plan ride can never consume the research window)
+    // v2.5.0: the deadline is ABSOLUTE across slices, not per-invocation
+    ctx.deadline = absoluteDeadline ?? Infinity;
+    // the research cutoff is anchored at Stage-2 entry on a fresh run; on a
+    // resumed run it comes from the checkpoint (set below after restore)
 
-    if (SERVERLESS && rawBudgetMs > SERVERLESS_CAP_MS) {
+    // ── hoisted tail state (persist()/resume() need them before stages run) ─
+    let intent: Intent = "research";
+    let routeWhy = "";
+    let comprehensionCriteria: string[] = [];
+    let agentName = "";
+    let sourcesUsed: SourceRef[] = [];
+    let citeStats: { checked: number; repaired: number; dropped: number; integrity: number; reanchoredTo: number[]; droppedNs: number[]; flagged: number[] } = {
+      checked: 0, repaired: 0, dropped: 0, integrity: 100, reanchoredTo: [], droppedNs: [], flagged: [],
+    };
+    let quality: QualityScore | null = null;
+    let qualityRounds = 0;
+    let refList: SourceRef[] = [];
+    let refs = "";
+    let execText = "";
+    let concText = "";
+    let titleText = "";
+    let relatedQuestions: string[] = [];
+    let disagreementsMd = "";
+    let diffMd = "";
+    let words: [number, number] = [420, 650];
+    let reportWords = 0;
+    let durationMs = 0;
+    let spawnedCount = { n: 0 };
+    let courtProgress: EngineCheckpoint["courtProgress"];
+    let auditDone = false;
+    let bundleDoneState = false; // v2.5.0: the tail bundle completed (this slice or a previous one)
+    let resumeDrafting = resumePhase === "drafting"; // exactly-drafting: skip drafted sections
+    let concurrency = 2; // aspect worker count — set by the plan stage, restored default on resume
+
+    // ── restore ctx state from the checkpoint ──────────────────────────────
+    if (cp) {
+      ctx.rolePrompt = cp.rolePrompt ?? "";
+      ctx.allLearnings = cp.allLearnings ?? [];
+      ctx.claims = cp.claims ?? [];
+      ctx.contradictions = cp.contradictions ?? [];
+      ctx.seenUrls = new Set((cp.seenUrls ?? []).slice(0, 3000));
+      ctx.sourceN = cp.sourceN ?? 0;
+      ctx.llmCalls = cp.llmCalls ?? 0;
+      ctx.byModel = cp.byModel ?? {};
+      ctx.walkedUrls = cp.walkedUrls ?? 0;
+      ctx.rerankRuns = cp.rerankRuns ?? 0;
+      ctx.aspectTimes = cp.aspectTimes ?? [];
+      ctx.researchCutoffAt = cp.researchCutoffAt ?? Number.POSITIVE_INFINITY;
+      for (const [n, text] of cp.sourceTexts ?? []) ctx.sourceTexts.set(n, text);
+      for (const [n, meta] of cp.sourceMeta ?? []) ctx.sourceMeta.set(n, meta);
+      sourcesUsed = cp.sourcesUsed ?? [];
+      comprehensionCriteria = cp.comprehensionCriteria ?? [];
+      agentName = cp.agentName ?? "";
+      citeStats = cp.citeStats ?? citeStats;
+      quality = (cp.quality as QualityScore) ?? null;
+      qualityRounds = cp.qualityRounds ?? 0;
+      refList = cp.refList ?? [];
+      execText = cp.execText ?? "";
+      concText = cp.concText ?? "";
+      titleText = cp.titleText ?? "";
+      relatedQuestions = cp.relatedQuestions ?? [];
+      disagreementsMd = cp.disagreementsMd ?? "";
+      words = cp.words ?? words;
+      reportWords = cp.reportWords ?? 0;
+      spawnedCount = { n: cp.spawnedCount ?? 0 };
+      courtProgress = cp.courtProgress;
+      auditDone = cp.auditDone === true;
+      bundleDoneState = cp.bundleDone === true;
+      concurrency = cp.aspectTimes?.length ? Math.max(2, Math.min(4, Math.round(cp.aspectTimes.length / 2))) : 4;
+      await db.researchJob.update({ where: { id: jobId }, data: { sliceN } }).catch(() => {});
       await ctx.emit(
         "info",
-        `Serverless run — research capped at ~${Math.round((ctx.hardStop - ctx.researchCutoffAt) / 60_000)} min, then write + grade + improve`,
-        "This deployment runs on serverless functions, which cap background compute at roughly five minutes per run. I sized the phases so the report is drafted, graded AND one improvement round still fits the clock — multi-engine search, citation audit and self-grading all run unchanged. For full-length runs (30 min and up), self-host digdeep with `bun run dev`; the engine is identical, only the clock differs.",
+        `Continuing the run — serverless slice ${sliceN} of at most ${MAX_SLICES}`,
+        `The previous function slice reached its ~5-minute platform clock, so the engine checkpointed its state and paused. This slice resumes exactly where it stopped (no re-searching, no re-reading) — the time budget is spent on research, not restarts. Elapsed so far: ${fmtMin(Date.now() - t0)}.`,
         undefined,
-        { serverless: true, budgetMs: SERVERLESS_CAP_MS }
+        { slice: sliceN, phase: resumePhase, elapsedMs: Date.now() - t0 }
+      );
+    }
+
+    /** v2.5.0: persist the continuation checkpoint. Called at phase boundaries
+     *  and after each aspect/round completes — a slice frozen between saves
+     *  resumes from the previous boundary at worst. Fire-and-safe by design. */
+    const persist = (phase: EnginePhase, extra: Partial<EngineCheckpoint> = {}) => {
+      return saveCheckpoint(jobId, {
+        v: 1,
+        phase,
+        t0,
+        absoluteDeadline,
+        researchCutoffAt: Number.isFinite(ctx.researchCutoffAt) ? ctx.researchCutoffAt : null,
+        sliceN,
+        intent,
+        routeWhy,
+        comprehensionCriteria,
+        rolePrompt: ctx.rolePrompt,
+        agentName,
+        allLearnings: ctx.allLearnings,
+        claims: ctx.claims,
+        contradictions: ctx.contradictions,
+        sourcesUsed,
+        sourceTexts: [...ctx.sourceTexts.entries()],
+        sourceMeta: [...ctx.sourceMeta.entries()],
+        seenUrls: [...ctx.seenUrls].slice(0, 3000),
+        citeStats,
+        llmCalls: ctx.llmCalls,
+        byModel: ctx.byModel,
+        walkedUrls: ctx.walkedUrls,
+        rerankRuns: ctx.rerankRuns,
+        aspectTimes: ctx.aspectTimes,
+        sourceN: ctx.sourceN,
+        spawnedCount: spawnedCount.n,
+        ...(quality ? { quality: quality as EngineCheckpoint["quality"] } : {}),
+        ...(qualityRounds > 0 ? { qualityRounds } : {}),
+        refList,
+        execText,
+        concText,
+        titleText,
+        relatedQuestions,
+        disagreementsMd,
+        words,
+        reportWords,
+        ...(courtProgress ? { courtProgress } : {}),
+        ...(auditDone ? { auditDone: true } : {}),
+        ...(bundleDoneState ? { bundleDone: true } : {}),
+        ...extra,
+      } as Partial<EngineCheckpoint> & { phase: EnginePhase });
+    };
+
+    /** v2.5.0: true when THIS slice's function clock is nearly over — the
+     *  current phase should checkpoint and return; the poller resumes us. */
+    const outOfSlice = () => SERVERLESS && ctx.hardLeft < 30_000;
+    /** v2.5.0: the run must stop for good (absolute budget spent or slice cap). */
+    const runExhausted = () => sliceN >= MAX_SLICES;
+
+    if (SERVERLESS && !resuming) {
+      await ctx.emit(
+        "info",
+        `Serverless continuation run — the engine works in ~5-minute slices until your ${unlimited ? "open-ended (unlimited)" : `${budgetMinutes}-minute`} budget is spent`,
+        "This deployment runs on serverless functions, which cap each function slice at roughly five minutes. The engine checkpoints its state continuously and continues in a fresh slice whenever one ends — so the full time budget is spent on research, not squeezed into one invocation. Multi-engine search, citation audit, self-grading and improvement rounds all run unchanged, across as many slices as the budget needs.",
+        undefined,
+        { serverless: true, continuation: true, budgetMs: unlimited ? null : rawBudgetMs }
       );
     }
 
@@ -883,9 +1055,13 @@ export async function runJob(jobId: string) {
     // it must NEVER force research onto conversational or capability questions.
     // COURT MODE is different by design: the user explicitly asked for a trial, so the
     // query IS the proposition — no chat/quick classification, straight to evidence.
+    // v2.5.0: on a resumed run (checkpoint exists) routing already happened — the
+    // chat/quick lanes complete inside a single slice, so a checkpoint means research.
+    let plan: ResearchPlan | null = null;
+    if (!resuming) {
     await updateJob(jobId, { status: "planning", stage: "Reading your message", progress: 3 });
-    let intent: Intent = "research";
-    let routeWhy = "";
+    intent = "research";
+    routeWhy = "";
     if (job.court) {
       intent = "research";
       routeWhy = "court mode — you asked for a trial, so this proposition gets a prosecutor, a defense, a jury of 12 and a judge";
@@ -974,7 +1150,7 @@ export async function runJob(jobId: string) {
     //      establish, flag ambiguities. Runs IN PARALLEL with the scouting search, so it
     //      adds no wall-clock time; its output feeds (and sharpens) the plan. Degrades
     //      gracefully — no comprehension → the plan proceeds on the raw query as before.
-    let comprehensionCriteria: string[] = []; // kept for the Stage 5 self-score
+    comprehensionCriteria = []; // kept for the Stage 5 self-score
     const compPromise = (async () => {
       try {
         const res = await ctx.llmLive(
@@ -1008,7 +1184,7 @@ export async function runJob(jobId: string) {
 
     // ---- STAGE 1b: choose the expert persona (gpt-researcher choose_agent) ----
     // Fast-fail: the persona is a nice-to-have — never let it block the pipeline for minutes.
-    let agentName = "";
+    agentName = "";
     try {
       const roleRes = await ctx.llm([{ role: "user", content: roleChooserPrompt(job.query) }], "role", false, 400, { patient: false, timeoutMs: SERVERLESS ? 12_000 : 30_000 });
       const role = extractJson(roleRes.text);
@@ -1076,11 +1252,12 @@ export async function runJob(jobId: string) {
       }
       await ctx.emit("info", "Planning model unavailable — falling back to a generic research plan", planErr instanceof Error ? planErr.message.slice(0, 300) : undefined);
     }
-    let plan: ResearchPlan | null = planRes ? extractJson(planRes.text) : null;
-    if (!plan || !Array.isArray(plan.aspects) || plan.aspects.length === 0) {
+    let planParsed: ResearchPlan | null = planRes ? extractJson(planRes.text) : null;
+    if (!planParsed || !Array.isArray(planParsed.aspects) || planParsed.aspects.length === 0) {
       if (planRes) await ctx.emit("info", "Plan parse failed — using fallback plan", planRes.text.slice(0, 400));
-      plan = fallbackPlan(job.query, job.breadth);
+      planParsed = fallbackPlan(job.query, job.breadth);
     }
+    plan = planParsed;
     // v2.4.7: on the serverless clock one extra aspect is nearly free (4 parallel
     // workers, one round each) and directly lifts the coverage dim — the grader's
     // most common deduction was "criteria spanned more dimensions than 3 aspects covered"
@@ -1103,7 +1280,7 @@ export async function runJob(jobId: string) {
     const aspectsTotal = plan.aspects.length;
     const roundsEst = job.depth > 0 ? job.depth : 2.5; // unlimited: rounds depend on gaps found
     const perAspectEstMs = 150_000;
-    const concurrency = Math.min(aspectsTotal, SERVERLESS ? Math.max(ASPECT_CONCURRENCY.heavy, Math.min(aspectsTotal, 4)) : unlimited || job.preset === "exhaustive" ? ASPECT_CONCURRENCY.heavy : ASPECT_CONCURRENCY.budgeted);
+    concurrency = Math.min(aspectsTotal, SERVERLESS ? Math.max(ASPECT_CONCURRENCY.heavy, Math.min(aspectsTotal, 4)) : unlimited || job.preset === "exhaustive" ? ASPECT_CONCURRENCY.heavy : ASPECT_CONCURRENCY.budgeted);
     let estMs = Math.ceil(aspectsTotal / concurrency) * roundsEst * perAspectEstMs + 180_000;
     // a budgeted run can never take longer than its remaining budget — clamp and say so
     const budgetExhausted = ctx.hasTimeBudget && ctx.timeLeft < estMs;
@@ -1122,19 +1299,27 @@ export async function runJob(jobId: string) {
         data: { jobId, order: i, title: plan.aspects[i].title, question: plan.aspects[i].question, queries: JSON.stringify(plan.aspects[i].queries ?? []) },
       });
     }
+    } else {
+      // ── resume path: the plan was persisted on the first slice — reload it ──
+      try {
+        plan = job.plan ? (JSON.parse(job.plan) as ResearchPlan) : null;
+      } catch { plan = null; }
+      if (!plan || !Array.isArray(plan.aspects) || plan.aspects.length === 0) {
+        plan = fallbackPlan(job.query, job.breadth);
+      }
+    } // end !resuming (routing + comprehension + plan + sections)
 
     // ---------- STAGE 2: ITERATIVE RESEARCH (P0-2: aspects in parallel) ----------
-    // v2.4.0: the research cutoff is anchored HERE (not at ctx creation) — a slow
-    // plan ride on hot lanes must never consume the window before it opens. Floor:
-    // research always gets at least 25s (one parallel round); reserve: the full tail
-    // (drafts + bundle + grade + one improve round). Past a slow plan the tail
-    // compresses by degrading gracefully — grade/round skip, the report persists.
-    // v2.4.3: reserve 175s for the tail (drafts 50s + bundle 35s + assembly 5s +
-    // grade 25s + one lean round 55s + final write 10s) — research gets what's left.
-    if (SERVERLESS) ctx.researchCutoffAt = Math.max(Date.now() + 20_000, ctx.hardStop - 175_000);
+    // v2.5.0: the research cutoff is now anchored to the ABSOLUTE deadline (engine
+    // start + maxMinutes), not this slice's hardStop — research spans as many slices
+    // as the budget needs, and the tail (drafts + grade + improve) reserves the last
+    // 175s of the ABSOLUTE clock. On a resumed run the checkpoint's cutoff stands.
+    if (SERVERLESS && !resuming) {
+      const absEnd = absoluteDeadline ?? t0 + 40 * 60_000; // unlimited serverless: 40-min research ceiling
+      ctx.researchCutoffAt = Math.max(Date.now() + 20_000, absEnd - 175_000);
+    }
     await updateJob(jobId, { status: "researching", progress: 8 });
     const sectionRows = await db.researchSection.findMany({ where: { jobId }, orderBy: { order: "asc" } });
-    const sourcesUsed: SourceRef[] = [];
     const readCap = job.preset === "quick" ? 3 : job.preset === "standard" ? 4 : 6;
     // research progress weight — computed against the LIVE queue length, because
     // spawned aspects (dzhng recursion) grow sectionRows mid-run
@@ -1183,7 +1368,6 @@ export async function runJob(jobId: string) {
       aspectSpawnLevel.set(r.id, 0);
       aspectReadCap.set(r.id, readCap);
     }
-    const spawnedCount = { n: 0 };
     const spawnCap = unlimited ? UNLIMITED_ASPECT_CAP : Math.min(job.breadth + 2, 14);
     const spawnDirection = async (from: { title: string }, dir: { title: string; question: string; why: string }) => {
       if (spawnedCount.n >= spawnCap || ctx.outOfTime || Date.now() > ctx.researchCutoffAt || ctx.sourceN >= srcCap) return false;
@@ -1205,7 +1389,7 @@ export async function runJob(jobId: string) {
           order: sectionRows.length,
           title,
           question,
-          queries: JSON.stringify([question.slice(0, 120), `${title} explained`]),
+          queries: JSON.stringify([question.slice(0, 120), `${title} evidence ${new Date().getFullYear()}`]),
           status: "pending",
         },
       }).catch(() => null);
@@ -1227,17 +1411,25 @@ export async function runJob(jobId: string) {
     let nextSi = 0;
     let aspectsDone = 0;
     let stopAll = false;
+    let sliceEnding = false; // v2.5.0: this slice's clock is over — checkpoint and return
     let timeSkipAnnounced = false;
     const runNextAspect = async (): Promise<void> => {
       for (;;) {
         if (stopAll) return;
+        // v2.5.0 continuation: the slice's function clock is nearly over — stop
+        // taking NEW work, persist the checkpoint at the phase boundary below,
+        // and let the poller resume the run in a fresh slice
+        if (outOfSlice()) {
+          sliceEnding = true;
+          return;
+        }
         // v2.4.0: the serverless research window closed — the write/grade/improve
         // tail is reserved; aspects not yet started are skipped (same honesty as
         // the outOfTime skip below, but driven by the phase plan, not the budget)
         if (Date.now() > ctx.researchCutoffAt) {
           if (!timeSkipAnnounced) {
             timeSkipAnnounced = true;
-            await ctx.emit("info", "Research window closed — moving to writing, grading and improvement", "The serverless clock reserves the tail of the run for drafting, self-grading and one improvement round; aspects not yet started are skipped, and the report is written from the evidence already gathered.");
+            await ctx.emit("info", "Research window closed — moving to writing, grading and improvement", "The absolute time budget reserves its tail for drafting, self-grading and the improvement rounds; aspects not yet started are skipped, and the report is written from the evidence already gathered.");
           }
           return;
         }
@@ -1247,6 +1439,12 @@ export async function runJob(jobId: string) {
         }
         const si = nextSi++;
         if (si >= sectionRows.length) return;
+        // v2.5.0 resume: aspects finished in a previous slice are skipped — their
+        // findings live in the DB row and their sources in the restored checkpoint
+        if (sectionRows[si].status === "done") {
+          aspectsDone++;
+          continue;
+        }
         if (ctx.outOfTime) {
           if (!timeSkipAnnounced) {
             timeSkipAnnounced = true;
@@ -1262,8 +1460,11 @@ export async function runJob(jobId: string) {
       const planAspect = plan.aspects[si];
       await ctx.emit("section", `Aspect ${si + 1}/${sectionRows.length}: ${sec.title}`, planAspect?.goal ? `${sec.question}\n\nGoal: ${planAspect.goal}` : sec.question);
       let queries: string[] = JSON.parse(sec.queries || "[]");
-      let notes = "";
-      let roundsDone = 0;
+      // v2.5.0 resume: a section that was mid-research when the slice ended keeps
+      // its persisted per-round findings — the next round builds on them instead
+      // of re-searching from scratch
+      let notes = sec.status === "researching" && sec.findings ? sec.findings : "";
+      let roundsDone = sec.status === "researching" ? (sec.rounds ?? 0) : 0;
       /** WebWalker: URLs the reflection chose to visit directly next round */
       let pendingWalks: { url: string; reason: string }[] = [];
       /** P2 quality guard: query reformulation budget + what the off-topic results looked like */
@@ -1344,6 +1545,28 @@ export async function runJob(jobId: string) {
             if (offTopicSamples.length > 12) offTopicSamples = offTopicSamples.slice(0, 12);
           }
           fresh = gatedNow.kept;
+        }
+
+        // 2b-0.5. SOURCE QUALITY GATE (v2.5.0) — relevance asks "is this about the
+        // question"; this asks "is this worth reading". Empty GitHub repos, press-release
+        // wires, paid promotions and market-report SEO farms never spend a read slot;
+        // among the survivors, authoritative primary domains (arXiv, Nature, Reuters,
+        // official docs…) and concrete snippets (numbers, dates, named systems) sort
+        // first — the raw material of a 9/10 report is specific, checkable evidence.
+        {
+          const qg = applySourceQualityGate(fresh, `${sec.question} ${queries.join(" ")}`, { boostNews: true });
+          if (qg.dropped.length > 0) {
+            const byReason = qg.dropped.reduce<Record<string, number>>((m, d) => ((m[d.reason] = (m[d.reason] ?? 0) + 1), m), {});
+            await ctx.emit(
+              "refine",
+              `Quality gate: dropped ${qg.dropped.length} junk result${qg.dropped.length > 1 ? "s" : ""} — ${Object.entries(byReason).map(([r, c]) => `${c}× ${r}`).join(", ")}`,
+              `“${sec.title}”: empty repos, press releases and content farms match the words but carry no evidence. The ${qg.kept.length} survivors are ordered by source quality (primary/authoritative domains first) and concreteness (numbers, dates, named systems).`,
+              undefined,
+              { aspect: sec.title, dropped: qg.dropped.length, reasons: byReason, kept: qg.kept.length },
+              "verbose",
+            );
+          }
+          fresh = qg.kept;
         }
 
         // 2b-2. LLM RERANK (P0-3) — spend the read budget on the pages that matter.
@@ -1438,9 +1661,12 @@ export async function runJob(jobId: string) {
         const snippetSrcs = contents.length === 0 && searchResults.length > 0
           ? (() => {
             // gate the snippet fallback too — snippet-grade citations of off-topic pages
-            // are exactly how a garbage report stays "honest-looking"
+            // are exactly how a garbage report stays "honest-looking"; the v2.5.0
+            // quality gate also strips junk (a snippet-grade citation of an empty
+            // repo or a paid press release is still garbage, just smaller)
             const g = gateByRelevance(sec.question, queries.join(" "), searchResults.slice(0, 12));
-            return g.kept.slice(0, 6).map((r, i) => ({ n: 900 + i, title: r.title, domain: r.domain, excerpt: r.snippet }));
+            const qg = applySourceQualityGate(g.kept, sec.question);
+            return qg.kept.slice(0, 6).map((r, i) => ({ n: 900 + i, title: r.title, domain: r.domain, excerpt: r.snippet }));
           })()
           : [];
         // persist snippet-based sources so citations, references and the Sources row stay honest
@@ -1503,6 +1729,10 @@ export async function runJob(jobId: string) {
         }
         if (!offTopicRound) {
           notes = notes ? `${notes}\n\n## Round ${round} additions\n${roundNotes}` : roundNotes;
+          // v2.5.0 continuation: persist per-round findings + a checkpoint so a
+          // slice that ends mid-aspect resumes with this round's evidence intact
+          await db.researchSection.update({ where: { id: sec.id }, data: { findings: notes, status: "researching", rounds: roundsDone } }).catch(() => null);
+          await persist("research").catch(() => {});
         } else {
           await ctx.emit("info", `Sources for “${sec.title}” came back off-topic this round — discarded, not folded into findings`, roundNotes.slice(0, 200));
         }
@@ -1619,6 +1849,8 @@ export async function runJob(jobId: string) {
         await ctx.emit("section", `“${sec.title}” researched`, `${roundsDone} round(s) of search → read → synthesize`, undefined, { done: sec.title });
         aspectsDone++;
         await updateJob(jobId, { progress: Math.round(8 + aspectsDone * researchWeight()) });
+        // v2.5.0 continuation: aspect completed — snapshot the checkpoint
+        await persist("research").catch(() => {});
 
         // ---- HONEST LIVE CHECK-IN (parallelism-aware) ----
         const done = aspectsDone;
@@ -1651,6 +1883,21 @@ export async function runJob(jobId: string) {
     };
     await Promise.all(Array.from({ length: concurrency }, () => aspectWorker()));
     if (stopAll && (await ctx.isCancelled())) throw new Cancelled();
+
+    // ── v2.5.0 SLICE BOUNDARY (research): this slice's function clock ended with
+    // research still pending — persist the phase cursor and return. The client's
+    // live-poller (1.2s interval) triggers the next slice via GET /api/research/[id],
+    // which resumes exactly here: done aspects skipped, in-flight aspects keep
+    // their persisted findings, unseen sources still get read. ─────────────────
+    if (sliceEnding && !runExhausted()) {
+      await persist("research");
+      await updateJob(jobId, { stage: `Slice boundary — continuing research (${aspectsDone}/${sectionRows.length} aspects done)`, progress: Math.round(8 + aspectsDone * researchWeight()) }).catch(() => {});
+      return; // the poller resumes the run within seconds
+    }
+
+    // ── v2.5.0: research phase complete (or window closed) — checkpoint the
+    // phase before the tail begins, so a slice death mid-tail resumes at drafts.
+    await persist("predraft").catch(() => {});
 
     // ---------- SOURCE DIVERSITY + FRESHNESS (P1-3) ----------
     // Echo chambers and stale evidence become visible instead of invisible defaults.
@@ -1971,20 +2218,28 @@ export async function runJob(jobId: string) {
       ].join("\n\n").slice(0, 26_000);
 
       // C1 + C2 — the two briefs (sequential: the docket reads prosecution first)
-      let prosecutionBrief = "";
-      let defenseBrief = "";
+      // v2.5.0 resume: briefs/votes from a previous slice come from courtProgress —
+      // a resumed trial never re-runs a step that already completed
+      let prosecutionBrief = courtProgress?.prosecutionBrief ?? "";
+      let defenseBrief = courtProgress?.defenseBrief ?? "";
+      if (!prosecutionBrief) {
       try {
         const proRes = await ctx.llmLive(prosecutionPrompt(job.query, evidenceRecord, job.language), "court-prosecution", "The prosecution is building its case", { wantThinking: true, maxTokens: 1400 });
         prosecutionBrief = proRes.text.trim();
         await ctx.emit("court", "The prosecution rests", prosecutionBrief.slice(0, 1600), proRes.model, { phase: "prosecution" });
+        courtProgress = { ...(courtProgress ?? {}), prosecutionBrief };
+        await persist("predraft", { courtProgress }).catch(() => {});
       } catch (proErr) {
         await ctx.emit("info", "The prosecution could not build its case (models unavailable) — the trial cannot proceed fairly", proErr instanceof Error ? proErr.message.slice(0, 200) : undefined);
       }
-      if (prosecutionBrief) {
+      }
+      if (prosecutionBrief && !defenseBrief) {
         try {
           const defRes = await ctx.llmLive(defensePrompt(job.query, evidenceRecord, job.language), "court-defense", "The defense is building its case", { wantThinking: true, maxTokens: 1400 });
           defenseBrief = defRes.text.trim();
           await ctx.emit("court", "The defense rests", defenseBrief.slice(0, 1600), defRes.model, { phase: "defense" });
+          courtProgress = { ...(courtProgress ?? {}), defenseBrief };
+          await persist("predraft", { courtProgress }).catch(() => {});
         } catch (defErr) {
           await ctx.emit("info", "The defense could not build its case — a one-sided trial is no trial; the verdict will note this honestly", defErr instanceof Error ? defErr.message.slice(0, 200) : undefined);
         }
@@ -2130,11 +2385,10 @@ export async function runJob(jobId: string) {
 
     await updateJob(jobId, { status: "synthesizing", stage: "Writing the report", progress: 80 });
     const finalSections = await db.researchSection.findMany({ where: { jobId }, orderBy: { order: "asc" } });
-    // v2.4.3: standard reports were 300-500 words/section (~1200 total) and the
-    // grader honestly flagged thin coverage — meatier sections (420-650) lift
-    // coverage+clarity without new research; the 40s draft cap still fits (llm7
-    // streams 30-60 tok/s ≈ a 650-word section in ~25s)
-    const words: [number, number] = unlimited || job.preset === "exhaustive" ? [550, 900] : job.preset === "deep" ? [450, 700] : [420, 650];
+    // v2.5.0: continuation gives the tail real time — meatier sections lift the
+    // coverage and evidence dimensions directly (the 4.5/10 report was thin:
+    // ~400 words/section). Standard now targets 480-720 words per section.
+    words = unlimited || job.preset === "exhaustive" ? [550, 900] : job.preset === "deep" ? [520, 800] : [480, 720];
 
     // Evidence-strength notes per section (reflect v3 graded claims → the writer states
     // each claim with the confidence its evidence actually supports)
@@ -2153,12 +2407,23 @@ export async function runJob(jobId: string) {
     // so the whole phase costs ~one draft's latency. Each section still streams
     // live into the UI, and every fallback (clock-out → findings, failure →
     // findings) is per-section, exactly as before.
-    const draftsArr: string[] = new Array(finalSections.length).fill("");
-    {
+    // v2.5.0 resume: at "drafting" the pool only drafts sections without a draft;
+    // at "tail"+ every draft already exists — the pool is skipped entirely and
+    // draftsArr is rebuilt from the persisted section rows.
+    const skipDraftPool = phaseAtLeast(resumePhase, "tail");
+    const draftsArr: string[] = skipDraftPool
+      ? finalSections.map((s) => s.draftMd || "")
+      : new Array(finalSections.length).fill("");
+    if (!skipDraftPool) {
       const DRAFT_POOL = SERVERLESS ? Math.min(4, finalSections.length) : Math.min(3, finalSections.length);
       await updateJob(jobId, { stage: `Writing ${finalSections.length} sections in parallel`, progress: 80 });
       const draftOne = async (sec: (typeof finalSections)[number], i: number) => {
         if (await ctx.isCancelled()) throw new Cancelled();
+        // v2.5.0 resume: a section drafted in a previous slice keeps its draft
+        if (resumeDrafting && sec.draftMd && sec.draftMd.length > 0) {
+          draftsArr[i] = sec.draftMd;
+          return;
+        }
         if (!sec.findings) {
           await ctx.emit("info", `No evidence gathered for “${sec.title}” — writing what is reliably known, marked as general context`);
         }
@@ -2176,15 +2441,14 @@ export async function runJob(jobId: string) {
             // the report being typed. Bounded by the hard clock: a stalled draft falls
             // back to findings instead of freezing the whole report.
             // v2.4.6: drafts are FAST on the serverless clock (35s chain + rescue).
-            // A patient ride here eats the whole reserve in a sustained blackout and
-            // the function freezes with NOTHING persisted — a findings-based report
-            // that survives beats a perfect draft that dies at 95%. The GRADE is the
-            // step that gets the patient recovery ride (it is small and it is last).
+            // v2.5.0: continuation raises the cap to 50s — a section that outgrows
+            // the slice checkpoints at "drafting" and the next slice finishes it,
+            // instead of publishing findings-notes as the section.
             const draftRes = await ctx.llmLive(
               [{ role: "user", content: draftSectionPrompt(job.query, sec.title, sec.question, sec.findings ?? "(no findings — rely on general knowledge and clearly mark it as background)", srcs, words, job.language, evidenceNotesFor(sec.title), adversarialNotesFor(sec.title), ctx.allLearnings) }],
               "draft",
               `Writing: ${sec.title}`,
-              { streamTo: sec.id, ...(SERVERLESS ? { fast: { patient: false, timeoutMs: 35_000 } } : {}) }
+              { streamTo: sec.id, ...(SERVERLESS ? { fast: { patient: false, timeoutMs: 50_000 } } : {}) }
             );
             draftText = draftRes.text;
             draftModel = draftRes.model;
@@ -2202,12 +2466,22 @@ export async function runJob(jobId: string) {
       const queue = finalSections.map((sec, i) => ({ sec, i }));
       const workers = Array.from({ length: DRAFT_POOL }, async () => {
         for (;;) {
+          // v2.5.0: stop taking new drafts when this slice is nearly over — the
+          // drafted-so-far sections persist, the next slice drafts the rest
+          if (outOfSlice()) return;
           const next = queue.shift();
           if (!next) return;
           await draftOne(next.sec, next.i);
         }
       });
       await Promise.all(workers);
+      // v2.5.0 SLICE BOUNDARY (drafts): undrafted sections remain — checkpoint
+      // at "drafting" so the next slice drafts only what's missing
+      if (outOfSlice() && !runExhausted()) {
+        await persist("drafting");
+        await updateJob(jobId, { stage: "Slice boundary — continuing the drafts", progress: 88 }).catch(() => {});
+        return;
+      }
     }
 
     // ---------- STAGE 4.5: QUOTE-ANCHORED CITATION VERIFICATION (P0-4) ----------
@@ -2216,9 +2490,7 @@ export async function runJob(jobId: string) {
     // checked against the text that was ACTUALLY read from that source. A lexical
     // overlap scan flags weak anchors; a batched judge repairs (re-anchor) or drops
     // them. The integrity percentage is published in the stats — honestly.
-    const citeStats: { checked: number; repaired: number; dropped: number; integrity: number; reanchoredTo: number[]; droppedNs: number[]; flagged: number[] } = {
-      checked: 0, repaired: 0, dropped: 0, integrity: 100 as number, reanchoredTo: [], droppedNs: [], flagged: [],
-    };
+    // (citeStats is hoisted to the run head for continuation restores.)
     // v2.4.0: the audit is now a WORKER in the parallel tail bundle (it only needs
     // the drafts) — it runs CONCURRENTLY with exec-summary/conclusion/title/related
     // instead of serially before them, saving its full latency on the serverless clock.
@@ -2343,7 +2615,21 @@ export async function runJob(jobId: string) {
     // drafts (research overshoot varies 40-100s): FULL (audit+exec+conclusion+title+
     // related) when ≥110s remain, LITE (exec+title, 20s caps) when 60-110s, SKIPPED
     // below that — the grade is the priority; polish gets whatever truly remains.
-    const bundleMode: "full" | "lite" | "skip" = ctx.hardLeft >= 110_000 ? "full" : ctx.hardLeft >= 60_000 ? "lite" : "skip";
+    // v2.5.0 continuation: a skip-mode squeeze only makes sense on the LAST slice.
+    // With slices remaining, the engine checkpoints and the NEXT slice runs the
+    // full tail (bundle + grade + improve) on a fresh ~5-min clock — the report
+    // deserves the polish more than the run deserves 40 avoided seconds.
+    if (SERVERLESS && outOfSlice() && !runExhausted()) {
+      await persist("tail");
+      await updateJob(jobId, { stage: "Slice boundary — continuing the report assembly", progress: 92 }).catch(() => {});
+      return;
+    }
+    let bundleMode: "full" | "lite" | "skip" = ctx.hardLeft >= 110_000 ? "full" : ctx.hardLeft >= 60_000 ? "lite" : "skip";
+    if (bundleMode === "skip" && SERVERLESS && !court && !runExhausted()) {
+      await persist("tail");
+      await updateJob(jobId, { stage: "Slice boundary — continuing the report assembly", progress: 92 }).catch(() => {});
+      return;
+    }
     if (bundleMode === "skip" && !court) {
       await ctx.emit("info", "Clock is short — skipping the summary polish, going straight to grading", "The drafts and references are done; the executive summary and conclusion are skipped so the self-score still fits the function budget.");
     } else if (bundleMode === "lite" && !court) {
@@ -2351,18 +2637,27 @@ export async function runJob(jobId: string) {
     }
     // v2.4.5: hoisted extractors with honest fallbacks — set by the bundle when it
     // runs, kept as fallbacks when the clock was too short for the polish pass
-    let execText = court ? courtExecMd : "*(Executive summary unavailable — the function clock ran out during the polish pass; see section content below.)*";
-    let concText = court ? "" : "";
-    let titleText = job.query.slice(0, 80);
-    let relatedQuestions = fallbackRelated(job.query, finalSections.map((s) => s.question));
-    if (bundleMode !== "skip" || court) {
+    // v2.5.0: on a resumed run the tail products come from the checkpoint — the
+    // bundle only re-runs when it never completed in a previous slice (the explicit
+    // bundleDone flag is the source of truth; graded+ implies it trivially).
+    const bundleDone = cp?.bundleDone === true || phaseAtLeast(resumePhase, "graded");
+    if (bundleDone) bundleDoneState = true;
+    if (!bundleDone) {
+      if (!execText) execText = court ? courtExecMd : "*(Executive summary unavailable — the function clock ran out during the polish pass; see section content below.)*";
+      if (!concText) concText = court ? "" : "";
+      if (!titleText) titleText = job.query.slice(0, 80);
+      if (relatedQuestions.length === 0) relatedQuestions = fallbackRelated(job.query, finalSections.map((s) => s.question));
+    }
+    if ((bundleMode !== "skip" || court) && !bundleDone) {
     const liteCaps = bundleMode === "lite";
     const [auditR, execR, concR, titleR, relatedR] = await Promise.allSettled([
       // v2.4.0: the citation audit rides IN the bundle (it only needs the drafts);
       // the lite bundle skips it (the claim-check ledger below still runs — it is pure
       // computation and catches the same weak anchors)
       bundleMode === "full" || court
-        ? auditWork()
+        ? auditDone
+          ? Promise.resolve(undefined)
+          : auditWork()
         : Promise.resolve(undefined),
       // bounded: on a capped serverless run the tail must not ride patient cooldown
       // waits — a missed summary degrades honestly, a frozen function loses the report.
@@ -2381,6 +2676,7 @@ export async function runJob(jobId: string) {
         : Promise.resolve({ text: "", model: "", backendId: "skipped", latencyMs: 0 } as LlmResult),
     ]);
     if (auditR.status === "rejected") await ctx.emit("info", "Citation audit step failed — continuing with the drafts as written", String(auditR.reason ?? "").slice(0, 300));
+    if (bundleMode === "full" || court) auditDone = true; // v2.5.0: never re-audit on resume — repaired drafts persist
     execText = court
       ? courtExecMd
       : execR.status === "fulfilled" && execR.value.text.trim()
@@ -2395,6 +2691,10 @@ export async function runJob(jobId: string) {
     await ctx.emit("draft", court ? "Verdict summary written (from the trial itself)" : "Executive summary written", execText.slice(0, 400), !court && execR.status === "fulfilled" ? execR.value.model : undefined);
     if (!court && concText) await ctx.emit("draft", "Conclusion written", concText.slice(0, 400), concR.status === "fulfilled" ? concR.value.model : undefined);
     }
+    // v2.5.0: the tail bundle is complete — checkpoint its products so a slice
+    // death before grading never re-runs (or half-runs) the polish
+    bundleDoneState = true;
+    await persist("tail").catch(() => {});
 
     // post-audit drafts — the audit (inside the bundle above) may have re-anchored
     // or dropped citation markers; everything downstream sees the repaired text
@@ -2452,7 +2752,7 @@ export async function runJob(jobId: string) {
     // (beyond Perplexity: contested and cross-check-refuted claims are surfaced in the
     // report instead of being averaged away). LLM-written; degrades to the raw list.
     const contestedClaims = ctx.claims.filter((c) => c.grade === "contested" || c.verified === "refuted");
-    let disagreementsMd = "";
+    disagreementsMd = "";
     if (ctx.contradictions.length > 0 || contestedClaims.length > 0 || refuted.length > 0) {
       const rawList = [
         ...ctx.contradictions.map((c) => `- **${c.claim}** — ${c.positions}`),
@@ -2475,15 +2775,15 @@ export async function runJob(jobId: string) {
     }
 
     // ---------- ASSEMBLE REPORT ----------
-    let durationMs = Date.now() - t0;
-    let reportWords = drafts.split(/\s+/).length;
+    durationMs = Date.now() - t0;
+    reportWords = drafts.split(/\s+/).length;
     const modelsUsed = Object.entries(ctx.byModel).map(([m, v]) => `${m} (${v.calls} calls)`);
 
     // Dedupe by URL before numbering: parallel aspect workers can still read the same
     // page in overlapping windows (the ECL run printed the same arxiv URL as both #3
     // and #8). First occurrence keeps its slot; later duplicates remap onto it so every
     // citation of that URL resolves to ONE reference number.
-    let refList: typeof sourcesUsed = [];
+    refList = [];
     const refByUrl = new Map<string, number>(); // url -> position in refList (1-based)
     const remap: Record<number, number> = {};
     for (const s of sourcesUsed) {
@@ -2499,7 +2799,7 @@ export async function runJob(jobId: string) {
     if (refList.length < sourcesUsed.length) {
       await ctx.emit("info", `Deduplicated the reference list — ${sourcesUsed.length - refList.length} repeated page(s) folded onto their first citation`);
     }
-    let refs = refList
+    refs = refList
       .map((s, i) => `${i + 1}. ${s.title} — *${s.domain}* — ${s.url}`)
       .join("\n");
     // the claim-check ledger was recorded with the engine's internal numbering —
@@ -2598,7 +2898,7 @@ export async function runJob(jobId: string) {
     // ---------- MONITORING DIFF DIGEST (P2-2) ----------
     // A re-run of the same question in the same thread gets an honest
     // "What changed since the last run" section — nothing invented.
-    let diffMd = "";
+    diffMd = "";
     if (prevReportMd && prevQuery && !ctx.outOfTime) {
       const normTokens = (s: string) =>
         new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 2));
@@ -2631,7 +2931,19 @@ export async function runJob(jobId: string) {
     // ---------- STAGE 5: SELF-SCORE (P1-1) — grade the finished report ----------
     // digdeep grades its own report against the comprehension pass's success
     // criteria on four dimensions, and publishes the score — including bad ones.
-    let quality: QualityScore | null = null;
+    // v2.5.0: the score is the report's headline number — when this slice is
+    // nearly out of clock but slices remain, checkpoint and let a fresh slice
+    // grade (and improve) instead of publishing an unscored report.
+    if (SERVERLESS && outOfSlice() && !runExhausted() && !quality) {
+      await persist("tail");
+      await updateJob(jobId, { stage: "Slice boundary — grading in a fresh slice", progress: 96 }).catch(() => {});
+      return;
+    }
+    // v2.5.0: on a resumed run past "graded", the checkpoint's score stands — the
+    // same rubric graded the same text in the slice that wrote it.
+    if (quality && phaseAtLeast(resumePhase, "graded")) {
+      await ctx.emit("score", `Self-score: ${quality.overall}/10 (restored from the checkpoint — graded by the same rubric in a previous slice)`, quality.biggestWeakness || "Graded against the success criteria defined before the research started.", undefined, { ...quality, restored: true });
+    } else
     // v2.4.0: the gate is the platform clock, not the research budget — a report
     // written from partial evidence on an expired budget still DESERVES an honest
     // score (locally hardLeft is Infinity, so budget-exhausted runs now grade too).
@@ -2694,16 +3006,22 @@ export async function runJob(jobId: string) {
     // rounds or the clock run out first, the honest number is published with
     // the reason. (Court runs skip this — the verdict is the deliverable.)
     const QUALITY_TARGET = 9;
-    // v2.4.0: serverless runs get ONE lean round (grader-provided queries, parallel
-    // searches, parallel rewrites) — sized to fit the reserved tail. Local runs keep 3.
-    const QUALITY_MAX_ROUNDS = SERVERLESS ? 1 : 3;
-    /** v2.4.0: the improvement loop's clock gate — the platform hard stop on
-     *  serverless (65s buys search + read + rewrite + re-grade), the budget
-     *  locally (stop 2 min past a budgeted deadline; unlimited runs ride free). */
+    // v2.5.0: serverless runs get TWO full rounds — continuation gives each round
+    // real time (a round can even span slices via the "improving" checkpoint).
+    const QUALITY_MAX_ROUNDS = SERVERLESS ? 2 : 3;
+    /** v2.5.0: the improvement loop's clock gate — on serverless the ABSOLUTE
+     *  budget decides whether another round can ever run (a thin slice clock just
+     *  checkpoints and the next slice continues the round); locally the budget
+     *  stops it 2 min past a budgeted deadline (unlimited rides free). */
     const canImprove = () =>
-      ctx.hardLeft >= (SERVERLESS ? 65_000 : 200_000) &&
-      !(ctx.hasTimeBudget && ctx.timeLeft < -120_000);
-    let qualityRounds = 0;
+      (SERVERLESS
+        ? ctx.hardLeft >= 65_000 || (absoluteDeadline == null || Date.now() < absoluteDeadline - 60_000)
+        : ctx.hardLeft >= 200_000) &&
+      !(ctx.hasTimeBudget && ctx.timeLeft < -120_000) &&
+      !runExhausted();
+    // v2.5.0: grade landed — checkpoint it so a slice death here resumes inside
+    // the improve loop instead of re-grading (or losing) the score
+    if (quality) await persist("graded").catch(() => {});
     if (quality && quality.overall < QUALITY_TARGET && !court && canImprove()) {
       // `current` is the loop's non-null view of the score — TS can't keep the
       // narrowing across loop back-edges once `quality` is reassigned inside.
@@ -2715,6 +3033,14 @@ export async function runJob(jobId: string) {
         canImprove() &&
         !(await ctx.isCancelled())
       ) {
+        // v2.5.0 SLICE BOUNDARY (improve): this slice is nearly over but the
+        // absolute budget still has room — checkpoint mid-loop and let the next
+        // slice continue the round (qualityRounds + quality ride along)
+        if (SERVERLESS && outOfSlice()) {
+          await persist("improving");
+          await updateJob(jobId, { stage: `Slice boundary — continuing quality round ${qualityRounds + 1}`, progress: 97 }).catch(() => {});
+          return;
+        }
         qualityRounds++;
         const scoreBefore = current.overall;
         await ctx.emit(
@@ -2796,9 +3122,12 @@ export async function runJob(jobId: string) {
             .filter((r) => r.url && !ctx.seenUrls.has(r.url) && !r.domain.includes("duckduckgo.com"))
             .filter((r, i, arr) => arr.findIndex((x) => x.url === r.url) === i);
           fresh = gateByRelevance(sec.question, g.queries.join(" "), fresh).kept;
+          // v2.5.0: the quality gate applies to gap-round evidence too — repair
+          // sources must be primary/concrete, not more filler
+          fresh = applySourceQualityGate(fresh, `${sec.question} ${g.need ?? ""}`).kept;
           const picked: SearchResult[] = [];
           const domainCount: Record<string, number> = {};
-          const pickCap = SERVERLESS ? 2 : 4;
+          const pickCap = SERVERLESS ? 3 : 4;
           for (const r of fresh) {
             if (picked.length >= pickCap) break;
             if (ctx.seenUrls.has(r.url)) continue; // re-check at pick time
@@ -2844,7 +3173,7 @@ export async function runJob(jobId: string) {
         ].slice(0, 6);
         const scale = Math.pow(1.35, qualityRounds - 1);
         const wordsR: [number, number] = SERVERLESS
-          ? [Math.min(650, Math.round(words[0] * scale + 40)), Math.min(800, Math.round(words[1] * scale + 60))]
+          ? [Math.min(750, Math.round(words[0] * scale + 40)), Math.min(950, Math.round(words[1] * scale + 60))]
           : [Math.min(900, Math.round(words[0] * scale + 40)), Math.min(1100, Math.round(words[1] * scale + 60))];
         // snapshot for regression protection: if this round's rewrites make the score
         // WORSE, the previous (better-scoring) drafts are restored — the published
@@ -3180,15 +3509,18 @@ ${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
       ...(quality ? { quality } : {}),
       ...(qualityRounds > 0 ? { qualityRounds, qualityTarget: QUALITY_TARGET } : {}),
       ...(diffMd ? { rerunDiff: true } : {}),
+      // v2.5.0 continuation: how many serverless slices the run spanned
+      slices: sliceN,
       finishedAt: new Date().toISOString(),
     };
     await updateJob(jobId, { status: "completed", stage: "Completed", progress: 100, reportMd, stats: JSON.stringify(stats), completedAt: new Date() });
+    await persist("done").catch(() => {}); // informational — the job is complete
     await ctx.emit(
       "done",
       court ? `The trial is over — ${court.verdict}, ${court.guilty} to ${court.notGuilty}` : "Research complete",
       court
         ? `Verdict delivered — ${sourcesUsed.length} sources, ${court.jurors.length} jurors voted, ${ctx.llmCalls} LLM calls, ${fmtMin(durationMs)} total${court.conditions.length ? `. What to change before trying again: ${court.conditions[0].slice(0, 140)}${court.conditions.length > 1 ? "…" : ""}` : ""}`
-        : `Report ready — ${refList.length} sources, ~${reportWords.toLocaleString()} words, ${ctx.llmCalls} LLM calls, ${fmtMin(durationMs)} total${quality ? `, self-scored ${quality.overall.toFixed(1)}/10${qualityRounds > 0 ? ` after ${qualityRounds} quality round${qualityRounds > 1 ? "s" : ""} (target 9 — earned with new evidence, re-graded by the same rubric)` : ""}` : ""}${citeStats.integrity < 100 ? `, citation integrity ${citeStats.integrity}%` : " with verified citations"}${spawnedCount.n > 0 ? `, ${spawnedCount.n} aspect${spawnedCount.n > 1 ? "s" : ""} spawned mid-research (recursive deep-dive)` : ""}`,
+        : `Report ready — ${refList.length} sources, ~${reportWords.toLocaleString()} words, ${ctx.llmCalls} LLM calls, ${fmtMin(durationMs)} total${quality ? `, self-scored ${quality.overall.toFixed(1)}/10${qualityRounds > 0 ? ` after ${qualityRounds} quality round${qualityRounds > 1 ? "s" : ""} (target 9 — earned with new evidence, re-graded by the same rubric)` : ""}` : ""}${citeStats.integrity < 100 ? `, citation integrity ${citeStats.integrity}%` : " with verified citations"}${spawnedCount.n > 0 ? `, ${spawnedCount.n} aspect${spawnedCount.n > 1 ? "s" : ""} spawned mid-research (recursive deep-dive)` : ""}${sliceN > 1 ? `, continued across ${sliceN} serverless slices` : ""}`,
       undefined,
       stats
     );
@@ -3202,6 +3534,10 @@ ${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
       await db.activityEvent.create({ data: { jobId, type: "error", title: "Research failed", detail: msg, seq: 9_999_999 } }).catch(() => {});
     }
   } finally {
+    // v2.5.0 continuation: releasing the lease lets the next poll resume the job
+    // immediately when the engine exited at a slice boundary (no 30s wait); on
+    // completion/failure it simply frees the single-run guard.
+    if (leaseHeld) await releaseLease(jobId).catch(() => {});
     activeJobs.delete(jobId);
   }
 }
@@ -3214,12 +3550,13 @@ function fallbackRelated(query: string, questions: string[]): string[] {
 }
 
 function fallbackPlan(query: string, breadth: number): ResearchPlan {
+  const year = new Date().getFullYear();
   const templates = [
-    { title: "Core concepts & context", question: `What is "${query}" — key definitions, background and current context?`, goal: "Establish the baseline: definitions, key entities and how the topic fits together, so later aspects have solid ground.", queries: [`${query} overview explained`, `what is ${query}`] },
-    { title: "Current state & evidence", question: `What is the current state of "${query}" — latest data, players and developments?`, goal: "Capture the present state with concrete numbers, dates and named players — the evidentiary core of the report.", queries: [`${query} latest developments 2025`, `${query} statistics data`] },
-    { title: "Analysis & outlook", question: `What are trends, risks and the outlook for "${query}"?`, goal: "Look forward: what is changing, what could break, and what credible observers expect next.", queries: [`${query} trends forecast`, `${query} challenges criticism risks`] },
-    { title: "Practical implications", question: `What are practical implications, applications and best practices around "${query}"?`, goal: "Make the research actionable — what this means in practice for someone using or deciding about it.", queries: [`${query} applications examples`, `${query} best practices`] },
-    { title: "Comparisons & alternatives", question: `How does "${query}" compare to alternatives?`, goal: "Situate the topic against its alternatives so the reader can judge relative strengths honestly.", queries: [`${query} comparison alternatives`] },
+    { title: "Core concepts & context", question: `What is "${query}" — key definitions, background and current context?`, goal: "Establish the baseline: definitions, key entities and how the topic fits together, so later aspects have solid ground.", queries: [`${query} key concepts definitions ${year}`, `${query} explained technical details`] },
+    { title: "Current state & evidence", question: `What is the current state of "${query}" — latest data, players and developments?`, goal: "Capture the present state with concrete numbers, dates and named players — the evidentiary core of the report.", queries: [`${query} latest developments milestones ${year}`, `${query} statistics data numbers ${year}`] },
+    { title: "Analysis & outlook", question: `What are trends, risks and the outlook for "${query}"?`, goal: "Look forward: what is changing, what could break, and what credible observers expect next.", queries: [`${query} trends forecast analysis`, `${query} challenges criticism risks evidence`] },
+    { title: "Practical implications", question: `What are practical implications, applications and best practices around "${query}"?`, goal: "Make the research actionable — what this means in practice for someone using or deciding about it.", queries: [`${query} real world applications case studies`, `${query} adoption implementation examples`] },
+    { title: "Comparisons & alternatives", question: `How does "${query}" compare to alternatives?`, goal: "Situate the topic against its alternatives so the reader can judge relative strengths honestly.", queries: [`${query} vs alternatives comparison benchmarks`, `${query} competitors landscape`] },
   ];
   const n = breadth > 0 ? breadth : 4;
   return {
@@ -3232,14 +3569,21 @@ function fallbackPlan(query: string, breadth: number): ResearchPlan {
 }
 
 /** Watchdog: mark jobs that stopped updating (e.g. server restart or serverless
- *  deploy cutover) as failed, so the UI can offer a retry instead of spinning. */
+ *  deploy cutover) as failed, so the UI can offer a retry instead of spinning.
+ *  v2.5.0: jobs with a LIVE lease are skipped — their engine is running on some
+ *  instance and renewing it (continuation slices touch it constantly). */
 export async function markStaleJobs() {
   // 5-min threshold: LLM calls heartbeat updatedAt every 60s, and search/read
   // stretches are bounded by per-fetch timeouts — so a live engine never goes
   // 5 minutes without a touch. Anything older is dead (serverless deploy
   // cutover, restart, crash) and is failed fast so the UI's retry appears.
   const stale = await db.researchJob.findMany({
-    where: { status: { in: ["queued", "planning", "researching", "critiquing", "synthesizing"] }, updatedAt: { lt: new Date(Date.now() - 5 * 60_000) } },
+    where: {
+      status: { in: ["queued", "planning", "researching", "critiquing", "synthesizing"] },
+      updatedAt: { lt: new Date(Date.now() - 5 * 60_000) },
+      // a live lease means an engine somewhere is still working this job
+      OR: [{ leaseUntil: null }, { leaseUntil: { lt: new Date(Date.now() - 60_000) } }],
+    },
     select: { id: true, reportMd: true, stage: true },
   });
   for (const j of stale) {
