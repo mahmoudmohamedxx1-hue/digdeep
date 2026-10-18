@@ -70,6 +70,7 @@ Caddyfile
 scripts/*
 !scripts/teal_brand.py
 !scripts/test-routing.ts
+!scripts/test-model-pin.ts
 !scripts/mock-llm.js
 !scripts/benchmark-harness.mjs
 !scripts/replay-self-questions.sh

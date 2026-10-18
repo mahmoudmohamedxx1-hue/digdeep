@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { after } from "next/server";
 import { db } from "@/lib/db";
 import { runJob } from "@/lib/research/engine";
+import { isValidModelPref } from "@/lib/model-choices";
 
 export const dynamic = "force-dynamic";
 // Vercel: the engine must finish inside one invocation (the function is frozen
@@ -46,7 +47,8 @@ export async function POST(req: NextRequest) {
         preset,
         court: body.court === true,
         language: ["English", "Arabic", "Chinese", "Spanish", "French", "German", "Auto-match topic"].includes(body.language) ? body.language : "English",
-        modelPref: ["auto", "llm7", "glm", "pool"].includes(body.modelPref) ? body.modelPref : "auto",
+        // route family (auto/llm7/glm/pool) or a pinned specific LLM7 model (llm7pin:minimax-m2.7 …)
+        modelPref: isValidModelPref(body.modelPref) ? body.modelPref : "auto",
         breadth: body.breadth != null ? clamp(body.breadth, 1, 50, p.breadth) : p.breadth,
         depth: body.depth != null ? clamp(body.depth, 1, 20, p.depth) : p.depth,
         maxSources: body.maxSources != null ? clamp(body.maxSources, 4, 1000, p.maxSources) : p.maxSources,

@@ -3,20 +3,40 @@ import os from "node:os";
 import path from "node:path";
 import ZAI from "z-ai-web-dev-sdk";
 import { db } from "@/lib/db";
+import { LLM7_KEYLESS_CHOICES, LLM7_MODEL_CHOICES, LLM7_PREMIUM_CHOICES, pinModelOf, type ModelPrefValue } from "@/lib/model-choices";
 
 /** The user's chosen model route. "auto" = GLM leads, the keyless pool helps
  *  (failover); "llm7" = the pool leads, GLM helps — the mirror route. "glm" /
- *  "pool" pin to one family only. */
-export type ModelPref = "auto" | "llm7" | "glm" | "pool";
+ *  "pool" pin to one family only. "llm7pin:<model>" pins ONE specific LLM7
+ *  model (e.g. minimax-m2.7, nemotron-3-nano:30b) to lead every step. */
+export type ModelPref = ModelPrefValue;
 
-/** Human-readable route descriptions — shown in the run's first activity line
- *  and reused by the UI so the wording never drifts between the two. */
-export const MODEL_PREF_ROUTES: Record<ModelPref, { label: string; route: string }> = {
+/** Human-readable route descriptions for the four ROUTE families — shown in the
+ *  run's first activity line and reused by the UI so the wording never drifts.
+ *  Pinned prefs build theirs dynamically in routeInfoFor(). */
+export const MODEL_PREF_ROUTES: Record<"auto" | "llm7" | "glm" | "pool", { label: string; route: string }> = {
   auto: { label: "GLM main", route: "z.ai GLM leads every step → LLM7 multi-model keyless pool (DeepSeek-V4 · Nemotron-1M · MiniMax · Mistral · gpt-oss) → Pollinations failover" },
   llm7: { label: "LLM7 main", route: "LLM7 multi-model keyless pool leads → Pollinations → z.ai GLM failover" },
   glm: { label: "GLM only", route: "z.ai GLM lane only (SDK, or the official API backstop on Vercel)" },
   pool: { label: "Pool only", route: "keyless pool only (LLM7 / Pollinations + your custom endpoints)" },
 };
+
+/** Route label+description for ANY pref, pinned models included — the engine's
+ *  first activity line and any UI badge call this so a pin reads e.g.
+ *  "LLM7 · MiniMax-M2.7 pinned — leads every step → keyless pool → GLM failover". */
+export function routeInfoFor(pref: string): { label: string; route: string } {
+  const pin = pinModelOf(pref);
+  if (pin) {
+    const c = LLM7_MODEL_CHOICES.find((x) => x.model.toLowerCase() === pin.toLowerCase());
+    const label = c?.label ?? pin;
+    const keyNote = c?.tier === "premium" ? " · rides your LLM7 key" : " · keyless";
+    return {
+      label,
+      route: `LLM7 · ${label} pinned${keyNote} — leads every step → rest of the keyless pool → z.ai GLM failover`,
+    };
+  }
+  return MODEL_PREF_ROUTES[(pref as "auto" | "llm7" | "glm" | "pool") ?? "auto"] ?? MODEL_PREF_ROUTES.auto;
+}
 
 export interface ChatMsg {
   role: "system" | "user" | "assistant";
@@ -70,18 +90,9 @@ interface BackendHealth {
  *  exactly these 7 chat models serve without any key (every other catalog entry
  *  returns missing_api_key — catalog flags lie, live probes don't). Order =
  *  best-answer-first, so a busy model falls through to the next keyless lane
- *  instead of stalling the run. nemotron-3-nano:30b carries a 1M-token context —
- *  the widest of the tier — which makes it a strong early lane for long research
- *  contexts even though it lacks JSON mode. */
-const LLM7_KEYLESS_MODELS: { model: string; label: string; note: string }[] = [
-  { model: "GLM-5.3-Flash", label: "GLM-5.3-Flash", note: "flagship flash, 400k ctx — frequently busy" },
-  { model: "DeepSeek-V4-Flash-0731", label: "DeepSeek-V4-Flash", note: "the reliable star, 400k ctx" },
-  { model: "nemotron-3-nano:30b", label: "Nemotron-3-Nano-30B", note: "1M-token context, reasoning" },
-  { model: "minimax-m2.7", label: "MiniMax-M2.7", note: "180k ctx" },
-  { model: "mistral-Nemo-Instruct-2407", label: "Mistral-Nemo", note: "128k ctx, 100% availability" },
-  { model: "gpt-oss:20b", label: "gpt-oss-20b", note: "128k ctx — last-resort generalist" },
-  { model: "codestral-latest", label: "Codestral", note: "32k ctx, code-leaning — final fallback" },
-];
+ *  instead of stalling the run. Catalog + notes live in src/lib/model-choices.ts
+ *  (shared with the picker UI). */
+const LLM7_KEYLESS_MODELS: { model: string; label: string; note: string }[] = LLM7_KEYLESS_CHOICES;
 
 const BUILTIN_POOL: PoolEndpoint[] = [
   ...LLM7_KEYLESS_MODELS.map(
@@ -109,20 +120,7 @@ const BUILTIN_POOL: PoolEndpoint[] = [
  *  API key" keyless, i.e. reachable with a key; hard-access failures skip in
  *  one round-trip and cool down 30 min, so deep lanes cost nothing when the
  *  key lacks balance. */
-const LLM7_PREMIUM_MODELS: { model: string; label: string }[] = [
-  { model: "DeepSeek-V4.1-Flash", label: "DeepSeek-V4.1-Flash" },
-  { model: "gpt-6-sol", label: "GPT-6-Sol" },
-  { model: "claude-sonnet-5-5", label: "Claude-Sonnet-5.5" },
-  { model: "gemini-3.8-flash-high", label: "Gemini-3.8-Flash-High" },
-  { model: "kimi-k3", label: "Kimi-K3" },
-  { model: "claude-haiku-5-5", label: "Claude-Haiku-5.5" },
-  { model: "deepseek-v4-pro", label: "DeepSeek-V4-Pro" },
-  { model: "grok-4.7", label: "Grok-4.7" },
-  { model: "minimax-m3", label: "MiniMax-M3" },
-  { model: "glm-5.3", label: "GLM-5.3" },
-  { model: "gemini-4-argon", label: "Gemini-4-Argon" },
-  { model: "claude-opus-5-5", label: "Claude-Opus-5.5" },
-];
+const LLM7_PREMIUM_MODELS: { model: string; label: string }[] = LLM7_PREMIUM_CHOICES;
 
 let llm7KeyCache: { at: number; key: string } | null = null;
 /** The user's LLM7 dashboard key (Setting "llm7_key") — empty string when absent. */
@@ -259,13 +257,26 @@ async function glmBackends(): Promise<PoolEndpoint[]> {
   );
 }
 
-async function orderedBackends(pref: ModelPref, purpose?: string): Promise<PoolEndpoint[]> {
+/** Backend order for a pref — exported for tests (scripts/test-model-pin.ts) and
+ *  any admin surface that wants to SHOW the user their exact chain. */
+export async function orderedBackends(pref: ModelPref, purpose?: string): Promise<PoolEndpoint[]> {
   const pool = (await getPoolEndpoints()).filter((e) => e.enabled);
   const glms = await glmBackends();
   // "glm" pref: the SDK path where a .z-ai-config exists (sandbox/local), else the
   // official Z.ai API backstop — so the GLM preference still works on Vercel.
   if (pref === "glm") return glms.length > 0 ? glms : zaiEnvBackends();
   if (pref === "pool") return pool;
+  // "llm7pin:<model>": ONE specific LLM7 model (user's pick — e.g. minimax-m2.7,
+  // nemotron-3-nano:30b) leads EVERY step; the rest of the pool rides right
+  // behind it as failover (a pinned lane in cooldown degrades gracefully to the
+  // next lane), and z.ai GLM closes the chain. A premium pin without the user's
+  // LLM7 key never materializes as an endpoint — fall back to the llm7 route so
+  // the run still works and the choice auto-upgrades the moment a key is saved.
+  const pin = pinModelOf(pref);
+  if (pin) {
+    const pinned = pool.find((e) => e.model.toLowerCase() === pin.toLowerCase());
+    if (pinned) return [pinned, ...pool.filter((e) => e !== pinned), ...glms];
+  }
   // "llm7" pref: the multi-model keyless pool leads every step and z.ai GLM
   // rides behind it as the failover lane — the mirror image of "auto".
   if (pref === "llm7") return [...pool, ...glms];

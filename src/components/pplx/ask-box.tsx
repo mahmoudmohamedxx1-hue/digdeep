@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, ChevronDown, Cpu, FileText, Gavel, Gauge, Infinity as InfinityIcon, Loader2, Paperclip, Plus, Settings2, Square, X, BrainCircuit } from "lucide-react";
+import { ArrowUp, ChevronDown, Cpu, FileText, Gavel, Gauge, Infinity as InfinityIcon, KeyRound, Loader2, Paperclip, Pin, Plus, Settings2, Square, X, BrainCircuit } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Slider } from "@/components/ui/slider";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { AdvParams, AttachedDoc } from "@/components/research/types";
+import { LLM7_MODEL_CHOICES, PIN_PREFIX, modelPrefPillLabel, type ModelPrefValue } from "@/lib/model-choices";
 
 export const MODES = [
   { id: "quick", label: "Quick", hint: "≈ 5–10 min", desc: "2 aspects × 1 round · ~8 sources" },
@@ -78,6 +79,51 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   return <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">{children}</p>;
 }
 
+/** The pinned-model list shared by BOTH model dropdowns (desktop pill + phone
+ *  icon): every pickable LLM7 model — keyless tier first (always available),
+ *  premium tier behind (needs the user's LLM7 dashboard key). Picking one makes
+ *  that model LEAD every step of the run; the rest of the pool rides behind it
+ *  as failover. This is the "choose minimax 2.7 / nemotron" feature. */
+function PinModelItems({ modelPref, onModelPref }: { modelPref: string; onModelPref: (m: ModelPrefValue) => void }) {
+  const keyless = LLM7_MODEL_CHOICES.filter((c) => c.tier === "keyless");
+  const premium = LLM7_MODEL_CHOICES.filter((c) => c.tier === "premium");
+  const row = (c: (typeof LLM7_MODEL_CHOICES)[number]) => {
+    const id = `${PIN_PREFIX}${c.model}` as ModelPrefValue;
+    const sel = modelPref === id;
+    return (
+      <DropdownMenuItem key={c.model} onClick={() => onModelPref(id)} className={`gap-2 rounded-[10px] py-1.5 ${sel ? "bg-primary/10" : ""}`}>
+        {sel ? <Pin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" /> : <Cpu className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="flex items-center gap-1.5 text-[13px] font-medium leading-tight">
+            {c.label}
+            {c.tier === "premium" && (
+              <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-500/10 px-1.5 py-px text-[9px] font-semibold text-amber-600">
+                <KeyRound className="h-2.5 w-2.5" />
+                key
+              </span>
+            )}
+          </span>
+          <span className="truncate text-[10.5px] leading-snug text-muted-foreground">{c.note}</span>
+        </span>
+      </DropdownMenuItem>
+    );
+  };
+  return (
+    <>
+      <DropdownMenuSeparator />
+      <DropdownMenuLabel className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        <Pin className="h-3 w-3" /> Pin one LLM7 model — it leads every step
+      </DropdownMenuLabel>
+      {keyless.map(row)}
+      <DropdownMenuSeparator />
+      <DropdownMenuLabel className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        <KeyRound className="h-3 w-3" /> Premium — your LLM7 key
+      </DropdownMenuLabel>
+      {premium.map(row)}
+    </>
+  );
+}
+
 /** The idle placeholder rotator — a plain, quiet text swap (no scramble glyphs). */
 function IdlePlaceholder({ phrases, compact }: { phrases: string[]; compact: boolean }) {
   const [idx, setIdx] = useState(0);
@@ -124,8 +170,8 @@ export function AskBox({
   onAdv: (a: AdvParams) => void;
   language: string;
   onLanguage: (l: string) => void;
-  modelPref: "auto" | "llm7" | "glm" | "pool";
-  onModelPref: (m: "auto" | "llm7" | "glm" | "pool") => void;
+  modelPref: ModelPrefValue;
+  onModelPref: (m: ModelPrefValue) => void;
   showThinking: boolean;
   onShowThinking: (b: boolean) => void;
   court?: boolean;
@@ -304,7 +350,8 @@ export function AskBox({
 
               {/* main model route — which family leads the run; the other
                   rides behind it as the failover helper (auto = GLM leads,
-                  llm7 = pool leads), or pin one family exclusively */}
+                  llm7 = pool leads), or pin one family exclusively. Below: pin
+                  ONE specific LLM7 model (MiniMax-M2.7, Nemotron, …) to lead */}
               <div>
                 <SectionLabel>Main model — route &amp; failover</SectionLabel>
                 <div className="space-y-1">
@@ -321,6 +368,34 @@ export function AskBox({
                       </span>
                     </button>
                   ))}
+                </div>
+                <div className="mt-3">
+                  <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">
+                    <Pin className="h-3 w-3" /> Pin one LLM7 model
+                  </p>
+                  <div className="max-h-[210px] space-y-0.5 overflow-y-auto pr-1">
+                    {LLM7_MODEL_CHOICES.map((c) => {
+                      const id = `${PIN_PREFIX}${c.model}` as ModelPrefValue;
+                      const sel = modelPref === id;
+                      return (
+                        <button
+                          key={c.model}
+                          onClick={() => onModelPref(id)}
+                          className={`flex w-full items-center gap-2 rounded-[10px] px-2.5 py-1.5 text-left transition-colors ${sel ? "bg-primary/10" : "hover:bg-accent"}`}
+                        >
+                          <Pin className={`h-3 w-3 shrink-0 ${sel ? "text-primary" : "text-muted-foreground/40"}`} />
+                          <span className="min-w-0 flex-1 truncate text-xs font-medium">
+                            {c.label}
+                            {c.tier === "premium" && <KeyRound className="ml-1.5 inline h-2.5 w-2.5 text-amber-600" />}
+                          </span>
+                          <span className="shrink-0 text-[10px] text-muted-foreground">{c.note}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-1.5 text-[10px] leading-snug text-muted-foreground">
+                    The pinned model leads every step — the keyless pool rides behind it as failover. Key icon = premium tier (needs your LLM7 key).
+                  </p>
                 </div>
               </div>
 
@@ -405,11 +480,11 @@ export function AskBox({
                 className={`press-scale hidden h-9 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium transition-colors sm:flex ${
                   modelPref !== "auto" ? "text-primary" : "text-muted-foreground hover:bg-accent hover:text-foreground"
                 }`}
-                aria-label={`Main model: ${MODEL_ROUTES.find((m) => m.id === modelPref)?.label ?? "GLM main"}`}
-                title="Main model — which AI family leads the run (the other rides behind as failover)"
+                aria-label={`Main model: ${modelPrefPillLabel(modelPref)}`}
+                title="Main model — pick a route, or pin one specific LLM7 model (MiniMax · Nemotron · DeepSeek …) to lead every step"
               >
                 <Cpu className="h-4 w-4 text-primary/70" />
-                {MODEL_ROUTES.find((m) => m.id === modelPref)?.label ?? "GLM main"}
+                <span className="max-w-[140px] truncate">{modelPrefPillLabel(modelPref)}</span>
                 <ChevronDown className="h-3 w-3 opacity-50" />
               </button>
             </DropdownMenuTrigger>
@@ -424,6 +499,7 @@ export function AskBox({
                   </span>
                 </DropdownMenuItem>
               ))}
+              <PinModelItems modelPref={modelPref} onModelPref={onModelPref} />
             </DropdownMenuContent>
           </DropdownMenu>
           {/* compact icon-only trigger on phones */}
@@ -433,7 +509,7 @@ export function AskBox({
                 className={`press-scale flex h-11 w-11 items-center justify-center rounded-full transition-colors sm:hidden sm:h-9 sm:w-9 ${
                   modelPref !== "auto" ? "text-primary" : "text-muted-foreground hover:bg-accent hover:text-foreground"
                 }`}
-                aria-label={`Main model: ${MODEL_ROUTES.find((m) => m.id === modelPref)?.label ?? "GLM main"}`}
+                aria-label={`Main model: ${modelPrefPillLabel(modelPref)}`}
               >
                 <Cpu className="h-[18px] w-[18px] text-primary/70" />
               </button>
@@ -449,6 +525,7 @@ export function AskBox({
                   </span>
                 </DropdownMenuItem>
               ))}
+              <PinModelItems modelPref={modelPref} onModelPref={onModelPref} />
             </DropdownMenuContent>
           </DropdownMenu>
           {/* depth selector — labeled pill on sm+, icon button on phones so the

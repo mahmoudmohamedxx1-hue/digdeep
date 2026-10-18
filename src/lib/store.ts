@@ -5,6 +5,7 @@ import { persist } from "zustand/middleware";
 import type { AdvParams, HistoryItem } from "@/components/research/types";
 import { MODE_PARAMS } from "@/components/pplx/ask-box";
 import { listHistory } from "@/lib/idb-store";
+import { isValidModelPref, type ModelPrefValue } from "@/lib/model-choices";
 
 /**
  * Composer + UI settings shared across every route. Persisted per browser
@@ -15,8 +16,10 @@ interface SettingsState {
   mode: string;
   language: string;
   /** which model family leads the run: GLM → pool ("auto"), pool → GLM ("llm7"),
-   *  or a single family ("glm" / "pool") */
-  modelPref: "auto" | "llm7" | "glm" | "pool";
+   *  a single family ("glm" / "pool") — or a PINNED specific LLM7 model
+   *  ("llm7pin:minimax-m2.7", "llm7pin:nemotron-3-nano:30b", …) that leads
+   *  every step with the pool behind it as failover */
+  modelPref: ModelPrefValue;
   adv: AdvParams;
   advTouched: boolean;
   showThinking: boolean;
@@ -27,7 +30,7 @@ interface SettingsState {
   changeAdv: (a: AdvParams) => void;
   resetAdv: () => void;
   setLanguage: (l: string) => void;
-  setModelPref: (m: "auto" | "llm7" | "glm" | "pool") => void;
+  setModelPref: (m: ModelPrefValue) => void;
   setShowThinking: (b: boolean) => void;
   setCourt: (b: boolean) => void;
   setSidebarOpen: (b: boolean) => void;
@@ -68,7 +71,7 @@ export const useSettings = create<SettingsState>()(
         return {
           mode: p.mode ?? "standard",
           language: p.language ?? "English",
-          modelPref: p.modelPref ?? "auto",
+          modelPref: isValidModelPref(p.modelPref) ? p.modelPref : "auto",
           adv,
           advTouched: p.advTouched ?? false,
           showThinking: p.showThinking ?? true,

@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { llmComplete, llmStreamComplete, MODEL_PREF_ROUTES, type ChatMsg, type LlmResult, type ModelPref, type StreamDelta } from "./llm";
+import { llmComplete, llmStreamComplete, routeInfoFor, type ChatMsg, type LlmResult, type ModelPref, type StreamDelta } from "./llm";
 import { capabilityQuestion, followUpishHeuristic, heuristicChatIntent, selfKnowledgeTopic, type SelfTopic } from "./intent-heuristics";
 import { searchAll, fetchPageContent, domainOf, type SearchResult } from "./search";
 import { gateByRelevance } from "./relevance";
@@ -1264,7 +1264,7 @@ export async function runJob(jobId: string) {
     await ctx.emit(
       "info",
       job.court ? "Routed to: the court" : "Routed to: deep research",
-      `${routeWhy}. Mode: ${unlimited ? "UNLIMITED — no caps on aspects, rounds, sources or time; research continues until coverage is genuinely sufficient" : `breadth ${job.breadth} · depth ${job.depth} · max ${job.maxSources} sources · budget ${job.maxMinutes} min`} · route: ${MODEL_PREF_ROUTES[job.modelPref as ModelPref]?.route ?? job.modelPref}`
+      `${routeWhy}. Mode: ${unlimited ? "UNLIMITED — no caps on aspects, rounds, sources or time; research continues until coverage is genuinely sufficient" : `breadth ${job.breadth} · depth ${job.depth} · max ${job.maxSources} sources · budget ${job.maxMinutes} min`} · route: ${routeInfoFor(job.modelPref).route}`
     );
 
     // ---------- STAGE 1: PLAN ----------

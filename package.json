@@ -6,6 +6,7 @@
   "private": true,
   "scripts": {
     "test:routing": "bun scripts/test-routing.ts",
+    "test:pin": "bun scripts/test-model-pin.ts",
     "mock-llm": "node scripts/mock-llm.js",
     "bench": "node scripts/benchmark-harness.mjs",
     "dev": "next dev -p 3000 2>&1 | tee dev.log",
