@@ -109,6 +109,18 @@ interface SourceRef {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** v2.5.3: a streaming draft that hits its per-call cap can end mid-sentence —
+ *  the grader reads that as "incomplete sections and abrupt endings" (a live
+ *  7.3/10 deduction). Trim to the last complete sentence; keep the text when it
+ *  already ends cleanly. Pure computation, no LLM. */
+function trimToCompleteSentence(text: string): string {
+  const t = text.trimEnd();
+  if (/[.!?:"')\]]$/.test(t)) return t;
+  const cut = Math.max(t.lastIndexOf(". "), t.lastIndexOf(".\n"), t.lastIndexOf("! "), t.lastIndexOf("? "));
+  if (cut < Math.floor(t.length * 0.5)) return t; // truncation point too early — keep as-is (honest beats halved)
+  return t.slice(0, cut + 1).trimEnd();
+}
+
 function extractJson(text: string): any | null {
   const cleaned = text.replace(/```(json)?/gi, "").trim();
   const start = cleaned.indexOf("{");
@@ -2514,6 +2526,8 @@ export async function runJob(jobId: string) {
             );
             draftText = draftRes.text;
             draftModel = draftRes.model;
+            // v2.5.3: a stream capped mid-sentence must not ship as an "abrupt ending"
+            if (draftText) draftText = trimToCompleteSentence(draftText);
           } catch (err) {
             await ctx.emit("info", `Draft step failed for “${sec.title}” — using verified research notes directly`, err instanceof Error ? err.message.slice(0, 300) : undefined);
             draftText = sec.findings || "_Insufficient evidence was gathered for this section._";
@@ -3068,16 +3082,19 @@ export async function runJob(jobId: string) {
     // rounds or the clock run out first, the honest number is published with
     // the reason. (Court runs skip this — the verdict is the deliverable.)
     const QUALITY_TARGET = 9;
-    // v2.5.0: serverless runs get TWO full rounds — continuation gives each round
-    // real time (a round can even span slices via the "improving" checkpoint).
-    const QUALITY_MAX_ROUNDS = SERVERLESS ? 2 : 3;
+    // v2.5.3: serverless runs get THREE full rounds — the measured trajectory
+    // (6.5 → 6.5 → 7.3 on the live quantum-computing run) shows each round buys
+    // real evidence the grader then credits; round 3 attacks the anchoring
+    // weaknesses the round-2 grader named. The loop still stops the moment the
+    // target is earned.
+    const QUALITY_MAX_ROUNDS = SERVERLESS ? 3 : 3;
     /** v2.5.0: the improvement loop's clock gate — on serverless the ABSOLUTE
      *  budget decides whether another round can ever run (a thin slice clock just
      *  checkpoints and the next slice continues the round); locally the budget
      *  stops it 2 min past a budgeted deadline (unlimited rides free). */
     const canImprove = () =>
       (SERVERLESS
-        ? ctx.hardLeft >= 65_000 || (absoluteDeadline == null || Date.now() < absoluteDeadline - 60_000)
+        ? ctx.hardLeft >= 65_000 || (absoluteDeadline == null || Date.now() < absoluteDeadline - 90_000)
         : ctx.hardLeft >= 200_000) &&
       !(ctx.hasTimeBudget && ctx.timeLeft < -120_000) &&
       !runExhausted();
@@ -3260,9 +3277,9 @@ ${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
               { streamTo: sec.id, wantThinking: false, maxTokens: 2500, fast: { ...(SERVERLESS ? { timeoutMs: 60_000, maxWaitMs: 110_000 } : { timeoutMs: Math.min(90_000, Math.max(20_000, ctx.hardLeft - 30_000)) }) } }
             );
             if (rwRes.text && rwRes.text.split(/\s+/).length > 60) {
-              sec.draftMd = rwRes.text;
-              draftsArr[finalSections.indexOf(sec)] = rwRes.text;
-              await db.researchSection.update({ where: { id: sec.id }, data: { draftMd: rwRes.text } }).catch(() => null);
+              sec.draftMd = trimToCompleteSentence(rwRes.text); // v2.5.3: no abrupt endings from capped rewrites
+              draftsArr[finalSections.indexOf(sec)] = sec.draftMd;
+              await db.researchSection.update({ where: { id: sec.id }, data: { draftMd: sec.draftMd } }).catch(() => null);
               rewritten++;
             }
           } catch { /* keep the previous draft — never lose a working section */ }
