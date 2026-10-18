@@ -829,8 +829,8 @@ export async function runJob(jobId: string) {
       // safety margin so the final report write always makes it to the database
       ...(SERVERLESS ? { hardStopMs: 288_000 } : {}),
     });
-    // v2.4.0: no new research rounds/aspects past this instant — the improve tail is sacred
-    if (SERVERLESS) ctx.researchCutoffAt = ctx.hardStop - 195_000;
+    // (the research cutoff is anchored at Stage-2 entry below — after the plan lands,
+    // with a 25s floor, so a slow plan ride can never consume the research window)
 
     if (SERVERLESS && rawBudgetMs > SERVERLESS_CAP_MS) {
       await ctx.emit(
@@ -1111,7 +1111,9 @@ export async function runJob(jobId: string) {
     // research always gets at least 25s (one parallel round); reserve: the full tail
     // (drafts + bundle + grade + one improve round). Past a slow plan the tail
     // compresses by degrading gracefully — grade/round skip, the report persists.
-    if (SERVERLESS) ctx.researchCutoffAt = Math.max(Date.now() + 25_000, ctx.hardStop - 195_000);
+    // v2.4.3: reserve 180s for the tail (drafts 40s + bundle 35s + assembly 5s +
+    // grade 25s + one lean round 65s + final write 10s) — 15s more research than v2.4.2.
+    if (SERVERLESS) ctx.researchCutoffAt = Math.max(Date.now() + 25_000, ctx.hardStop - 180_000);
     await updateJob(jobId, { status: "researching", progress: 8 });
     const sectionRows = await db.researchSection.findMany({ where: { jobId }, orderBy: { order: "asc" } });
     const sourcesUsed: SourceRef[] = [];
@@ -1440,7 +1442,7 @@ export async function runJob(jobId: string) {
         let roundNotes = "";
         if (srcForSum.length > 0) {
           try {
-            const sumRes = await ctx.llm([{ role: "user", content: summarizePrompt(sec.title, sec.question, srcForSum, round) }], "summarize", false, undefined, SERVERLESS ? { patient: false, timeoutMs: 30_000 } : undefined);
+            const sumRes = await ctx.llm([{ role: "user", content: summarizePrompt(sec.title, sec.question, srcForSum, round) }], "summarize", false, undefined, SERVERLESS ? { patient: false, timeoutMs: 25_000 } : undefined);
             roundNotes = sumRes.text;
             await ctx.emit("summary", `Synthesized findings on “${sec.title}”`, roundNotes.slice(0, 2400), sumRes.model, { section: sec.title, round, sources: srcForSum.length });
           } catch (sumErr) {
@@ -2106,7 +2108,11 @@ export async function runJob(jobId: string) {
 
     await updateJob(jobId, { status: "synthesizing", stage: "Writing the report", progress: 80 });
     const finalSections = await db.researchSection.findMany({ where: { jobId }, orderBy: { order: "asc" } });
-    const words: [number, number] = unlimited || job.preset === "exhaustive" ? [550, 900] : job.preset === "deep" ? [450, 700] : [300, 500];
+    // v2.4.3: standard reports were 300-500 words/section (~1200 total) and the
+    // grader honestly flagged thin coverage — meatier sections (420-650) lift
+    // coverage+clarity without new research; the 40s draft cap still fits (llm7
+    // streams 30-60 tok/s ≈ a 650-word section in ~25s)
+    const words: [number, number] = unlimited || job.preset === "exhaustive" ? [550, 900] : job.preset === "deep" ? [450, 700] : [420, 650];
 
     // Evidence-strength notes per section (reflect v3 graded claims → the writer states
     // each claim with the confidence its evidence actually supports)
@@ -2151,7 +2157,7 @@ export async function runJob(jobId: string) {
               [{ role: "user", content: draftSectionPrompt(job.query, sec.title, sec.question, sec.findings ?? "(no findings — rely on general knowledge and clearly mark it as background)", srcs, words, job.language, evidenceNotesFor(sec.title), adversarialNotesFor(sec.title), ctx.allLearnings) }],
               "draft",
               `Writing: ${sec.title}`,
-              { streamTo: sec.id, fast: { timeoutMs: SERVERLESS ? Math.min(45_000, Math.max(20_000, ctx.hardLeft - 15_000)) : Math.min(60_000, Math.max(20_000, ctx.hardLeft - 15_000)) } }
+              { streamTo: sec.id, fast: { timeoutMs: SERVERLESS ? Math.min(40_000, Math.max(20_000, ctx.hardLeft - 15_000)) : Math.min(60_000, Math.max(20_000, ctx.hardLeft - 15_000)) } }
             );
             draftText = draftRes.text;
             draftModel = draftRes.model;
@@ -2314,10 +2320,10 @@ export async function runJob(jobId: string) {
       // Clamped to the hard clock so even a late-starting tail still persists.
       court
         ? Promise.resolve({ text: "", model: "", backendId: "court", latencyMs: 0 } as LlmResult)
-        : ctx.llm([{ role: "user", content: execSummaryPrompt(job.query, draftsPre, job.language, job.preset, ctx.allLearnings) }], "exec-summary", false, undefined, { timeoutMs: SERVERLESS ? Math.min(30_000, Math.max(15_000, ctx.hardLeft - 20_000)) : Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
+        : ctx.llm([{ role: "user", content: execSummaryPrompt(job.query, draftsPre, job.language, job.preset, ctx.allLearnings) }], "exec-summary", false, undefined, { timeoutMs: SERVERLESS ? Math.min(25_000, Math.max(12_000, ctx.hardLeft - 20_000)) : Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
       court
         ? Promise.resolve({ text: "", model: "", backendId: "court", latencyMs: 0 } as LlmResult)
-        : ctx.llm([{ role: "user", content: conclusionPrompt(job.query, draftsPre, job.language) }], "conclusion", false, undefined, { timeoutMs: SERVERLESS ? Math.min(30_000, Math.max(15_000, ctx.hardLeft - 20_000)) : Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
+        : ctx.llm([{ role: "user", content: conclusionPrompt(job.query, draftsPre, job.language) }], "conclusion", false, undefined, { timeoutMs: SERVERLESS ? Math.min(25_000, Math.max(12_000, ctx.hardLeft - 20_000)) : Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
       ctx.llm([{ role: "user", content: titlePrompt(job.query, plan.restate, job.language) }], "title", false, 60, { timeoutMs: SERVERLESS ? 15_000 : Math.min(60_000, Math.max(10_000, ctx.hardLeft - 20_000)) }),
       ctx.llm([{ role: "user", content: relatedPrompt(job.query, finalSections.map((s) => s.title), job.language) }], "related", false, 300, { timeoutMs: SERVERLESS ? 15_000 : Math.min(60_000, Math.max(10_000, ctx.hardLeft - 20_000)) }),
     ]);
@@ -2587,7 +2593,7 @@ export async function runJob(jobId: string) {
         // NOT fast/patient:false — the tail of a run is exactly when the free lanes
         // are hottest (429s); the grader must ride out the cooldown window instead
         // of dying and leaving the report unscored. maxWaitMs comes from the ride budget.
-        { wantThinking: false, maxTokens: 2000, fast: { timeoutMs: SERVERLESS ? 30_000 : 60_000 } }
+        { wantThinking: false, maxTokens: 2000, fast: { timeoutMs: SERVERLESS ? 25_000 : 60_000 } }
       );
       const q = extractJson(scoreRes.text);
       if (q && typeof q.overall === "number") {
@@ -2937,7 +2943,7 @@ ${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
             [{ role: "user", content: qualityScorePrompt(job.query, comprehensionCriteria, reportMd, job.language) }],
             "score",
             `Re-grading after round ${qualityRounds}`,
-            { wantThinking: false, maxTokens: 2000, fast: { timeoutMs: SERVERLESS ? 30_000 : 60_000 } }
+            { wantThinking: false, maxTokens: 2000, fast: { timeoutMs: SERVERLESS ? 25_000 : 60_000 } }
           );
           const q2 = extractJson(scoreRes2.text);
           if (q2 && typeof q2.overall === "number") {
