@@ -143,5 +143,38 @@ for (const { q, want } of topics) {
   console.log(`${ok ? "PASS" : "FAIL"}  ${JSON.stringify(q)}  →  ${got ?? "(not self)"}  (want ${want ?? "(not self)"})`);
 }
 
+// ---- follow-up detection (v2.7 conversation continuity): does the message
+// only make sense inside a thread? true → the resolver call is worth making ----
+import { followUpishHeuristic } from "../src/lib/research/intent-heuristics";
+const followUps: { q: string; want: boolean }[] = [
+  // the exact complaint: a follow-up that became a stray 40-minute trial
+  { q: "what is the court opinion", want: true },
+  { q: "what is the court's opinion", want: true },
+  { q: "and france?", want: true },
+  { q: "what about france", want: true },
+  { q: "why", want: true },
+  { q: "go deeper on the second one", want: true },
+  { q: "tell me more about that", want: true },
+  { q: "do the same for turkey", want: true },
+  { q: "and the verdict?", want: true },
+  { q: "which sources did you use", want: true },
+  { q: "explain it again", want: true },
+  // standalone topics — the resolver must NOT fire (echo-unchanged path skipped)
+  { q: "make deep research about how the big 5 make the forward looking factor to help them in the ecl report", want: false },
+  { q: "what is quantum computing", want: false }, // standalone — researches as written, no resolver call
+  { q: "compare the economic policies of egypt and turkey in the last decade", want: false },
+  { q: "latest developments in quantum computing 2026", want: false },
+  { q: "how do electric car batteries work", want: false },
+  { q: "hi", want: false }, // greetings never reach the resolver (chat lane catches them first)
+  { q: "thanks", want: false },
+];
+console.log("\n--- follow-up detection (gate for the resolver) ---");
+for (const { q, want } of followUps) {
+  const got = followUpishHeuristic(q);
+  const ok = got === want;
+  if (!ok) fails++;
+  console.log(`${ok ? "PASS" : "FAIL"}  ${JSON.stringify(q)}  →  ${got}  (want ${want})`);
+}
+
 console.log(fails === 0 ? "\nALL PASS" : `\n${fails} FAILURES`);
 process.exit(fails === 0 ? 0 : 1);

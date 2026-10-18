@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, ChevronDown, FileText, Gavel, Gauge, Infinity as InfinityIcon, Loader2, Paperclip, Plus, Settings2, Square, X, BrainCircuit } from "lucide-react";
+import { ArrowUp, ChevronDown, Cpu, FileText, Gavel, Gauge, Infinity as InfinityIcon, Loader2, Paperclip, Plus, Settings2, Square, X, BrainCircuit } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Slider } from "@/components/ui/slider";
@@ -27,6 +27,17 @@ export const MODE_PARAMS: Record<string, AdvParams> = {
 const LANGUAGES = ["English", "Arabic", "Chinese", "Spanish", "French", "German"];
 const MAX_DOC_CHARS = 120_000;
 const MAX_DOCS = 4;
+
+/** The four model routes — one source of truth for the composer pill (visible,
+ *  next to Court and depth) and the settings-popover section. id/label/desc
+ *  mirror MODEL_PREF_ROUTES in src/lib/research/llm.ts (kept local so the
+ *  client bundle never imports the server LLM chain). */
+const MODEL_ROUTES = [
+  { id: "auto", label: "GLM main", short: "GLM main · LLM7 helps", desc: "z.ai GLM leads every step; the LLM7 multi-model pool (DeepSeek-V4 · Nemotron-1M · MiniMax · Mistral · gpt-oss) + Pollinations take over when it throttles" },
+  { id: "llm7", label: "LLM7 main", short: "LLM7 main · GLM helps", desc: "The LLM7 multi-model pool leads; z.ai GLM rides behind it as the failover lane — the mirror route of the default" },
+  { id: "glm", label: "GLM only", short: "GLM only", desc: "z.ai GLM lane exclusively — no LLM7 (needs the SDK lane or a server Z.ai key)" },
+  { id: "pool", label: "Pool only", short: "Pool only", desc: "LLM7 / Pollinations keyless pool exclusively — no GLM" },
+] as const;
 
 function AdvRow({
   label, value, min, max, unit, onChange,
@@ -297,12 +308,7 @@ export function AskBox({
               <div>
                 <SectionLabel>Main model — route &amp; failover</SectionLabel>
                 <div className="space-y-1">
-                  {([
-                    ["auto", "GLM main · LLM7 helps", "z.ai GLM leads every step; the LLM7 multi-model pool (DeepSeek-V4 · Nemotron-1M · MiniMax · Mistral · gpt-oss) + Pollinations take over when it throttles"],
-                    ["llm7", "LLM7 main · GLM helps", "The LLM7 multi-model pool leads; z.ai GLM rides behind it as the failover lane — the mirror route of the default"],
-                    ["glm", "GLM only", "z.ai GLM lane exclusively — no LLM7 (needs the SDK lane or a server Z.ai key)"],
-                    ["pool", "Pool only", "LLM7 / Pollinations keyless pool exclusively — no GLM"],
-                  ] as const).map(([id, label, desc]) => (
+                  {MODEL_ROUTES.map(({ id, short: label, desc }) => (
                     <button
                       key={id}
                       onClick={() => onModelPref(id)}
@@ -390,6 +396,61 @@ export function AskBox({
               <Gavel className="h-[18px] w-[18px]" />
             </button>
           )}
+          {/* main model — a VISIBLE chooser, not buried in settings: which family
+              leads the run (the other helps as failover), or pin one exclusively.
+              Labeled pill on sm+, icon button on phones — same pattern as depth. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                className={`press-scale hidden h-9 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium transition-colors sm:flex ${
+                  modelPref !== "auto" ? "text-primary" : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                }`}
+                aria-label={`Main model: ${MODEL_ROUTES.find((m) => m.id === modelPref)?.label ?? "GLM main"}`}
+                title="Main model — which AI family leads the run (the other rides behind as failover)"
+              >
+                <Cpu className="h-4 w-4 text-primary/70" />
+                {MODEL_ROUTES.find((m) => m.id === modelPref)?.label ?? "GLM main"}
+                <ChevronDown className="h-3 w-3 opacity-50" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="glass w-80 rounded-[18px]">
+              <DropdownMenuLabel className="text-xs text-muted-foreground">Main model — route &amp; failover</DropdownMenuLabel>
+              {MODEL_ROUTES.map(({ id, short, desc }) => (
+                <DropdownMenuItem key={id} onClick={() => onModelPref(id)} className={`gap-2.5 rounded-[10px] ${modelPref === id ? "bg-primary/10" : ""}`}>
+                  <Cpu className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${modelPref === id ? "text-primary" : "text-muted-foreground"}`} />
+                  <span className="flex min-w-0 flex-col">
+                    <span className="text-sm font-medium">{short}</span>
+                    <span className="text-[11px] leading-snug text-muted-foreground">{desc}</span>
+                  </span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          {/* compact icon-only trigger on phones */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                className={`press-scale flex h-11 w-11 items-center justify-center rounded-full transition-colors sm:hidden sm:h-9 sm:w-9 ${
+                  modelPref !== "auto" ? "text-primary" : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                }`}
+                aria-label={`Main model: ${MODEL_ROUTES.find((m) => m.id === modelPref)?.label ?? "GLM main"}`}
+              >
+                <Cpu className="h-[18px] w-[18px] text-primary/70" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="glass w-80 rounded-[18px]">
+              <DropdownMenuLabel className="text-xs text-muted-foreground">Main model — route &amp; failover</DropdownMenuLabel>
+              {MODEL_ROUTES.map(({ id, short, desc }) => (
+                <DropdownMenuItem key={id} onClick={() => onModelPref(id)} className={`gap-2.5 rounded-[10px] ${modelPref === id ? "bg-primary/10" : ""}`}>
+                  <Cpu className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${modelPref === id ? "text-primary" : "text-muted-foreground"}`} />
+                  <span className="flex min-w-0 flex-col">
+                    <span className="text-sm font-medium">{short}</span>
+                    <span className="text-[11px] leading-snug text-muted-foreground">{desc}</span>
+                  </span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
           {/* depth selector — labeled pill on sm+, icon button on phones so the
               mode is always reachable from the composer */}
           <DropdownMenu>

@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { llmComplete, llmStreamComplete, MODEL_PREF_ROUTES, type ChatMsg, type LlmResult, type ModelPref, type StreamDelta } from "./llm";
-import { capabilityQuestion, heuristicChatIntent, selfKnowledgeTopic, type SelfTopic } from "./intent-heuristics";
+import { capabilityQuestion, followUpishHeuristic, heuristicChatIntent, selfKnowledgeTopic, type SelfTopic } from "./intent-heuristics";
 import { searchAll, fetchPageContent, domainOf, type SearchResult } from "./search";
 import { gateByRelevance } from "./relevance";
 import {
@@ -16,6 +16,7 @@ import {
   RESEARCHER_SYS,
   CHAT_SYS,
   classifyPrompt,
+  resolveFollowUpPrompt,
   chatPrompt,
   quickAnswerPrompt,
   roleChooserPrompt,
@@ -597,6 +598,59 @@ function selfTopicWord(t: SelfTopic): string {
   }
 }
 
+/** v2.7 CONVERSATION CONTINUITY — resolve a follow-up message into a question
+ *  that stands on its own, using the thread's conversation memory. Zero-LLM
+ *  gate first (no earlier turns, or the message clearly carries its own topic
+ *  → returned untouched, no call). One small model call otherwise, fast-fail,
+ *  fail-open: any error researches the message exactly as written — continuity
+ *  is an upgrade, never a blocker. The resolution is VISIBLE, with the raw
+ *  words and the resolved question side by side. */
+async function resolveFollowUp(ctx: Ctx, raw: string, threadMemory: string, court: boolean): Promise<string> {
+  if (!threadMemory.trim() || !followUpishHeuristic(raw)) return raw;
+  const tid = `resolve-${ctx.jobId}`;
+  try {
+    await ctx.emit("think", "Connecting your message to this conversation", undefined, undefined, { thoughtId: tid, started: true });
+    const res = await ctx.llm(
+      [{ role: "user", content: resolveFollowUpPrompt(raw, threadMemory, court) }],
+      "resolve-followup",
+      false,
+      220,
+      { patient: false, timeoutMs: !!process.env.VERCEL ? 25_000 : 40_000 }
+    );
+    const m = res.text.match(/RESOLVED:\s*(.+)/i);
+    const resolved = (m ? m[1] : res.text)
+      .trim()
+      .replace(/^["“'«]+|["”'»]+$/g, "")
+      .replace(/\s+/g, " ")
+      .slice(0, 600);
+    if (!resolved || resolved.toLowerCase() === raw.toLowerCase().replace(/\s+/g, " ")) {
+      await ctx.emit(
+        "think",
+        "Connecting your message to this conversation",
+        "Read against the earlier turns: the message already stands on its own — proceeding with it exactly as written.",
+        undefined,
+        { thoughtId: tid, done: true, model: res.model }
+      );
+      return raw;
+    }
+    await ctx.emit(
+      "think",
+      "Connecting your message to this conversation",
+      `“${raw.slice(0, 180)}” only makes sense inside this thread. Resolved into the self-contained question: “${resolved}” — every stage that follows (${court ? "the trial, the briefs, the verdict" : "the plan, the searches, the drafts"}, and the grading) works on that, so this answer stays connected to everything above it.`,
+      undefined,
+      { thoughtId: tid, done: true, model: res.model, resolved }
+    );
+    await ctx.emit(
+      "info",
+      `Read in context — researching: “${resolved.slice(0, 160)}”`,
+      "Your message continues this conversation, so it was resolved against the earlier turns before the pipeline started. The thread stays one connected story instead of separate runs."
+    );
+    return resolved;
+  } catch {
+    return raw; // fail-open: the message researches exactly as written
+  }
+}
+
 /** Built-in replies for the cases we can answer perfectly without any model call.
  *  Used when every free backend is throttled — a chat reply must never hang for minutes.
  *  Self-knowledge questions (engines, process, models) get the REAL spec — the same
@@ -874,7 +928,7 @@ export async function runJob(jobId: string) {
   let leaseHeld = false;
   let heart: ReturnType<typeof setInterval> | null = null; // v2.5.0 interval heartbeat
   try {
-    const job = await db.researchJob.findUnique({ where: { id: jobId } });
+    let job = await db.researchJob.findUnique({ where: { id: jobId } });
     if (!job) return;
     // cross-instance single-run guard: exactly one instance may hold the lease
     leaseHeld = await acquireLease(jobId);
@@ -918,6 +972,12 @@ export async function runJob(jobId: string) {
     // ── hoisted tail state (persist()/resume() need them before stages run) ─
     let intent: Intent = "research";
     let routeWhy = "";
+    // v2.7 CONVERSATION CONTINUITY: the query the engine actually researches —
+    // the user's message, resolved against the thread's memory when it was a
+    // follow-up ("what is the court opinion" → the prior topic on trial).
+    // Stage 0 sets it; the checkpoint carries it across slices; everything
+    // from comprehension to the verdict runs on this one shared context.
+    let q = job.query;
     let comprehensionCriteria: string[] = [];
     let agentName = "";
     let sourcesUsed: SourceRef[] = [];
@@ -963,6 +1023,7 @@ export async function runJob(jobId: string) {
       for (const [n, meta] of cp.sourceMeta ?? []) ctx.sourceMeta.set(n, meta);
       sourcesUsed = cp.sourcesUsed ?? [];
       comprehensionCriteria = cp.comprehensionCriteria ?? [];
+      q = cp.researchQuery ?? job.query; // v2.7: resumed slices research the same resolved question
       agentName = cp.agentName ?? "";
       citeStats = cp.citeStats ?? citeStats;
       quality = (cp.quality as QualityScore) ?? null;
@@ -1004,6 +1065,7 @@ export async function runJob(jobId: string) {
         sliceN,
         intent,
         routeWhy,
+        researchQuery: q,
         comprehensionCriteria,
         rolePrompt: ctx.rolePrompt,
         agentName,
@@ -1065,21 +1127,44 @@ export async function runJob(jobId: string) {
       );
     }
 
-    // follow-up context: latest completed turn from the same thread
+    // follow-up context — v2.7 CONVERSATION MEMORY (the thread's worklog):
+    // the last completed turns of this thread, oldest → newest, each compressed
+    // to its question + a digest of the answer. This is what keeps the whole
+    // conversation related to itself: the router reads it, the follow-up
+    // resolver resolves against it, and a message like "what is the court
+    // opinion" continues the ECL thread instead of becoming a stray 40-minute
+    // trial about judicial opinions.
     let threadContext = "";
     let recentTurns = "";
+    let threadMemory = "";
     let prevQuery = "";
     let prevReportMd = "";
     if (job.threadId) {
-      const prev = await db.researchJob.findFirst({
-        where: { threadId: job.threadId, status: "completed", id: { not: job.id }, reportMd: { not: null } },
-        orderBy: { createdAt: "desc" },
-      });
-      if (prev?.reportMd) {
-        threadContext = prev.reportMd.slice(0, 4000);
-        recentTurns = `User asked: "${prev.query}"\nDigDeep answered (${prev.mode}): ${prev.reportMd.slice(0, 400)}`;
-        prevQuery = prev.query;
-        prevReportMd = prev.reportMd;
+      let hist: { query: string; mode: string; reportMd: string | null }[] = [];
+      try {
+        hist = await db.researchJob.findMany({
+          where: { threadId: job.threadId, status: "completed", id: { not: job.id }, reportMd: { not: null } },
+          orderBy: { createdAt: "desc" },
+          take: 6,
+          select: { query: true, mode: true, reportMd: true },
+        });
+      } catch { hist = []; }
+      const turns = [...hist].reverse(); // oldest → newest — the conversation reads in order
+      if (turns.length > 0) {
+        threadMemory = turns
+          .map((t, i) =>
+            `[${i + 1}] User asked: “${t.query.slice(0, 220)}”\n    DigDeep answered (${t.mode}): ${(t.reportMd ?? "")
+              .replace(/^#\s+\[?\d*\]?\s*/, "")
+              .replace(/\s+/g, " ")
+              .trim()
+              .slice(0, 260)}`
+          )
+          .join("\n");
+        const last = turns[turns.length - 1];
+        threadContext = (last.reportMd ?? "").slice(0, 4000);
+        recentTurns = threadMemory.slice(0, 900);
+        prevQuery = last.query;
+        prevReportMd = last.reportMd ?? "";
       }
     }
 
@@ -1095,8 +1180,11 @@ export async function runJob(jobId: string) {
     // ---------- STAGE 0: UNDERSTAND FIRST, THEN ROUTE (chat vs quick answer vs deep research) ----------
     // The selected mode (quick…unlimited) sets HOW DEEP real questions get researched —
     // it must NEVER force research onto conversational or capability questions.
-    // COURT MODE is different by design: the user explicitly asked for a trial, so the
-    // query IS the proposition — no chat/quick classification, straight to evidence.
+    // v2.7: that guard now includes COURT MODE — a greeting or capability question with
+    // the gavel on still gets a direct reply; "hi" must never think for 40 minutes.
+    // Real propositions skip the classifier by design (the user asked for a trial),
+    // but a follow-up proposition is RESOLVED against the conversation memory first,
+    // so "what is the court opinion" tries the thread's actual topic.
     // v2.5.0: on a resumed run (checkpoint exists) routing already happened — the
     // chat/quick lanes complete inside a single slice, so a checkpoint means research.
     let plan: ResearchPlan | null = null;
@@ -1104,17 +1192,6 @@ export async function runJob(jobId: string) {
     await updateJob(jobId, { status: "planning", stage: "Reading your message", progress: 3 });
     intent = "research";
     routeWhy = "";
-    if (job.court) {
-      intent = "research";
-      routeWhy = "court mode — you asked for a trial, so this proposition gets a prosecutor, a defense, a jury of 12 and a judge";
-      await ctx.emit(
-        "court",
-        "Court is in session",
-        `The proposition on trial: “${job.query.slice(0, 240)}”. Evidence is gathered first by the research engine (both for and against), then the prosecution and the defense build their cases from it, a jury of 12 independent personas votes, and the judge reads the verdict — with what to change before trying again.`,
-        undefined,
-        { phase: "opening", charge: job.query.slice(0, 300) }
-      );
-    } else {
     const selfTopic = selfKnowledgeTopic(job.query) ?? (capabilityQuestion(job.query) ? ("capabilities" as SelfTopic) : null);
     const heuristic = heuristicChatIntent(job.query);
     if (heuristic === "chat" || selfTopic) {
@@ -1142,12 +1219,35 @@ export async function runJob(jobId: string) {
         ? `a question about my own ${selfTopicWord(selfTopic)} — answered from my grounded product spec, no research needed (understood instantly, no model call required)`
         : `this is ${cap ? "a question about my own abilities" : "conversation"} — no research needed (understood instantly, no model call required)`;
       routeWhy += ["deep", "exhaustive", "unlimited"].includes(job.preset) ? `. Your "${job.preset}" mode applies to real research questions, not to this` : "";
+      if (job.court) {
+        routeWhy += ". Court mode is on, but there is nothing to put on trial in a greeting";
+        await ctx.emit(
+          "info",
+          "Court mode is on — but there is nothing to put on trial here",
+          "Give me a real claim or question and the gavel comes down: a prosecutor, a defense, a jury of 12 and a judge, over cited evidence."
+        );
+      }
+    } else if (job.court) {
+      intent = "research";
+      // the proposition is read AGAINST the conversation before the gavel — a
+      // follow-up like "what is the court opinion" tries the thread's topic
+      q = await resolveFollowUp(ctx, job.query, threadMemory, true);
+      routeWhy = "court mode — you asked for a trial, so this proposition gets a prosecutor, a defense, a jury of 12 and a judge";
+      await ctx.emit(
+        "court",
+        "Court is in session",
+        `The proposition on trial: “${q.slice(0, 240)}”${q !== job.query ? " — your words, read in the context of this conversation" : ""}. Evidence is gathered first by the research engine (both for and against), then the prosecution and the defense build their cases from it, a jury of 12 independent personas votes, and the judge reads the verdict — with what to change before trying again.`,
+        undefined,
+        { phase: "opening", charge: q.slice(0, 300) }
+      );
     } else {
       const cls = await classifyIntent(ctx, job.query, recentTurns, job.preset);
       intent = cls.intent;
       routeWhy = cls.how;
+      // a real question that continues the thread resolves to a self-contained
+      // query before anything else — one conversation, one shared context
+      if (intent !== "chat") q = await resolveFollowUp(ctx, job.query, threadMemory, false);
     }
-    } // end non-court routing
     await updateJob(jobId, { mode: intent });
     if (intent === "chat") {
       await ctx.emit("info", "Routed to: chat", routeWhy);
@@ -1156,7 +1256,7 @@ export async function runJob(jobId: string) {
     }
     if (intent === "quick") {
       await ctx.emit("info", "Routed to: quick answer", routeWhy);
-      await runQuickLane(ctx, job, threadContext);
+      await runQuickLane(ctx, { ...job, query: q }, threadContext);
       return;
     }
 
@@ -1187,6 +1287,12 @@ export async function runJob(jobId: string) {
       await runChatLane(ctx, job, threadContext);
       return;
     }
+    // v2.7 CONVERSATION CONTINUITY: from here on the engine works on the RESOLVED
+    // query — the user's message, rewritten (when it was a follow-up) into a
+    // question that stands alone. Every stage below — comprehension, plan,
+    // searches, the trial, drafts, grading — shares this one context with the
+    // rest of the thread, so no turn is ever an island.
+    job = { ...job, query: q };
     // ---- STAGE 1a: COMPREHENSION — understand the question the way Claude reads a prompt
     //      BEFORE acting: restate it, pin the intent, define what a great answer must
     //      establish, flag ambiguities. Runs IN PARALLEL with the scouting search, so it
@@ -1343,6 +1449,9 @@ export async function runJob(jobId: string) {
     }
     } else {
       // ── resume path: the plan was persisted on the first slice — reload it ──
+      // v2.7: the resolved query is restored from the checkpoint — a resumed
+      // slice researches, tries and grades the same conversation-resolved question
+      job = { ...job, query: q };
       try {
         plan = job.plan ? (JSON.parse(job.plan) as ResearchPlan) : null;
       } catch { plan = null; }

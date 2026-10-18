@@ -38,6 +38,37 @@ STRATEGY: <one short sentence — the best way to respond, and why>
 LANE: <chat | quick | research>`;
 }
 
+/** ------------------------------------------------------------------
+ *  FOLLOW-UP RESOLUTION — one conversation, one context
+ *  A follow-up message ("what is the court opinion", "and france?",
+ *  "go deeper on the second one") only makes sense inside its thread.
+ *  The resolver rewrites it into a SELF-CONTAINED question so every later
+ *  stage (plan, search, court, drafts, grade) works on the real intent.
+ *  ------------------------------------------------------------------ */
+export function resolveFollowUpPrompt(message: string, threadMemory: string, court: boolean): string {
+  return `You resolve a follow-up message in an ongoing research conversation into a question that stands entirely on its own.
+
+The conversation so far in this thread (oldest → newest):
+"""
+${threadMemory.slice(0, 3200)}
+"""
+
+The user's new message:
+"""
+${message.slice(0, 700)}
+"""
+
+Rewrite the message as a self-contained question: resolve "it / that / this / the same / the previous topic", ellipsis ("what about France?") and references to earlier turns into the concrete topic they point at.
+
+Hard rules:
+- PRESERVE the user's intent, scope and language exactly. Do not broaden, do not narrow, do not answer, do not introduce topics the user did not ask about.
+- Fold in ONLY as much of the earlier conversation as the message needs to stand alone.
+- If the message is ALREADY self-contained (a complete question about its own topic), echo it UNCHANGED.${court ? "\n- Court mode is on: this text is about to be put on trial. Produce the PROPOSITION to try. A message like \"what is the court opinion\" about the previous topic becomes the substantive claim from that topic a court should rule on (e.g. \"The Big 5 firms' forward-looking factors genuinely improve their ECL reporting\") — phrased as a claim or question about that topic, never about courts themselves." : ""}
+- Output one single line, no quotes around it, nothing else.
+
+RESOLVED: <the self-contained question>`;
+}
+
 /** Claude-style comprehension of a research question — run BEFORE planning.
  *  Asks: what is really being asked, what would a great answer establish,
  *  what is ambiguous, what sub-questions must the answer cover. */

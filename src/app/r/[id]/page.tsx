@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, ChevronDown, Compass, Eye, Loader2, Plus, RefreshCw, WifiOff } from "lucide-react";
+import { ArrowLeft, ChevronsDown, ChevronsUp, Compass, Eye, Loader2, Plus, RefreshCw, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AskBox } from "@/components/pplx/ask-box";
 import { ThreadTurn } from "@/components/pplx/turn";
@@ -56,6 +56,7 @@ export default function ThreadPage() {
   const [starting, setStarting] = useState(false);
   const [stoppingAll, setStoppingAll] = useState(false);
   const [showJump, setShowJump] = useState(false);
+  const [showTop, setShowTop] = useState(false);
 
   // ---------- claim evidence (Phase 2) ----------
   const [sel, setSel] = useState<ClaimSelection | null>(null);
@@ -370,6 +371,28 @@ export default function ThreadPage() {
     [mainRef]
   );
 
+  /** Jump to the FIRST message of the conversation — the mirror flight of
+   *  scrollToBottom. Reading from the top means NOT pinned: the stream must
+   * not yank the reader back down while they re-read the opening turn. */
+  const scrollToTop = useCallback(
+    (smooth = true) => {
+      const el = mainRef?.current;
+      if (!el) return;
+      pinnedRef.current = false;
+      if (smooth) {
+        jumpingRef.current = true;
+        setTimeout(() => {
+          jumpingRef.current = false;
+        }, 1200);
+        el.scrollTo({ top: 0, behavior: "smooth" });
+      } else {
+        jumpingRef.current = false;
+        el.scrollTo({ top: 0, behavior: "auto" });
+      }
+    },
+    [mainRef]
+  );
+
   useEffect(() => {
     const el = mainRef?.current;
     if (!el || turns == null) return;
@@ -390,9 +413,11 @@ export default function ThreadPage() {
       } else if (away <= 24) {
         pinnedRef.current = true; // touched bottom — follow again
       }
-      // show the pill once meaningfully away, hide only clearly near bottom
-      // (hysteresis keeps it from flickering at the threshold)
+      // show the latest pill once meaningfully away from the bottom, hide only
+      // clearly near it; the FIRST-message pill mirrors that at the top
+      // (hysteresis keeps both from flickering at their thresholds)
       setShowJump((prev) => (prev ? !(pinnedRef.current || away <= 90) : !pinnedRef.current && away >= 140));
+      setShowTop((prev) => (prev ? el.scrollTop > 300 : el.scrollTop > 700));
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
@@ -553,7 +578,7 @@ export default function ThreadPage() {
   // ---------- loading ----------
   if (turns == null) {
     return (
-      <div className="mx-auto w-full max-w-[min(768px,75%)] space-y-3.5 px-4 pb-20 pt-7" aria-label="Loading thread">
+      <div className="mx-auto w-full max-w-[max(min(768px,50%),340px)] space-y-3.5 px-4 pb-20 pt-7" aria-label="Loading thread">
         <div className="flex justify-end">
           <div className="skeleton-line h-10 w-2/3 rounded-[22px]" />
         </div>
@@ -590,7 +615,7 @@ export default function ThreadPage() {
       {isShared && (
         <div
           role="note"
-          className="mx-auto mb-2 mt-3 flex w-full max-w-[min(768px,75%)] items-start gap-2.5 rounded-[16px] border border-border/70 bg-muted/40 px-4 py-3 sm:mt-4"
+          className="mx-auto mb-2 mt-3 flex w-full max-w-[max(min(768px,50%),340px)] items-start gap-2.5 rounded-[16px] border border-border/70 bg-muted/40 px-4 py-3 sm:mt-4"
         >
           <Eye className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
           <p className="text-[12.5px] leading-relaxed text-muted-foreground">
@@ -603,10 +628,10 @@ export default function ThreadPage() {
 
       <div className="mx-auto flex w-full max-w-[1140px] justify-center gap-7 px-4 pb-40 pt-5 sm:pt-6">
         {/* turns — one chat flow; date separators mark day boundaries.
-            75% cap: the chat window never runs edge-to-edge — on wide-enough
-            screens the 768px cap already holds it well under 75%; below that,
-            75% keeps a centered reading column instead of a full-bleed one. */}
-        <div className="mx-auto w-full max-w-[min(768px,75%)] space-y-8">
+            50% cap (v2.7): the chat window takes half the available width on
+            desktop — a centered reading column, never edge-to-edge. The 340px
+            floor keeps phones usable (50% of a phone screen is not a column). */}
+        <div className="mx-auto w-full max-w-[max(min(768px,50%),340px)] space-y-8">
           {turns.map((t, i) => {
             const day = t.job?.createdAt ? dayKey(t.job.createdAt) : null;
             const prevDay = i > 0 && turns[i - 1].job?.createdAt ? dayKey(turns[i - 1].job!.createdAt!) : null;
@@ -689,23 +714,39 @@ export default function ThreadPage() {
       </div>
 
       {/* follow-up input (pinned bottom dock) — or the read-only CTA on shared
-          snapshots. The jump pill hangs inside the dock's relative wrapper so
-          it sits exactly above the composer, centered on the chat column —
+          snapshots. The jump icons hang inside the dock's relative wrapper so
+          they sit exactly above the composer, centered on the chat column —
           not the viewport (at xl the column sits left of center, beside the
-          evidence rail, and a viewport-centered button missed it). */}
+          evidence rail, and a viewport-centered button missed it). Icon-only
+          by design: ↓ latest (live dot while a run is active), ↑ first message. */}
       <div className="glass-dock sticky bottom-0 z-20">
-        <div className="relative mx-auto w-full max-w-[min(768px,75%)]">
-          {showJump && (
-            <button
-              onClick={() => scrollToBottom(true)}
-              className="glass spring-pop press-scale absolute -top-[54px] left-1/2 z-30 flex h-9 -translate-x-1/2 items-center gap-2 rounded-full px-4 text-[12.5px] font-medium text-foreground shadow-elev-2"
-              aria-label="Jump to latest"
-              title="Jump to latest"
-            >
-              {anyActive && <span className="pplx-dot h-1.5 w-1.5 rounded-full bg-primary" aria-hidden />}
-              {anyActive ? "Live · jump to latest" : "Jump to latest"}
-              <ChevronDown className="h-4 w-4" />
-            </button>
+        <div className="relative mx-auto w-full max-w-[max(min(768px,50%),340px)]">
+          {(showJump || showTop) && (
+            <div className="absolute -top-[58px] left-1/2 z-30 flex -translate-x-1/2 items-center gap-2">
+              {showTop && (
+                <button
+                  onClick={() => scrollToTop(true)}
+                  className="glass spring-pop press-scale flex h-9 w-9 items-center justify-center rounded-full text-foreground shadow-elev-2"
+                  aria-label="Jump to the first message"
+                  title="Jump to the first message"
+                >
+                  <ChevronsUp className="h-[18px] w-[18px]" />
+                </button>
+              )}
+              {showJump && (
+                <button
+                  onClick={() => scrollToBottom(true)}
+                  className={`glass spring-pop press-scale relative flex h-9 w-9 items-center justify-center rounded-full shadow-elev-2 ${
+                    anyActive ? "text-primary" : "text-foreground"
+                  }`}
+                  aria-label="Jump to latest"
+                  title="Jump to latest"
+                >
+                  {anyActive && <span className="pplx-dot absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-primary" aria-hidden />}
+                  <ChevronsDown className="h-[18px] w-[18px]" />
+                </button>
+              )}
+            </div>
           )}
           {isShared ? (
             <div className="flex flex-wrap items-center justify-center gap-2 px-4 py-3">

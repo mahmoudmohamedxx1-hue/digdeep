@@ -77,6 +77,10 @@ export interface EngineCheckpoint {
   // ── stage 0-1 products ────────────────────────────────────────────────
   intent?: string;
   routeWhy?: string;
+  /** v2.7: the query the engine actually researches — the user's message
+   *  resolved against the thread's conversation memory. Set once in stage 0,
+   *  restored on resume so later slices search/try/grade the same question. */
+  researchQuery?: string;
   comprehensionCriteria: string[];
   rolePrompt: string;
   agentName: string;

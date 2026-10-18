@@ -127,6 +127,42 @@ export function capabilityQuestion(raw: string): boolean {
   return patterns.some((p) => p.test(s));
 }
 
+/**
+ * Does this message look like a FOLLOW-UP that only makes sense inside an
+ * ongoing conversation — pronouns ("it", "that"), ellipsis ("what about
+ * France?"), references to earlier turns ("the second one", "go deeper"),
+ * short questions with no topic of their own ("what is the court opinion")?
+ *
+ * Zero-LLM gate for the resolver: when true AND the thread has earlier turns,
+ * one cheap model call rewrites the message into a self-contained question.
+ * False negatives are fine (the message researches as written); false
+ * positives only cost one small call — but real standalone topics ("what is
+ * quantum computing") should not match, so the patterns stay tight.
+ */
+export function followUpishHeuristic(raw: string): boolean {
+  const s = normalize(raw);
+  if (!s) return false;
+  const words = s.split(/\s+/).filter(Boolean);
+  // very short messages with no topic of their own — "why", "sources?", "and egypt?"
+  if (words.length <= 3 && !/^(hi+|hey+|hello+|yo+|sup|thanks+|thank you|ok+|okay|k|cool|nice|great|good|bye|test|ping)$/.test(s)) return true;
+  // bare pronouns (it/that/this/they…) only in SHORT messages: a long message
+  // that contains "them" usually resolves its own pronouns inside the sentence
+  // ("…how the big 5 make the forward looking factor to help them in the ecl report"
+  // is self-contained and must NOT trip the gate)
+  if (words.length <= 12 && /\b(it|that|this|these|those|they|them|their)\b/.test(s)) return true;
+  // strong thread-deixis at ANY length — these point outside the message itself
+  if (/\b(the same|the above|the previous|the last one|the other one|the first one|the second|the third)\b/.test(s)) return true;
+  // classic follow-up openers
+  if (/^(what|how) about\b/.test(s)) return true;
+  if (/^(and|but|also|plus|then)\b/.test(s) && words.length <= 10) return true;
+  if (/^(why|how so|how come|since when|says who|according to whom|like what|such as|for example)\b/.test(s) && words.length <= 8) return true;
+  if (/^(go|dig|goes|digs) deeper|dig into (that|this|it)|tell me more|expand (on|that|this)|elaborate|more (on|about|detail)|continue|keep going|and the rest\b/.test(s)) return true;
+  if (/^(do the same|same for|what about the|how about the)\b/.test(s)) return true;
+  // meta questions about the previous answer
+  if (/\b(what did you mean|what do you mean|clarify|your sources|which sources|cite|citation|the court opinion|court s opinion|your verdict|the verdict|the jury|the judge)\b/.test(s)) return true;
+  return false;
+}
+
 export function heuristicChatIntent(raw: string): "chat" | null {
   const s = normalize(raw);
   if (!s) return "chat";
