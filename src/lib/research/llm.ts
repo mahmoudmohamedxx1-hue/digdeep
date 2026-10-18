@@ -368,6 +368,11 @@ export interface LlmOptions {
 export async function llmComplete(messages: ChatMsg[], opts: LlmOptions): Promise<LlmResult> {
   // fast mode: single pass, one attempt per backend, short per-call timeout — for intent routing etc.
   const fast = opts.timeoutMs != null && opts.patient === false;
+  // v2.4.2: a fast timeout must bound the WHOLE CHAIN, not each backend — with ~19
+  // backends a per-backend 30s ceiling lets one throttled call ride 9+ minutes and
+  // freeze the serverless function with the report unpersisted. The chain deadline
+  // is the fast budget; each backend gets what's left of it (3s floor).
+  const chainDeadline = fast && opts.timeoutMs != null ? Date.now() + opts.timeoutMs : Number.POSITIVE_INFINITY;
   // Patient mode: up to 40 rounds (with 20-120s waits ≈ 15-80 min of patience) so a fully
   // throttled free-tier window never kills an hours-long research run the user asked for.
   const maxRounds = fast ? 1 : opts.patient === false ? 1 : 40;
@@ -377,6 +382,10 @@ export async function llmComplete(messages: ChatMsg[], opts: LlmOptions): Promis
     const backends = await orderedBackends(opts.pref ?? "auto", opts.purpose);
     const errors: string[] = [];
     for (const be of backends) {
+      if (Date.now() >= chainDeadline) {
+        errors.push(`chain deadline (${opts.timeoutMs}ms) hit — ${be.label} not tried`);
+        break;
+      }
       const h = getHealth(be.id);
       if (h.cooldownUntil > Date.now()) {
         errors.push(`${be.label}: in cooldown`);
@@ -395,15 +404,18 @@ export async function llmComplete(messages: ChatMsg[], opts: LlmOptions): Promis
         h.calls++;
         try {
           const isGlm = be.baseUrl === "z-ai-sdk";
+          // v2.4.2: in fast mode the per-call timeout is clamped to the chain's
+          // remaining budget (3s floor) — the whole chain must fit opts.timeoutMs.
+          const callTimeout = fast ? Math.max(3_000, chainDeadline - Date.now()) : undefined;
           const out: Served = isGlm
             ? await callGlm(
                 GLM_SDK_MODELS.find((m) => m.id === be.id)?.model,
                 messages,
                 opts.wantThinking ?? false,
                 opts.maxTokens,
-                opts.timeoutMs ?? 150_000
+                callTimeout ?? opts.timeoutMs ?? 150_000
               )
-            : await callOpenAiCompatible(be, messages, opts.maxTokens, opts.timeoutMs ?? 90_000, opts.wantThinking ?? false);
+            : await callOpenAiCompatible(be, messages, opts.maxTokens, callTimeout ?? opts.timeoutMs ?? 90_000, opts.wantThinking ?? false);
           h.ok++;
           h.failures = 0;
           h.lastLatencyMs = Date.now() - started;

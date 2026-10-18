@@ -2295,6 +2295,17 @@ export async function runJob(jobId: string) {
         ].join("\n")
       : "";
     await updateJob(jobId, { stage: "Auditing citations & writing the summary", progress: 95 });
+    // v2.4.2 PERSIST-EARLY: the drafts are the report's substance — persist them
+    // BEFORE the tail bundle (audit/exec/conclusion/title can each ride a throttled
+    // window). If the function freezes mid-tail, the watchdog completes the job
+    // with this draft instead of the user staring at a zombie at 95%. The full
+    // assembly below overwrites this the moment the tail lands.
+    {
+      const bodyV0 = finalSections.map((s, i) => `## ${i + 1}. ${s.title}\n\n${s.draftMd || ""}`).join("\n\n");
+      const refsV0 = sourcesUsed.map((s, i) => `${i + 1}. ${s.title} — *${s.domain}* — ${s.url}`).join("\n");
+      const reportV0 = [`# ${job.query.slice(0, 80)}`, ``, bodyV0, ``, `## References`, ``, refsV0 || "*(no sources were successfully retrieved)*"].join("\n");
+      await updateJob(jobId, { reportMd: reportV0 }).catch(() => {});
+    }
     const [auditR, execR, concR, titleR, relatedR] = await Promise.allSettled([
       // v2.4.0: the citation audit rides IN the bundle (it only needs the drafts)
       auditWork(),
@@ -3129,10 +3140,21 @@ export async function markStaleJobs() {
   // cutover, restart, crash) and is failed fast so the UI's retry appears.
   const stale = await db.researchJob.findMany({
     where: { status: { in: ["queued", "planning", "researching", "critiquing", "synthesizing"] }, updatedAt: { lt: new Date(Date.now() - 5 * 60_000) } },
-    select: { id: true },
+    select: { id: true, reportMd: true, stage: true },
   });
   for (const j of stale) {
     if (activeJobs.has(j.id)) continue;
+    // v2.4.2: a frozen tail must not bury a finished draft — when the engine
+    // persisted a report before dying, COMPLETE the job with it (honestly labeled)
+    // instead of failing it: a real report beats a zombie at 95%.
+    if (j.reportMd && j.reportMd.length > 200) {
+      await db.researchJob.update({
+        where: { id: j.id },
+        data: { status: "completed", stage: "Completed (tail interrupted — summary/score may be missing)", progress: 100, completedAt: new Date() },
+      });
+      await db.activityEvent.create({ data: { jobId: j.id, type: "done", title: "Completed with the tail interrupted", detail: "The report body and references were finished, but the function clock ran out during the final polish (summary/citation audit/self-score). The full report is below.", seq: 9_999_997 } }).catch(() => {});
+      continue;
+    }
     await db.researchJob.update({ where: { id: j.id }, data: { status: "failed", stage: "Interrupted", error: "Job stalled or was interrupted (e.g. a redeploy or server restart). Start a new research run or tap Retry.", completedAt: new Date() } });
     await db.activityEvent.create({ data: { jobId: j.id, type: "error", title: "Job interrupted", detail: "The research process was interrupted. Please start a new run or tap Retry.", seq: 9_999_998 } }).catch(() => {});
   }
