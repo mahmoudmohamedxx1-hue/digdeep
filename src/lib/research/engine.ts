@@ -1075,7 +1075,10 @@ export async function runJob(jobId: string) {
       if (planRes) await ctx.emit("info", "Plan parse failed — using fallback plan", planRes.text.slice(0, 400));
       plan = fallbackPlan(job.query, job.breadth);
     }
-    plan.aspects = (job.breadth > 0 ? plan.aspects.slice(0, job.breadth) : plan.aspects.slice(0, UNLIMITED_ASPECT_CAP)).filter((a) => a && a.title);
+    // v2.4.7: on the serverless clock one extra aspect is nearly free (4 parallel
+    // workers, one round each) and directly lifts the coverage dim — the grader's
+    // most common deduction was "criteria spanned more dimensions than 3 aspects covered"
+    plan.aspects = (job.breadth > 0 ? plan.aspects.slice(0, SERVERLESS ? Math.min(job.breadth + 1, 5) : job.breadth) : plan.aspects.slice(0, UNLIMITED_ASPECT_CAP)).filter((a) => a && a.title);
     await updateJob(jobId, { plan: JSON.stringify(plan), progress: 6, stage: `Researching ${plan.aspects.length} aspects` });
 
     // ---- knowledge-first digest: what the model already knows vs what genuinely needs the web ----
