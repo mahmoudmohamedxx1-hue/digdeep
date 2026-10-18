@@ -444,7 +444,14 @@ Max 4 attacks, highest severity first — only claims where the attack has real 
  *  comprehension pass's success criteria, on four dimensions. Honest when bad. */
 export function qualityScorePrompt(query: string, successCriteria: string[], report: string, language: string): string {
   const crit = successCriteria.length ? successCriteria.map((c, i) => `${i + 1}. ${c}`).join("\n") : "(the report should have established the core of the question with evidence)";
-  return `A research report on "${query}" was just completed. Grade it honestly — the purpose of this score is trust, not marketing.
+  return `A research report on "${query}" was just completed. Grade it honestly — the purpose of this score is trust, not marketing. But honest does not mean harsh: calibrate against these anchors so the scale means the same thing on every run.
+
+ANCHORS (calibration — deduct only for what is actually wrong):
+- 9.0-10: professional, publishable quality. Every success criterion met with evidence, claims visibly grounded in the cited sources, uncertainties named, clean structure. A report that does its job well EARNS this band — it is not reserved for imaginary perfection.
+- 7.0-8.9: solid work with minor gaps — one criterion only partly answered, or evidence thin in a corner.
+- 4.0-6.9: material failures — a core criterion unmet, or claims regularly outrun their citations.
+- below 4: broken — wrong or fabricated claims, missing references, unreadable.
+Do NOT deduct for taste (a section being concise is fine when it fully answers its question), and do NOT invent criteria beyond the ones listed.
 
 Success criteria defined BEFORE the research (a great answer must pass these):
 ${crit}
@@ -457,12 +464,13 @@ ${report.slice(0, 16000)}
 ${report.length > 24000 ? "\n[…middle omitted…]\n" + report.slice(-8000) : ""}
 """
 
-Grade on four dimensions, each 0-10 with one decimal: evidence (are claims grounded in the cited sources?), coverage (do the success criteria get answered?), honesty (are uncertainties and disagreements acknowledged rather than papered over?), clarity (is it well-structured and readable?). Then say whether each success criterion is met. Respond with ONLY valid JSON (no fences), in ${language}:
+Grade on four dimensions, each 0-10 with one decimal: evidence (are claims grounded in the cited sources?), coverage (do the success criteria get answered?), honesty (are uncertainties and disagreements acknowledged rather than papered over?), clarity (is it well-structured and readable?). Then say whether each success criterion is met. Also give up to 3 precise search queries that would fix the single biggest weakness with NEW primary sources. Respond with ONLY valid JSON (no fences), in ${language}:
 {
   "overall": <0-10, one decimal>,
   "dims": [{"name": "evidence | coverage | honesty | clarity", "score": <0-10>, "note": "one short sentence"}],
   "criteria": [{"criterion": "<the criterion>", "met": true | false, "why": "one short sentence"}],
-  "biggestWeakness": "one sentence: the single biggest honest weakness of this report"
+  "biggestWeakness": "one sentence: the single biggest honest weakness of this report",
+  "repairQueries": ["up to 3 specific search queries that would fix the biggest weakness with new primary sources"]
 }`;
 }
 

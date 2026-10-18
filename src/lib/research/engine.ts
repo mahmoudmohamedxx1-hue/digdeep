@@ -110,6 +110,10 @@ type QualityScore = {
   dims: { name: string; score: number; note: string }[];
   criteria: { criterion: string; met: boolean; why: string }[];
   biggestWeakness: string;
+  /** v2.4.0: the grader names the queries that would fix the biggest weakness —
+   *  on time-capped serverless runs this replaces the separate gap-analysis call
+   *  (zero extra LLM round trips: the queries ride along with the grade). */
+  repairQueries?: string[];
 };
 
 function extractJsonArray(text: string): string[] | null {
@@ -138,6 +142,11 @@ class Ctx {
   byModel: Record<string, { calls: number; totalMs: number }> = {};
   seenUrls = new Set<string>();
   pref: ModelPref;
+  /** v2.4.0 serverless time-phasing: wall-clock instant after which NO new research
+   *  rounds or aspects may start — the write + grade + improve tail is reserved
+   *  (~190s) so a capped run still drafts, grades AND earns a better score instead
+   *  of dying at 95% with the report unwritten. Infinity off-serverless. */
+  researchCutoffAt = Number.POSITIVE_INFINITY;
   /** gpt-researcher-style expert persona — prepended to the system prompt after the role chooser runs */
   rolePrompt = "";
   /** dzhng-style dense learnings accumulated across all aspects */
@@ -283,7 +292,6 @@ class Ctx {
     const job = await db.researchJob.findUnique({ where: { id: this.jobId }, select: { cancelRequested: true } });
     return !job || job.cancelRequested;
   }
-
   /** llmLive — llm() with INSTANT visible thinking. The model's reasoning (and, with
    *  streamTo, the answer text itself) is streamed to the activity feed the moment each
    *  token is generated — a "Thinking — <label>" event appears the instant the call
@@ -800,10 +808,12 @@ export async function runJob(jobId: string) {
     // research until the clock runs out, then write the best report the
     // gathered evidence supports — and say so honestly in the event stream.
     const SERVERLESS = !!process.env.VERCEL;
-    // 200s engine budget + ~100s write reserve = fits the 300s Hobby function cap:
-    // the post-research tail (critique → section drafts → exec summary/conclusion →
-    // assembly) needs ~2 min of its own; a 240s budget left the writer starting with
-    // seconds to live and runs died at 95% with the report unwritten.
+    // v2.4.0 serverless time-phasing: the function is frozen by the platform at
+    // maxDuration (300s Hobby). The engine now RESERVES the tail explicitly:
+    //   hardStop 288s  (12s final-write margin)
+    //   research cutoff hardStop-195s  → parallel drafts (45s) + bundle (30s) +
+    //   assembly (5s) + grade (30s) + ONE earn-the-score round (72s) fit in the reserve
+    // so a capped run still drafts, grades AND improves instead of dying at 95%.
     const SERVERLESS_CAP_MS = Math.max(60_000, Number(process.env.DIGDEEP_SERVERLESS_BUDGET_MS) || 200_000);
     const rawBudgetMs = unlimited ? Infinity : Math.max(3, job.maxMinutes) * 60_000;
     const budgetMs = SERVERLESS ? Math.min(rawBudgetMs, SERVERLESS_CAP_MS) : rawBudgetMs;
@@ -817,14 +827,16 @@ export async function runJob(jobId: string) {
       anyUnlimited: unlimited,
       // the platform freezes the function at maxDuration (300s Hobby) — leave a
       // safety margin so the final report write always makes it to the database
-      ...(SERVERLESS ? { hardStopMs: 280_000 } : {}),
+      ...(SERVERLESS ? { hardStopMs: 288_000 } : {}),
     });
+    // v2.4.0: no new research rounds/aspects past this instant — the improve tail is sacred
+    if (SERVERLESS) ctx.researchCutoffAt = ctx.hardStop - 195_000;
 
     if (SERVERLESS && rawBudgetMs > SERVERLESS_CAP_MS) {
       await ctx.emit(
         "info",
-        `Serverless run — time budget capped at ~${Math.round(SERVERLESS_CAP_MS / 60_000)} min`,
-        "This deployment runs on serverless functions, which cap background compute at roughly five minutes per run. I will research within that window and then write the deepest report the gathered evidence supports — everything else (multi-engine search, citation audit, self-grading) runs unchanged. For full-length runs (30 min and up), self-host digdeep with `bun run dev`; the engine is identical, only the clock differs.",
+        `Serverless run — research capped at ~${Math.round((ctx.hardStop - ctx.researchCutoffAt) / 60_000)} min, then write + grade + improve`,
+        "This deployment runs on serverless functions, which cap background compute at roughly five minutes per run. I sized the phases so the report is drafted, graded AND one improvement round still fits the clock — multi-engine search, citation audit and self-grading all run unchanged. For full-length runs (30 min and up), self-host digdeep with `bun run dev`; the engine is identical, only the clock differs.",
         undefined,
         { serverless: true, budgetMs: SERVERLESS_CAP_MS }
       );
@@ -1145,7 +1157,7 @@ export async function runJob(jobId: string) {
     const spawnedCount = { n: 0 };
     const spawnCap = unlimited ? UNLIMITED_ASPECT_CAP : Math.min(job.breadth + 2, 14);
     const spawnDirection = async (from: { title: string }, dir: { title: string; question: string; why: string }) => {
-      if (spawnedCount.n >= spawnCap || ctx.outOfTime || ctx.sourceN >= srcCap) return false;
+      if (spawnedCount.n >= spawnCap || ctx.outOfTime || Date.now() > ctx.researchCutoffAt || ctx.sourceN >= srcCap) return false;
       const title = String(dir.title).trim().slice(0, 80);
       const question = String(dir.question).trim().slice(0, 400);
       if (!title || !question) return false;
@@ -1190,6 +1202,16 @@ export async function runJob(jobId: string) {
     const runNextAspect = async (): Promise<void> => {
       for (;;) {
         if (stopAll) return;
+        // v2.4.0: the serverless research window closed — the write/grade/improve
+        // tail is reserved; aspects not yet started are skipped (same honesty as
+        // the outOfTime skip below, but driven by the phase plan, not the budget)
+        if (Date.now() > ctx.researchCutoffAt) {
+          if (!timeSkipAnnounced) {
+            timeSkipAnnounced = true;
+            await ctx.emit("info", "Research window closed — moving to writing, grading and improvement", "The serverless clock reserves the tail of the run for drafting, self-grading and one improvement round; aspects not yet started are skipped, and the report is written from the evidence already gathered.");
+          }
+          return;
+        }
         if (await ctx.isCancelled()) {
           stopAll = true;
           return;
@@ -1222,6 +1244,9 @@ export async function runJob(jobId: string) {
       for (let round = 1; round <= maxRounds; round++) {
         if (await ctx.isCancelled()) throw new Cancelled();
         if (ctx.outOfTime) break;
+        // v2.4.0: past the serverless research cutoff, finish the current round's
+        // synthesis but never START another — the improve tail must fit the clock
+        if (round > 1 && Date.now() > ctx.researchCutoffAt) break;
         roundsDone = round;
         // dzhng breadth decay: each follow-up round goes narrower but deeper
         const roundReadCap = Math.max(2, Math.ceil(thisReadCap / round));
@@ -2076,45 +2101,63 @@ export async function runJob(jobId: string) {
       return notes.length ? notes.join("\n") : "";
     };
 
-    let idx = 0;
-    const draftsArr: string[] = [];
-    for (const sec of finalSections) {
-      if (await ctx.isCancelled()) throw new Cancelled();
-      idx++;
-      if (!sec.findings) {
-        await ctx.emit("info", `No evidence gathered for “${sec.title}” — writing what is reliably known, marked as general context`);
-      }
-      await updateJob(jobId, { stage: `Writing section ${idx}/${finalSections.length}: ${sec.title}`, progress: Math.round(80 + (idx / finalSections.length) * 14) });
-      const srcs = sourcesUsed.slice(0, 60);
-      let draftText = "";
-      let draftModel: string | undefined;
-      if (ctx.hardLeft < 20_000) {
-        // the function is seconds from freezing — publish the verified research notes
-        // directly instead of gambling them on one more LLM round trip
-        await ctx.emit("info", `Clock nearly out — publishing the verified research notes for “${sec.title}” directly`, "The findings were already synthesized from the sources read; only the prose rewrite is skipped.");
-        draftText = sec.findings || "_Insufficient evidence was gathered for this section._";
-      } else {
-      try {
-        // the section streams into the UI as it is written — the user literally watches
-        // the report being typed, one section at a time. Bounded by the hard clock: a
-        // stalled draft falls back to findings instead of freezing the whole report.
-        const draftRes = await ctx.llmLive(
-          [{ role: "user", content: draftSectionPrompt(job.query, sec.title, sec.question, sec.findings ?? "(no findings — rely on general knowledge and clearly mark it as background)", srcs, words, job.language, evidenceNotesFor(sec.title), adversarialNotesFor(sec.title), ctx.allLearnings) }],
-          "draft",
-          `Writing: ${sec.title}`,
-          { streamTo: sec.id, fast: { timeoutMs: Math.min(60_000, Math.max(20_000, ctx.hardLeft - 15_000)) } }
-        );
-        draftText = draftRes.text;
-        draftModel = draftRes.model;
-      } catch (err) {
-        await ctx.emit("info", `Draft step failed for “${sec.title}” — using verified research notes directly`, err instanceof Error ? err.message.slice(0, 300) : undefined);
-        draftText = sec.findings || "_Insufficient evidence was gathered for this section._";
-      }
-      }
-      draftsArr.push(draftText);
-      await db.researchSection.update({ where: { id: sec.id }, data: { draftMd: draftText } });
-      sec.draftMd = draftText; // keep the in-memory row in sync — report assembly reads this array
-      await ctx.emit("draft", `Wrote: ${sec.title}`, `${draftText.split(/\s+/).length} words`, draftModel, { section: sec.title });
+    // v2.4.0 PARALLEL DRAFTS: sections are independent (findings + sources +
+    // learnings each) — drafting them one-at-a-time was the reason a 240s budget
+    // died at 95%: 3-4 sequential drafts × 30-60s each ate the whole tail. Now a
+    // bounded pool drafts them concurrently (serverless: pool 4 + 45s fast cap),
+    // so the whole phase costs ~one draft's latency. Each section still streams
+    // live into the UI, and every fallback (clock-out → findings, failure →
+    // findings) is per-section, exactly as before.
+    const draftsArr: string[] = new Array(finalSections.length).fill("");
+    {
+      const DRAFT_POOL = SERVERLESS ? Math.min(4, finalSections.length) : Math.min(3, finalSections.length);
+      await updateJob(jobId, { stage: `Writing ${finalSections.length} sections in parallel`, progress: 80 });
+      const draftOne = async (sec: (typeof finalSections)[number], i: number) => {
+        if (await ctx.isCancelled()) throw new Cancelled();
+        if (!sec.findings) {
+          await ctx.emit("info", `No evidence gathered for “${sec.title}” — writing what is reliably known, marked as general context`);
+        }
+        const srcs = sourcesUsed.slice(0, 60);
+        let draftText = "";
+        let draftModel: string | undefined;
+        if (ctx.hardLeft < 20_000) {
+          // the function is seconds from freezing — publish the verified research notes
+          // directly instead of gambling them on one more LLM round trip
+          await ctx.emit("info", `Clock nearly out — publishing the verified research notes for “${sec.title}” directly`, "The findings were already synthesized from the sources read; only the prose rewrite is skipped.");
+          draftText = sec.findings || "_Insufficient evidence was gathered for this section._";
+        } else {
+          try {
+            // the section streams into the UI as it is written — the user literally watches
+            // the report being typed. Bounded by the hard clock: a stalled draft falls
+            // back to findings instead of freezing the whole report.
+            const draftRes = await ctx.llmLive(
+              [{ role: "user", content: draftSectionPrompt(job.query, sec.title, sec.question, sec.findings ?? "(no findings — rely on general knowledge and clearly mark it as background)", srcs, words, job.language, evidenceNotesFor(sec.title), adversarialNotesFor(sec.title), ctx.allLearnings) }],
+              "draft",
+              `Writing: ${sec.title}`,
+              { streamTo: sec.id, fast: { timeoutMs: SERVERLESS ? Math.min(45_000, Math.max(20_000, ctx.hardLeft - 15_000)) : Math.min(60_000, Math.max(20_000, ctx.hardLeft - 15_000)) } }
+            );
+            draftText = draftRes.text;
+            draftModel = draftRes.model;
+          } catch (err) {
+            await ctx.emit("info", `Draft step failed for “${sec.title}” — using verified research notes directly`, err instanceof Error ? err.message.slice(0, 300) : undefined);
+            draftText = sec.findings || "_Insufficient evidence was gathered for this section._";
+          }
+        }
+        draftsArr[i] = draftText;
+        await db.researchSection.update({ where: { id: sec.id }, data: { draftMd: draftText } });
+        sec.draftMd = draftText; // keep the in-memory row in sync — report assembly reads this array
+        await ctx.emit("draft", `Wrote: ${sec.title}`, `${draftText.split(/\s+/).length} words`, draftModel, { section: sec.title });
+        await updateJob(jobId, { progress: Math.round(80 + ((i + 1) / finalSections.length) * 14) }).catch(() => {});
+      };
+      const queue = finalSections.map((sec, i) => ({ sec, i }));
+      const workers = Array.from({ length: DRAFT_POOL }, async () => {
+        for (;;) {
+          const next = queue.shift();
+          if (!next) return;
+          await draftOne(next.sec, next.i);
+        }
+      });
+      await Promise.all(workers);
     }
 
     // ---------- STAGE 4.5: QUOTE-ANCHORED CITATION VERIFICATION (P0-4) ----------
@@ -2126,7 +2169,11 @@ export async function runJob(jobId: string) {
     const citeStats: { checked: number; repaired: number; dropped: number; integrity: number; reanchoredTo: number[]; droppedNs: number[]; flagged: number[] } = {
       checked: 0, repaired: 0, dropped: 0, integrity: 100 as number, reanchoredTo: [], droppedNs: [], flagged: [],
     };
-    if (ctx.sourceTexts.size > 0 && !ctx.outOfTime) {
+    // v2.4.0: the audit is now a WORKER in the parallel tail bundle (it only needs
+    // the drafts) — it runs CONCURRENTLY with exec-summary/conclusion/title/related
+    // instead of serially before them, saving its full latency on the serverless clock.
+    const auditWork = async (): Promise<void> => {
+    if (ctx.sourceTexts.size > 0 && (ctx.hardLeft >= 30_000 || !ctx.outOfTime)) {
       // the shared implementation (src/lib/claim-support.ts) — identical rules on
       // the server and in the client's "re-check this claim", by design
       const supportTokens = sharedSupportTokens;
@@ -2211,7 +2258,58 @@ export async function runJob(jobId: string) {
         );
       }
     }
+    };
 
+    // v2.4.0 PARALLEL TAIL BUNDLE: audit + exec summary + conclusion + title +
+    // related questions all run at once (each only needs the drafts). On the
+    // serverless clock this collapses ~2 min of serial LLM calls into one
+    // round-trip's worth of wall time. `drafts` is joined AFTER the bundle so
+    // the audit's repairs/drops are reflected in the assembly.
+    const draftsPre = draftsArr.join("\n\n");
+
+    // Court runs: the verdict IS the executive summary and the judge's instructions are
+    // the conclusion — no LLM calls needed for either (instant, honest, already graded).
+    const courtExecMd = court
+      ? [
+          `**VERDICT: ${court.verdict} — ${court.guilty} to ${court.notGuilty}${court.jurors.length ? ` (${court.jurors.length} jurors returned)` : " (jury unavailable)"}.** ${court.judgeSummary}`,
+          ...(court.chargesStuck.length ? [``, `**Charges that stuck:**`, ...court.chargesStuck.map((c) => `- ${c}`)] : []),
+          ...(court.defenseWins.length ? [``, `**What the defense established:**`, ...court.defenseWins.map((c) => `- ${c}`)] : []),
+          ...(court.conditions.length ? [``, `**What to change before trying again:**`, ...court.conditions.map((c) => `- ${c}`)] : []),
+        ].join("\n")
+      : "";
+    await updateJob(jobId, { stage: "Auditing citations & writing the summary", progress: 95 });
+    const [auditR, execR, concR, titleR, relatedR] = await Promise.allSettled([
+      // v2.4.0: the citation audit rides IN the bundle (it only needs the drafts)
+      auditWork(),
+      // bounded: on a capped serverless run the tail must not ride patient cooldown
+      // waits — a missed summary degrades honestly, a frozen function loses the report.
+      // Clamped to the hard clock so even a late-starting tail still persists.
+      court
+        ? Promise.resolve({ text: "", model: "", backendId: "court", latencyMs: 0 } as LlmResult)
+        : ctx.llm([{ role: "user", content: execSummaryPrompt(job.query, draftsPre, job.language, job.preset, ctx.allLearnings) }], "exec-summary", false, undefined, { timeoutMs: SERVERLESS ? Math.min(30_000, Math.max(15_000, ctx.hardLeft - 20_000)) : Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
+      court
+        ? Promise.resolve({ text: "", model: "", backendId: "court", latencyMs: 0 } as LlmResult)
+        : ctx.llm([{ role: "user", content: conclusionPrompt(job.query, draftsPre, job.language) }], "conclusion", false, undefined, { timeoutMs: SERVERLESS ? Math.min(30_000, Math.max(15_000, ctx.hardLeft - 20_000)) : Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
+      ctx.llm([{ role: "user", content: titlePrompt(job.query, plan.restate, job.language) }], "title", false, 60, { timeoutMs: SERVERLESS ? 15_000 : Math.min(60_000, Math.max(10_000, ctx.hardLeft - 20_000)) }),
+      ctx.llm([{ role: "user", content: relatedPrompt(job.query, finalSections.map((s) => s.title), job.language) }], "related", false, 300, { timeoutMs: SERVERLESS ? 15_000 : Math.min(60_000, Math.max(10_000, ctx.hardLeft - 20_000)) }),
+    ]);
+    if (auditR.status === "rejected") await ctx.emit("info", "Citation audit step failed — continuing with the drafts as written", String(auditR.reason ?? "").slice(0, 300));
+    let execText = court
+      ? courtExecMd
+      : execR.status === "fulfilled"
+        ? execR.value.text
+        : "*(Executive summary unavailable — LLM backends were exhausted; see section content below.)*";
+    let concText = court ? "" : concR.status === "fulfilled" ? concR.value.text : "";
+    const titleText = titleR.status === "fulfilled" ? titleR.value.text : job.query.slice(0, 80);
+    const relatedQuestions =
+      relatedR.status === "fulfilled" ? (extractJsonArray(relatedR.value.text) ?? fallbackRelated(job.query, finalSections.map((s) => s.question))) : fallbackRelated(job.query, finalSections.map((s) => s.question));
+    if (!court && execR.status === "rejected") await ctx.emit("info", "Executive summary step failed — continuing with sections", String(execR.reason ?? "").slice(0, 300));
+    if (!court && concR.status === "rejected") await ctx.emit("info", "Conclusion step failed — continuing without it", String(concR.reason ?? "").slice(0, 300));
+    await ctx.emit("draft", court ? "Verdict summary written (from the trial itself)" : "Executive summary written", execText.slice(0, 400), !court && execR.status === "fulfilled" ? execR.value.model : undefined);
+    if (!court && concText) await ctx.emit("draft", "Conclusion written", concText.slice(0, 400), concR.status === "fulfilled" ? concR.value.model : undefined);
+
+    // post-audit drafts — the audit (inside the bundle above) may have re-anchored
+    // or dropped citation markers; everything downstream sees the repaired text
     const drafts = draftsArr.join("\n\n");
 
     // ---------- STAGE 4.6: CLAIM-CHECK LEDGER (claim-level verification) ----------
@@ -2261,43 +2359,6 @@ export async function runJob(jobId: string) {
         }
       }
     }
-    await updateJob(jobId, { stage: "Writing executive summary & conclusion", progress: 95 });
-    // Court runs: the verdict IS the executive summary and the judge's instructions are
-    // the conclusion — no LLM calls needed for either (instant, honest, already graded).
-    const courtExecMd = court
-      ? [
-          `**VERDICT: ${court.verdict} — ${court.guilty} to ${court.notGuilty}${court.jurors.length ? ` (${court.jurors.length} jurors returned)` : " (jury unavailable)"}.** ${court.judgeSummary}`,
-          ...(court.chargesStuck.length ? [``, `**Charges that stuck:**`, ...court.chargesStuck.map((c) => `- ${c}`)] : []),
-          ...(court.defenseWins.length ? [``, `**What the defense established:**`, ...court.defenseWins.map((c) => `- ${c}`)] : []),
-          ...(court.conditions.length ? [``, `**What to change before trying again:**`, ...court.conditions.map((c) => `- ${c}`)] : []),
-        ].join("\n")
-      : "";
-    const [execR, concR, titleR, relatedR] = await Promise.allSettled([
-      // bounded: on a capped serverless run the tail must not ride patient cooldown
-      // waits — a missed summary degrades honestly, a frozen function loses the report.
-      // Clamped to the hard clock so even a late-starting tail still persists.
-      court
-        ? Promise.resolve({ text: "", model: "", backendId: "court", latencyMs: 0 } as LlmResult)
-        : ctx.llm([{ role: "user", content: execSummaryPrompt(job.query, drafts, job.language, job.preset, ctx.allLearnings) }], "exec-summary", false, undefined, { timeoutMs: Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
-      court
-        ? Promise.resolve({ text: "", model: "", backendId: "court", latencyMs: 0 } as LlmResult)
-        : ctx.llm([{ role: "user", content: conclusionPrompt(job.query, drafts, job.language) }], "conclusion", false, undefined, { timeoutMs: Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
-      ctx.llm([{ role: "user", content: titlePrompt(job.query, plan.restate, job.language) }], "title", false, 60, { timeoutMs: Math.min(60_000, Math.max(10_000, ctx.hardLeft - 20_000)) }),
-      ctx.llm([{ role: "user", content: relatedPrompt(job.query, finalSections.map((s) => s.title), job.language) }], "related", false, 300, { timeoutMs: Math.min(60_000, Math.max(10_000, ctx.hardLeft - 20_000)) }),
-    ]);
-    let execText = court
-      ? courtExecMd
-      : execR.status === "fulfilled"
-        ? execR.value.text
-        : "*(Executive summary unavailable — LLM backends were exhausted; see section content below.)*";
-    let concText = court ? "" : concR.status === "fulfilled" ? concR.value.text : "";
-    const titleText = titleR.status === "fulfilled" ? titleR.value.text : job.query.slice(0, 80);
-    const relatedQuestions =
-      relatedR.status === "fulfilled" ? (extractJsonArray(relatedR.value.text) ?? fallbackRelated(job.query, finalSections.map((s) => s.question))) : fallbackRelated(job.query, finalSections.map((s) => s.question));
-    if (!court && execR.status === "rejected") await ctx.emit("info", "Executive summary step failed — continuing with sections", String(execR.reason ?? "").slice(0, 300));
-    if (!court && concR.status === "rejected") await ctx.emit("info", "Conclusion step failed — continuing without it", String(concR.reason ?? "").slice(0, 300));
-    await ctx.emit("draft", court ? "Verdict summary written (from the trial itself)" : "Executive summary written", execText.slice(0, 400), !court && execR.status === "fulfilled" ? execR.value.model : undefined);
-    if (!court && concText) await ctx.emit("draft", "Conclusion written", concText.slice(0, 400), concR.status === "fulfilled" ? concR.value.model : undefined);
 
     // ---------- "WHERE SOURCES DISAGREE" — the honest-disagreement section ----------
     // (beyond Perplexity: contested and cross-check-refuted claims are surfaced in the
@@ -2483,7 +2544,10 @@ export async function runJob(jobId: string) {
     // digdeep grades its own report against the comprehension pass's success
     // criteria on four dimensions, and publishes the score — including bad ones.
     let quality: QualityScore | null = null;
-    if (!ctx.outOfTime && ctx.hardLeft >= 50_000) {
+    // v2.4.0: the gate is the platform clock, not the research budget — a report
+    // written from partial evidence on an expired budget still DESERVES an honest
+    // score (locally hardLeft is Infinity, so budget-exhausted runs now grade too).
+    if (ctx.hardLeft >= (SERVERLESS ? 40_000 : 50_000) || !ctx.outOfTime) {
     try {
       const scoreRes = await ctx.llmLive(
         [{ role: "user", content: qualityScorePrompt(job.query, comprehensionCriteria, reportMd, job.language) }],
@@ -2495,7 +2559,7 @@ export async function runJob(jobId: string) {
         // NOT fast/patient:false — the tail of a run is exactly when the free lanes
         // are hottest (429s); the grader must ride out the cooldown window instead
         // of dying and leaving the report unscored. maxWaitMs comes from the ride budget.
-        { wantThinking: false, maxTokens: 2000, fast: { timeoutMs: 60_000 } }
+        { wantThinking: false, maxTokens: 2000, fast: { timeoutMs: SERVERLESS ? 30_000 : 60_000 } }
       );
       const q = extractJson(scoreRes.text);
       if (q && typeof q.overall === "number") {
@@ -2512,6 +2576,7 @@ export async function runJob(jobId: string) {
             why: String(c?.why ?? "").slice(0, 160),
           })),
           biggestWeakness: String(q.biggestWeakness ?? "").slice(0, 300),
+          repairQueries: (Array.isArray(q.repairQueries) ? q.repairQueries : []).map((x: unknown) => String(x).slice(0, 160)).filter((x: string) => x.length > 3).slice(0, 3),
         };
         await ctx.emit(
           "score",
@@ -2533,9 +2598,17 @@ export async function runJob(jobId: string) {
     // rounds or the clock run out first, the honest number is published with
     // the reason. (Court runs skip this — the verdict is the deliverable.)
     const QUALITY_TARGET = 9;
-    const QUALITY_MAX_ROUNDS = 3;
+    // v2.4.0: serverless runs get ONE lean round (grader-provided queries, parallel
+    // searches, parallel rewrites) — sized to fit the reserved tail. Local runs keep 3.
+    const QUALITY_MAX_ROUNDS = SERVERLESS ? 1 : 3;
+    /** v2.4.0: the improvement loop's clock gate — the platform hard stop on
+     *  serverless (65s buys search + read + rewrite + re-grade), the budget
+     *  locally (stop 2 min past a budgeted deadline; unlimited runs ride free). */
+    const canImprove = () =>
+      ctx.hardLeft >= (SERVERLESS ? 65_000 : 200_000) &&
+      !(ctx.hasTimeBudget && ctx.timeLeft < -120_000);
     let qualityRounds = 0;
-    if (quality && quality.overall < QUALITY_TARGET && !court && !ctx.outOfTime) {
+    if (quality && quality.overall < QUALITY_TARGET && !court && canImprove()) {
       // `current` is the loop's non-null view of the score — TS can't keep the
       // narrowing across loop back-edges once `quality` is reassigned inside.
       let current = quality;
@@ -2543,8 +2616,7 @@ export async function runJob(jobId: string) {
       while (
         current.overall < QUALITY_TARGET &&
         qualityRounds < QUALITY_MAX_ROUNDS &&
-        !ctx.outOfTime &&
-        ctx.hardLeft >= 200_000 &&
+        canImprove() &&
         !(await ctx.isCancelled())
       ) {
         qualityRounds++;
@@ -2557,18 +2629,34 @@ export async function runJob(jobId: string) {
           { round: qualityRounds, before: scoreBefore, target: QUALITY_TARGET },
         );
 
-        // (a) gap analysis → repair plan (which sections, what evidence, which queries)
+        // (a) gap analysis → repair plan (which sections, what evidence, which queries).
+        // v2.4.0 serverless fast path: the grader already named the repair queries
+        // (repairQueries ride along with the grade at zero extra cost) — skip the
+        // separate gap-analysis LLM call and aim them at the weakest section.
+        let gaps: { title: string; need: string; queries: string[] }[];
+        if (SERVERLESS && (current.repairQueries?.length ?? 0) > 0) {
+          // weakest section = lowest-scoring dimension maps to the section whose
+          // question is closest to the unmet criteria; fall back to the first section
+          const unmet = current.criteria.filter((c) => !c.met).map((c) => c.criterion).join("; ");
+          const weakDim = [...current.dims].sort((a, b) => a.score - b.score)[0];
+          const target =
+            finalSections.find((s) => unmet && unmet.toLowerCase().split(/\s+/).filter((w) => w.length > 4).some((w) => `${s.title} ${s.question}`.toLowerCase().includes(w))) ??
+            finalSections[0];
+          gaps = target
+            ? [{ title: target.title, need: current.biggestWeakness || `${weakDim?.name ?? "coverage"}: ${weakDim?.note ?? ""}`, queries: (current.repairQueries ?? []).slice(0, 2) }]
+            : [];
+        } else {
         let repairPlan: { sections?: { title?: unknown; need?: unknown; queries?: unknown }[] } | null = null;
         try {
           const gaRes = await ctx.llmLive(
             [{ role: "user", content: gapAnalysisPrompt(job.query, current, reportMd, finalSections.map((s) => ({ title: s.title, question: s.question })), job.language) }],
             "gap-analysis",
             "Analyzing what the report is missing",
-            { wantThinking: false, maxTokens: 800, fast: { timeoutMs: 45_000 } }
+            { wantThinking: false, maxTokens: 800, fast: { timeoutMs: SERVERLESS ? 25_000 : 45_000 } }
           );
           repairPlan = extractJson(gaRes.text);
         } catch { repairPlan = null; }
-        const gaps = (Array.isArray(repairPlan?.sections) ? repairPlan.sections : [])
+        gaps = (Array.isArray(repairPlan?.sections) ? repairPlan.sections : [])
           .map((g) => ({
             title: String(g?.title ?? "").trim(),
             need: String(g?.need ?? "").slice(0, 300),
@@ -2576,6 +2664,7 @@ export async function runJob(jobId: string) {
           }))
           .filter((g) => g.title && g.queries.length > 0)
           .slice(0, 3);
+        }
         if (gaps.length === 0) {
           await ctx.emit("info", "Gap analysis produced no actionable gaps this round — keeping the current report", undefined, undefined, "verbose");
           break;
@@ -2588,6 +2677,16 @@ export async function runJob(jobId: string) {
           const sec = finalSections.find((s) => s.title.toLowerCase().includes(g.title.toLowerCase()) || g.title.toLowerCase().includes(s.title.toLowerCase()));
           if (!sec) continue; // gap title didn't match a real section — skip rather than research blind
           const searchResults: SearchResult[] = [];
+          if (SERVERLESS) {
+            // v2.4.0: parallel gap searches, no politeness sleeps — the reserved tail
+            // is measured in seconds and every sleep is a rewrite that never happens
+            const rsAll = await Promise.allSettled(g.queries.map(async (q) => {
+              const rs = await searchAll(q, { academic: false });
+              await ctx.emit("search", `Searching: “${q}”`, `${rs.length} results — gap round ${qualityRounds}`, undefined, { query: q, count: rs.length, engines: [...new Set(rs.map((r) => r.engine))] });
+              return rs;
+            }));
+            for (const r of rsAll) if (r.status === "fulfilled") searchResults.push(...r.value);
+          } else {
           for (const q of g.queries) {
             try {
               const rs = await searchAll(q, { academic: false });
@@ -2596,14 +2695,16 @@ export async function runJob(jobId: string) {
               await sleep(300 + Math.random() * 400);
             } catch { /* one dead engine must not kill the round */ }
           }
+          }
           let fresh = searchResults
             .filter((r) => r.url && !ctx.seenUrls.has(r.url) && !r.domain.includes("duckduckgo.com"))
             .filter((r, i, arr) => arr.findIndex((x) => x.url === r.url) === i);
           fresh = gateByRelevance(sec.question, g.queries.join(" "), fresh).kept;
           const picked: SearchResult[] = [];
           const domainCount: Record<string, number> = {};
+          const pickCap = SERVERLESS ? 2 : 4;
           for (const r of fresh) {
-            if (picked.length >= 4) break;
+            if (picked.length >= pickCap) break;
             if (ctx.seenUrls.has(r.url)) continue; // re-check at pick time
             const dc = domainCount[r.domain] ?? 0;
             if (dc >= 2) continue;
@@ -2632,6 +2733,9 @@ export async function runJob(jobId: string) {
         }
         if (newSources === 0) {
           await ctx.emit("info", "Gap searches found no new readable sources this round", "The engines may be rate-limited — keeping the current report rather than padding it.", undefined, undefined, "verbose");
+          // v2.4.0: without fresh evidence the rewrite is theater — stop now instead
+          // of burning the reserved tail on a re-grade of unchanged text
+          break;
         }
 
         // (c) rewrite the gap sections — deeper each round, and the writer gets the
@@ -2643,15 +2747,17 @@ export async function runJob(jobId: string) {
           ...current.criteria.filter((c) => !c.met).map((c) => `UNMET CRITERION: ${c.criterion} — ${c.why}`),
         ].slice(0, 6);
         const scale = Math.pow(1.35, qualityRounds - 1);
-        const wordsR: [number, number] = [Math.min(900, Math.round(words[0] * scale + 40)), Math.min(1100, Math.round(words[1] * scale + 60))];
+        const wordsR: [number, number] = SERVERLESS
+          ? [Math.min(650, Math.round(words[0] * scale + 40)), Math.min(800, Math.round(words[1] * scale + 60))]
+          : [Math.min(900, Math.round(words[0] * scale + 40)), Math.min(1100, Math.round(words[1] * scale + 60))];
         // snapshot for regression protection: if this round's rewrites make the score
         // WORSE, the previous (better-scoring) drafts are restored — the published
         // artifact is always the one the same rubric scored highest.
         const preRound = new Map(finalSections.map((s) => [s.id, s.draftMd || ""]));
         let rewritten = 0;
-        for (const [title, found] of roundFindings) {
+        const rewriteOne = async (title: string, found: string[]) => {
           const sec = finalSections.find((s) => s.title === title);
-          if (!sec) continue;
+          if (!sec) return;
           const augmented = `${sec.findings ?? "(no prior findings)"}
 
 ADDITIONAL FINDINGS (gap round ${qualityRounds} — fresh reads; cite them [n]):
@@ -2664,7 +2770,7 @@ ${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
               [{ role: "user", content: draftSectionPrompt(job.query, sec.title, sec.question, augmented, sourcesUsed.slice(0, 80), wordsR, job.language, evidenceNotesFor(sec.title), adversarialNotesFor(sec.title), ctx.allLearnings) }],
               "draft",
               `Rewriting with new evidence: ${sec.title}`,
-              { streamTo: sec.id, wantThinking: false, maxTokens: 2500, fast: { timeoutMs: Math.min(90_000, Math.max(20_000, ctx.hardLeft - 30_000)) } }
+              { streamTo: sec.id, wantThinking: false, maxTokens: 2500, fast: { timeoutMs: SERVERLESS ? 25_000 : Math.min(90_000, Math.max(20_000, ctx.hardLeft - 30_000)) } }
             );
             if (rwRes.text && rwRes.text.split(/\s+/).length > 60) {
               sec.draftMd = rwRes.text;
@@ -2673,7 +2779,9 @@ ${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
               rewritten++;
             }
           } catch { /* keep the previous draft — never lose a working section */ }
-        }
+        };
+        // v2.4.0: rewrites run in PARALLEL (independent sections, independent streams)
+        await Promise.all([...roundFindings].map(([title, found]) => rewriteOne(title, found)));
         // no rewrite ⇒ the report did not change ⇒ re-grading it would be theater
         if (rewritten === 0) {
           await ctx.emit("info", "No section could be rewritten this round — stopping the quality loop honestly", undefined, undefined, "verbose");
@@ -2757,12 +2865,17 @@ ${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
           }
           refs = refList.map((s, i) => `${i + 1}. ${s.title} — *${s.domain}* — ${s.url}`).join("\n");
           const drafts2 = draftsArr.join("\n\n");
+          // v2.4.0: on the serverless clock the rebuild SKIPS exec/conclusion
+          // regeneration (30s+ each and the re-grade would never fit) — the existing
+          // summary stands; only the rewritten sections and references change.
+          if (!SERVERLESS) {
           const [exec2, conc2] = await Promise.allSettled([
             ctx.llm([{ role: "user", content: execSummaryPrompt(job.query, drafts2, job.language, job.preset, ctx.allLearnings) }], "exec-summary", false, undefined, { timeoutMs: Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
             ctx.llm([{ role: "user", content: conclusionPrompt(job.query, drafts2, job.language) }], "conclusion", false, undefined, { timeoutMs: Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
           ]);
           if (exec2.status === "fulfilled" && exec2.value.text.trim()) execText = exec2.value.text;
           if (conc2.status === "fulfilled" && conc2.value.text.trim()) concText = conc2.value.text;
+          }
           const body2 = finalSections
             .map((s, i) => `## ${i + 1}. ${s.title}\n\n${(s.draftMd || "").replace(/\[(\d+)\]/g, (_, d) => `[${remap2[Number(d)] ?? d}]`)}`)
             .join("\n\n");
@@ -2796,7 +2909,7 @@ ${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
             [{ role: "user", content: qualityScorePrompt(job.query, comprehensionCriteria, reportMd, job.language) }],
             "score",
             `Re-grading after round ${qualityRounds}`,
-            { wantThinking: false, maxTokens: 2000, fast: { timeoutMs: 60_000 } }
+            { wantThinking: false, maxTokens: 2000, fast: { timeoutMs: SERVERLESS ? 30_000 : 60_000 } }
           );
           const q2 = extractJson(scoreRes2.text);
           if (q2 && typeof q2.overall === "number") {
@@ -2813,6 +2926,7 @@ ${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
                 why: String(c?.why ?? "").slice(0, 160),
               })),
               biggestWeakness: String(q2.biggestWeakness ?? "").slice(0, 300),
+              repairQueries: (Array.isArray(q2.repairQueries) ? q2.repairQueries : []).map((x: unknown) => String(x).slice(0, 160)).filter((x: string) => x.length > 3).slice(0, 3),
             };
           }
         } catch { regraded = null; }
