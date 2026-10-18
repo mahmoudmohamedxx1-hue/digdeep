@@ -22,6 +22,7 @@ import {
   comprehensionPrompt,
   planPrompt,
   summarizePrompt,
+  summarizeReflectPrompt,
   reflectPrompt,
   critiquePrompt,
   curateSourcesPrompt,
@@ -1724,16 +1725,39 @@ export async function runJob(jobId: string) {
           }
         }
         const srcForSum = contents.length > 0 ? contents : snippetSrcs;
+        // ── 2d + 2e MERGED (v2.5.5, dzhng pattern): ONE call per round produces the
+        // [n]-cited notes AND the self-critique (sufficiency, learnings,
+        // contradictions, follow-ups, spawns). Halves the research-phase LLM usage
+        // under the throttled keyless pool — the 29-min/5-slice run died of exactly
+        // that. The reflect post-processing below consumes the merged JSON.
         let roundNotes = "";
+        let refl: ReturnType<typeof extractJson> = null;
+        let reflModel: string | undefined;
         if (srcForSum.length > 0) {
           try {
-            // v2.5.1: PATIENT ride on serverless too — continuation gives each slice a
-            // real clock, so the synthesis step can wait out a 60-90s LLM cooldown
-            // window instead of falling to raw excerpts (which halve the report's
-            // evidence quality). Bounded by maxWaitMs; the hard stop clamps it further.
-            const sumRes = await ctx.llm([{ role: "user", content: summarizePrompt(sec.title, sec.question, srcForSum, round) }], "summarize", false, undefined, SERVERLESS ? { timeoutMs: 30_000, maxWaitMs: 100_000 } : undefined);
-            roundNotes = sumRes.text;
-            await ctx.emit("summary", `Synthesized findings on “${sec.title}”`, roundNotes.slice(0, 2400), sumRes.model, { section: sec.title, round, sources: srcForSum.length });
+            const roundsLeft = ctx.unlimitedRounds ? "unlimited" : Math.max(0, job.depth - round);
+            const linkCandidates = roundLinks
+              .filter((l) => !ctx.seenUrls.has(l.url))
+              .filter((l, i, arr) => arr.findIndex((x) => x.url === l.url) === i)
+              .slice(0, 10);
+            // v2.4.8 preserved: deep past the serverless cutoff the round-2 outputs
+            // (followUps/spawns) can never run — tell the model there are no rounds
+            // left so it weighs sufficiency honestly and stops planning dead work
+            const deepPastCutoff = Date.now() > ctx.researchCutoffAt + 25_000;
+            // v2.5.1: patient ride — a throttled window must not halve the round
+            const mRes = await ctx.llm(
+              [{ role: "user", content: summarizeReflectPrompt(sec.title, sec.question, srcForSum, round, notes, deepPastCutoff ? 0 : roundsLeft, linkCandidates, ctx.allLearnings, canSpawnThis) }],
+              "summarize+reflect", false, undefined, SERVERLESS ? { timeoutMs: 40_000, maxWaitMs: 110_000 } : { timeoutMs: 90_000 }
+            );
+            const parsed = extractJson(mRes.text);
+            if (parsed && typeof parsed.notes === "string" && parsed.notes.trim()) {
+              roundNotes = parsed.notes;
+              refl = parsed;
+              reflModel = mRes.model;
+            } else {
+              roundNotes = mRes.text; // sloppy format — the whole text is the notes
+            }
+            await ctx.emit("summary", `Synthesized findings on “${sec.title}”`, roundNotes.slice(0, 2400), mRes.model, { section: sec.title, round, sources: srcForSum.length });
           } catch (sumErr) {
             // graceful degradation: keep the raw excerpts as notes rather than killing the run
             // v2.5.1: the raw fallback keeps [n] markers so even a throttled run's
@@ -1784,29 +1808,14 @@ export async function runJob(jobId: string) {
           await ctx.emit("info", `Sources for “${sec.title}” came back off-topic this round — discarded, not folded into findings`, roundNotes.slice(0, 200));
         }
 
-        // 2e. SELF-CRITIQUE v2 — dual critic: is it sufficient? what is now solidly known? where to go next (search or walk)?
-        const roundsLeft = ctx.unlimitedRounds ? "unlimited" : Math.max(0, job.depth - round);
-          const canReflect = (ctx.unlimitedRounds || (job.depth - round) > 0) && !!notes && !ctx.outOfTime
-            // v2.4.8: deep past the serverless cutoff, the reflection's outputs (round-2
-            // queries, walks, spawns) can never be used — single-round serverless runs
-            // skip it and save its full latency for the grade + improve tail
-            && !(Date.now() > ctx.researchCutoffAt + 25_000);
-        if (canReflect && notes && !ctx.outOfTime) {
-          try {
-          // WebWalker: offer harvested links as walk candidates
-          const linkCandidates = roundLinks
-            .filter((l) => !ctx.seenUrls.has(l.url))
-            .filter((l, i, arr) => arr.findIndex((x) => x.url === l.url) === i)
-            .slice(0, 10);
-          const reflRes = await ctx.llmLive(
-            [{ role: "user", content: reflectPrompt(sec.title, sec.question, notes, roundsLeft, linkCandidates, ctx.allLearnings, canSpawnThis) }],
-            "reflect",
-            `Self-reviewing: ${sec.title}`,
-            // v2.5.1: patient ride — the reflection decides the NEXT round's queries;
-            // losing it to a momentary throttle window costs a whole round of depth
-            SERVERLESS ? { wantThinking: true, fast: { timeoutMs: 30_000, maxWaitMs: 100_000 } } : { wantThinking: true }
-          );
-          const refl = extractJson(reflRes.text);
+        // 2e. SELF-CRITIQUE POST-PROCESSING (v2.5.5): the merged call above already
+        // produced the reflection JSON — no second LLM round-trip. Zero rounds left
+        // or deep-past-cutoff means the follow-ups can never run; only the learnings
+        // and the sufficiency verdict are consumed.
+        const roundsLeft2: number | "unlimited" = ctx.unlimitedRounds ? "unlimited" : Math.max(0, job.depth - round);
+        const canUseFollowUps = (ctx.unlimitedRounds || (typeof roundsLeft2 === "number" && roundsLeft2 > 0)) && !ctx.outOfTime && !(Date.now() > ctx.researchCutoffAt + 25_000);
+        if (refl && notes && !ctx.outOfTime) {
+          {
           // dzhng: dense learnings with entities/numbers/dates accumulate across aspects.
           // reflect v3: learnings arrive as {claim, grade, basis} — evidence-graded claims;
           // plain strings (older/sloppier models) degrade to grade "likely".
@@ -1831,7 +1840,7 @@ export async function runJob(jobId: string) {
           if (learnings.length > 0) {
             ctx.allLearnings.push(...learnings);
             const gradeNote = [verifiedN && `${verifiedN} verified`, likelyN && `${likelyN} likely`, weakN && `${weakN} single-source/contested`].filter(Boolean).join(", ");
-            await ctx.emit("learning", `Nailed down ${learnings.length} finding${learnings.length > 1 ? "s" : ""} — ${gradeNote}`, learnings.map((l: string) => `• ${l}`).join("\n"), reflRes.model, { learnings, section: sec.title, round, grades: { verified: verifiedN, likely: likelyN, weak: weakN } });
+            await ctx.emit("learning", `Nailed down ${learnings.length} finding${learnings.length > 1 ? "s" : ""} — ${gradeNote}`, learnings.map((l: string) => `• ${l}`).join("\n"), reflModel, { learnings, section: sec.title, round, grades: { verified: verifiedN, likely: likelyN, weak: weakN } });
           }
           // reflect v3: contradictions between sources — surfaced, not averaged away
           const newContras = (Array.isArray(refl?.contradictions) ? refl.contradictions : [])
@@ -1840,11 +1849,11 @@ export async function runJob(jobId: string) {
           for (const c of newContras) {
             if (ctx.contradictions.some((x) => x.claim === c.claim)) continue;
             ctx.contradictions.push(c);
-            await ctx.emit("contradiction", `Sources disagree: ${c.claim.slice(0, 80)}`, c.positions, reflRes.model, { ...c });
+            await ctx.emit("contradiction", `Sources disagree: ${c.claim.slice(0, 80)}`, c.positions, reflModel, { ...c });
           }
-          const followUps = (Array.isArray(refl?.followUps) ? refl.followUps : []) as { type?: string; value?: string; reason?: string }[];
+          const followUps = canUseFollowUps ? ((Array.isArray(refl?.followUps) ? refl.followUps : []) as { type?: string; value?: string; reason?: string }[]) : [];
           // dzhng recursion: an unexpected DISTINCT research thread becomes its own aspect
-          if (canSpawnThis && Array.isArray(refl?.newDirections)) {
+          if (canSpawnThis && canUseFollowUps && Array.isArray(refl?.newDirections)) {
             const dir = (refl.newDirections as { title?: unknown; question?: unknown; why?: unknown }[])
               .filter((d) => typeof d?.title === "string" && typeof d?.question === "string" && String(d.title).trim().length > 3)
               .map((d) => ({ title: String(d.title), question: String(d.question), why: String(d.why ?? "") }))
@@ -1868,7 +1877,7 @@ export async function runJob(jobId: string) {
             "selfcheck",
             ok ? `Self-review: “${sec.title}” coverage is sufficient` : `Self-critique: “${sec.title}” still has gaps — going deeper`,
             refl?.assessment || "",
-            reflRes.model,
+            reflModel,
             { sufficient: ok, followUps: chipList, section: sec.title, round, learnings: learnings.length }
           );
           if (ok) break;
@@ -1878,11 +1887,6 @@ export async function runJob(jobId: string) {
           }
           if (searchFollowUps.length > 0) queries = searchFollowUps;
           if (searchFollowUps.length === 0 && pendingWalks.length === 0) break; // nothing actionable left
-          } catch (reflErr) {
-            // graceful degradation: without a reflection model there is no basis for more rounds —
-            // keep the evidence gathered and move on instead of dying
-            await ctx.emit("info", `Self-review model unavailable for “${sec.title}” — stopping this aspect after round ${round}`, reflErr instanceof Error ? reflErr.message.slice(0, 200) : undefined);
-            break;
           }
         } else if (round >= maxRounds && !ctx.unlimitedRounds) {
           break;
@@ -3072,6 +3076,9 @@ export async function runJob(jobId: string) {
         break;
       }
     } catch {
+      // v2.5.5: a silent unscored completion hides the one thing the user most
+      // needs to know — say it plainly (the done event already notes "unscored")
+      await ctx.emit("info", "The self-score could not run — the free LLM lanes were exhausted at grading time", "The report below is complete and its citations are audited, but it carries no self-score. Re-running when the free models are less throttled, or adding a free LLM7 key in Settings (much higher personal quota), lets the grader — and the improvement rounds — run.", undefined, undefined, "normal").catch(() => {});
       if (attempt === gradeAttempts[gradeAttempts.length - 1]) break; // the last attempt failed — publish unscored, honestly
       if (ctx.hardLeft < 55_000) break; // no room for the patient ride
       await ctx.emit("info", "Grade pass was throttled — riding the cooldown window to still score the report", "The free lanes just hit a 429 window. The grader waits it out (bounded by the function clock) instead of publishing an unscored report.", undefined, undefined, "verbose");

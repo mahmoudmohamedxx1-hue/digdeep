@@ -226,6 +226,65 @@ Rules:
 - The final report will be written in ${language}.`;
 }
 
+/** v2.5.5: MERGED summarize + reflect (dzhng pattern) — one call per round does
+ *  both: dense [n]-cited notes AND the self-critique that decides what next.
+ *  Halves the research-phase LLM usage under a throttled keyless pool without
+ *  losing a single output (the JSON carries everything both calls produced). */
+export function summarizeReflectPrompt(
+  section: string,
+  question: string,
+  sources: { n: number; title: string; domain: string; excerpt: string }[],
+  round: number,
+  priorNotes: string,
+  depthLeft: number | "unlimited",
+  linkCandidates?: { url: string; text: string }[],
+  priorLearnings?: string[],
+  canSpawn?: boolean
+): string {
+  const src = sources.map((s) => `[${s.n}] ${s.title} (${s.domain})\n${s.excerpt}`).join("\n\n---\n\n");
+  const budget =
+    depthLeft === "unlimited"
+      ? "Research rounds are UNLIMITED — continue for as long as real gaps remain."
+      : `There ${depthLeft > 0 ? `are ${depthLeft} more research round(s) available` : "are no more research rounds available"}.`;
+  const links = (linkCandidates ?? []).length
+    ? `\nLink candidates harvested from pages just read (you may WALK one of these — visit it directly — if it clearly answers the remaining gap better than a new search would):\n${(linkCandidates ?? []).slice(0, 10).map((l, i) => `${i + 1}. ${l.text} — ${l.url}`).join("\n")}\n`
+    : "";
+  const learned = (priorLearnings ?? []).length
+    ? `\nDense learnings captured so far in OTHER aspects of this same report (do not re-research these):\n${(priorLearnings ?? []).slice(0, 10).map((l) => `- ${l}`).join("\n")}\n`
+    : "";
+  return `You are managing one round of iterative research for aspect "${section}" (question: "${question}") — round ${round}.
+
+SOURCE EXCERPTS RETRIEVED THIS ROUND:
+
+${src}
+
+${priorNotes.trim() ? `PREVIOUS ROUNDS' ACCUMULATED NOTES:\n"""\n${priorNotes.slice(0, 4000)}\n"""\n` : ""}${learned}${links}
+${budget}
+
+TWO JOBS IN ONE RESPONSE — summarize the new evidence, then self-critique it honestly.
+
+Respond with ONLY valid JSON (no fences) with this exact shape:
+{
+  "notes": "dense research notes from THIS ROUND's sources as markdown bullets grouped by theme — every factual claim ends with its citation like [2] or [1][5]; capture specific numbers, dates, names, methods, and direct insights, not vague generalities; note disagreements between sources. FIRST, judge relevance: if most excerpts are about a DIFFERENT topic than the question, make this the exact marker line 'OFF-TOPIC SOURCES' followed by one sentence on what the sources actually discuss, then stop the notes there. Write the notes in English (internal working notes).",
+  "sufficient": true/false,
+  "assessment": "1-3 sentences of brutally honest self-assessment: is the evidence strong, specific, and comprehensive? Name what is weakest.",
+  "learnings": [
+    {"claim": "one dense fact nailed down this round — exact entities, numbers, dates, versions, names", "grade": "verified | likely | single-source | contested", "basis": "short: which sources (numbers) and why this grade"}
+  ],
+  "contradictions": [
+    {"claim": "the point of disagreement", "positions": "source [n] says X, while source [m] says Y — one sentence each"}
+  ],
+  "followUps": [
+    {"type": "search", "value": "a new web search query naming concrete entities (products, standards, companies, numbers)", "reason": "which gap this targets"},
+    {"type": "walk", "value": "one of the candidate URLs (or a URL seen in the notes) worth visiting directly", "reason": "why visiting this page beats another search"}
+  ],${canSpawn ? `
+  "newDirections": [
+    {"title": "short aspect name (2-5 words)", "question": "the research question this NEW aspect should answer", "why": "one sentence: what this round uncovered that is bigger than a follow-up query — a distinct thread worth its own searches"}
+  ],` : ""}
+  "gaps": "comma-separated list of things still unknown or thinly covered"
+}`;
+}
+
 export function summarizePrompt(section: string, question: string, sources: { n: number; title: string; domain: string; excerpt: string }[], round: number): string {
   const src = sources.map((s) => `[${s.n}] ${s.title} (${s.domain})\n${s.excerpt}`).join("\n\n---\n\n");
   return `Research question: "${question}" (aspect: "${section}") — round ${round} of iterative research.
