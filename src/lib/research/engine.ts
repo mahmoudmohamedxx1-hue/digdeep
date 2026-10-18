@@ -258,9 +258,25 @@ class Ctx {
       this.lastLeaseRenew = Date.now();
       await renewLease(this.jobId).catch(() => {});
     }
-    await db.activityEvent.create({
-      data: { jobId: this.jobId, seq: this.seq++, type, title, detail: detail?.slice(0, 8000), model, meta: meta ? JSON.stringify(meta) : undefined, level },
-    });
+    // v2.5.0: seq is normally monotonic per job, but a lease-expiry race can let a
+    // stale engine and a fresh one emit in overlapping windows — on a unique
+    // constraint hit, re-derive the sequence from the DB and retry instead of
+    // dying (the event log must never kill a 90%-done run).
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        await db.activityEvent.create({
+          data: { jobId: this.jobId, seq: this.seq++, type, title, detail: detail?.slice(0, 8000), model, meta: meta ? JSON.stringify(meta) : undefined, level },
+        });
+        return;
+      } catch (e) {
+        if (String(e).includes("Unique constraint") && attempt < 3) {
+          const m = await db.activityEvent.aggregate({ where: { jobId: this.jobId }, _max: { seq: true } }).catch(() => null);
+          this.seq = Math.max(this.seq, (m?._max?.seq ?? 0) + 1);
+          continue;
+        }
+        throw e;
+      }
+    }
   }
 
   async llm(
@@ -843,6 +859,7 @@ export async function runJob(jobId: string) {
   if (engineAlive(jobId)) return; // live engine on THIS instance — never double-run
   activeJobs.set(jobId, Date.now());
   let leaseHeld = false;
+  let heart: ReturnType<typeof setInterval> | null = null; // v2.5.0 interval heartbeat
   try {
     const job = await db.researchJob.findUnique({ where: { id: jobId } });
     if (!job) return;
@@ -909,6 +926,7 @@ export async function runJob(jobId: string) {
     let durationMs = 0;
     let spawnedCount = { n: 0 };
     let courtProgress: EngineCheckpoint["courtProgress"];
+    let court: CourtVerdict | null = null; // hoisted v2.5.0: restored from the checkpoint on resume
     let auditDone = false;
     let bundleDoneState = false; // v2.5.0: the tail bundle completed (this slice or a previous one)
     let resumeDrafting = resumePhase === "drafting"; // exactly-drafting: skip drafted sections
@@ -946,6 +964,7 @@ export async function runJob(jobId: string) {
       reportWords = cp.reportWords ?? 0;
       spawnedCount = { n: cp.spawnedCount ?? 0 };
       courtProgress = cp.courtProgress;
+      court = (cp.courtVerdict as CourtVerdict | undefined) ?? null;
       auditDone = cp.auditDone === true;
       bundleDoneState = cp.bundleDone === true;
       concurrency = cp.aspectTimes?.length ? Math.max(2, Math.min(4, Math.round(cp.aspectTimes.length / 2))) : 4;
@@ -1001,6 +1020,7 @@ export async function runJob(jobId: string) {
         words,
         reportWords,
         ...(courtProgress ? { courtProgress } : {}),
+        ...(court ? { courtVerdict: court } : {}),
         ...(auditDone ? { auditDone: true } : {}),
         ...(bundleDoneState ? { bundleDone: true } : {}),
         ...extra,
@@ -1012,6 +1032,15 @@ export async function runJob(jobId: string) {
     const outOfSlice = () => SERVERLESS && ctx.hardLeft < 30_000;
     /** v2.5.0: the run must stop for good (absolute budget spent or slice cap). */
     const runExhausted = () => sliceN >= MAX_SLICES;
+
+    // v2.5.0: interval heartbeat — the lease and the same-instance liveness must
+    // NEVER depend on emit frequency: a patient LLM retry loop can legitimately
+    // go 60-90s without a single event, and an expired lease in that window lets
+    // a poll start a SECOND engine (the seq-collision failure this fixes).
+    heart = setInterval(() => {
+      activeJobs.set(jobId, Date.now());
+      renewLease(jobId).catch(() => {});
+    }, 8_000);
 
     if (SERVERLESS && !resuming) {
       await ctx.emit(
@@ -1901,6 +1930,9 @@ export async function runJob(jobId: string) {
 
     // ---------- SOURCE DIVERSITY + FRESHNESS (P1-3) ----------
     // Echo chambers and stale evidence become visible instead of invisible defaults.
+    // v2.5.0: stage3Ran — on a resume past "drafting", stage 3 already ran in a
+    // previous slice; its LLM work and events must not duplicate.
+    const stage3Ran = phaseAtLeast(resumePhase, "drafting");
     const webSources = sourcesUsed.filter((s) => s.domain !== "(attached document)");
     const domainCounts: Record<string, number> = {};
     for (const s of webSources) domainCounts[s.domain] = (domainCounts[s.domain] ?? 0) + 1;
@@ -1915,7 +1947,7 @@ export async function runJob(jobId: string) {
     if (sourceDates.length >= 3) {
       medianAgeMonths = Math.max(0, Math.round((Date.now() - sourceDates[Math.floor(sourceDates.length / 2)]) / (30.44 * 86_400_000)));
     }
-    if (webSources.length >= 8 && topShare > 0.4) {
+    if (webSources.length >= 8 && topShare > 0.4 && !stage3Ran) {
       await ctx.emit(
         "diversity",
         `Echo-chamber risk: ${Math.round(topShare * 100)}% of sources come from ${topDomainEntry?.[0]}`,
@@ -1924,6 +1956,7 @@ export async function runJob(jobId: string) {
         { topDomain: topDomainEntry?.[0], topShare: Math.round(topShare * 100), distinctDomains }
       );
     }
+    if (!stage3Ran) {
     await ctx.emit(
       "diversity",
       `Evidence base: ${webSources.length} sources across ${distinctDomains} domains${medianAgeMonths != null ? ` · median source age ~${medianAgeMonths} month${medianAgeMonths === 1 ? "" : "s"}` : ""}`,
@@ -1931,10 +1964,11 @@ export async function runJob(jobId: string) {
       undefined,
       { distinctDomains, topDomain: topDomainEntry?.[0] ?? "", topShare: Math.round(topShare * 100), medianAgeMonths, sources: webSources.length }
     );
+    }
 
     // ---------- STAGE 3: SELF-CRITIQUE ----------
     if (await ctx.isCancelled()) throw new Cancelled();
-    await updateJob(jobId, { status: "critiquing", stage: "Critically reviewing my own evidence", progress: 74 });
+    if (!stage3Ran) await updateJob(jobId, { status: "critiquing", stage: "Critically reviewing my own evidence", progress: 74 });
     const doneSections = await db.researchSection.findMany({ where: { jobId }, orderBy: { order: "asc" } });
     let critRes: { text: string; model: string; reasoning?: string } | null = null;
     // v2.4.1: on the serverless clock the critique pass (a patient-ride LLM call that
@@ -1942,7 +1976,7 @@ export async function runJob(jobId: string) {
     // gap-repair function, time-boxed, AFTER the report exists. Self-hosted runs keep
     // the full pre-write critique + weak-section re-research.
     if (SERVERLESS) {
-      await ctx.emit("info", "Serverless clock — critique runs as the post-grade improvement round", "The formal critique pass and its follow-up re-research run on self-hosted deployments; here the same gap-repair happens inside the time-boxed quality round after grading, so the report, score and improvement all fit the function budget.", undefined, undefined, "verbose");
+      if (!stage3Ran) await ctx.emit("info", "Serverless clock — critique runs as the post-grade improvement round", "The formal critique pass and its follow-up re-research run on self-hosted deployments; here the same gap-repair happens inside the time-boxed quality round after grading, so the report, score and improvement all fit the function budget.", undefined, undefined, "verbose");
     } else {
     try {
       critRes = await ctx.llmLive(
@@ -1956,10 +1990,10 @@ export async function runJob(jobId: string) {
     }
     }
     const critique = critRes ? extractJson(critRes.text) : null;
-    await ctx.emit("critique", `Self-critique verdict: ${critique?.verdict ?? "skipped (model unavailable)"}`, critique?.reasoning ?? critRes?.text.slice(0, 600) ?? "", critRes?.model, { weak: critique?.weakSections?.map((w: any) => w.title) ?? [] });
+    if (!stage3Ran) await ctx.emit("critique", `Self-critique verdict: ${critique?.verdict ?? "skipped (model unavailable)"}`, critique?.reasoning ?? critRes?.text.slice(0, 600) ?? "", critRes?.model, { weak: critique?.weakSections?.map((w: any) => w.title) ?? [] });
 
     // targeted follow-up for weak sections
-    const weak: { title: string; reason: string; queries: string[] }[] = (critique?.weakSections ?? []).slice(0, unlimited ? 3 : 2);
+    const weak: { title: string; reason: string; queries: string[] }[] = stage3Ran ? [] : (critique?.weakSections ?? []).slice(0, unlimited ? 3 : 2);
     for (const w of weak) {
       if (await ctx.isCancelled()) throw new Cancelled();
       if (ctx.outOfTime || ctx.sourceN >= srcCap) break;
@@ -2169,7 +2203,9 @@ export async function runJob(jobId: string) {
     // ---------- STAGE 3.5: SOURCE CURATION (gpt-researcher SourceCurator) ----------
     // Rank everything consulted by credibility + relevance; best sources get the low citation numbers.
     if (await ctx.isCancelled()) throw new Cancelled();
-    if (sourcesUsed.length > 3) {
+    // v2.5.0: on a stage-3-complete resume the curated order comes from the
+    // checkpoint — re-curating would duplicate the LLM call and the event
+    if (sourcesUsed.length > 3 && !stage3Ran) {
       try {
         const keep = Math.min(sourcesUsed.length, unlimited ? 30 : 20);
         const curRes = await ctx.llm(
@@ -2205,8 +2241,9 @@ export async function runJob(jobId: string) {
     // verdict with conditions. Briefs must cite [n] — the trial is grounded in the same
     // audited evidence as every digdeep report. Graceful degradation at every step:
     // a trial that cannot run falls back to the standard report, honestly noted.
-    let court: CourtVerdict | null = null;
-    if (job.court && !ctx.outOfTime) {
+    // v2.5.0: `court` is hoisted + restored from the checkpoint — a completed trial
+    // never re-runs; an interrupted one resumes from courtProgress (briefs, votes).
+    if (job.court && !ctx.outOfTime && !court) {
       await updateJob(jobId, { status: "critiquing", stage: "The trial — building the case", progress: 76 });
       // the evidence record both sides argue from: every aspect's findings + the graded learnings
       const courtSections = await db.researchSection.findMany({ where: { jobId }, orderBy: { order: "asc" } });
@@ -2246,8 +2283,9 @@ export async function runJob(jobId: string) {
       }
 
       // C3 — rebuttals (each side answers the other's strongest points, parallel)
-      let rebuttals: { by: "prosecution" | "defense"; text: string }[] = [];
-      if (prosecutionBrief && defenseBrief && !ctx.outOfTime) {
+      // v2.5.0 resume: rebuttals + jury votes accumulate in courtProgress
+      let rebuttals: { by: "prosecution" | "defense"; text: string }[] = (courtProgress?.rebuttals as { by: "prosecution" | "defense"; text: string }[]) ?? [];
+      if (prosecutionBrief && defenseBrief && !ctx.outOfTime && rebuttals.length === 0) {
         const [proReb, defReb] = await Promise.allSettled([
           ctx.llm(rebuttalPrompt(job.query, "prosecution", prosecutionBrief, defenseBrief, evidenceRecord, job.language), "court-rebuttal", false, 500, { patient: false, timeoutMs: 60_000 }),
           ctx.llm(rebuttalPrompt(job.query, "defense", defenseBrief, prosecutionBrief, evidenceRecord, job.language), "court-rebuttal", false, 500, { patient: false, timeoutMs: 60_000 }),
@@ -2261,12 +2299,19 @@ export async function runJob(jobId: string) {
           await ctx.emit("court", "Defense's rebuttal", defReb.value.text.trim().slice(0, 1200), defReb.value.model, { phase: "rebuttal", by: "defense" });
         }
       }
+      // v2.5.0: rebuttals persist — a slice boundary after them never re-argues
+      if (rebuttals.length > 0) {
+        courtProgress = { ...(courtProgress ?? {}), rebuttals };
+        await persist("predraft", { courtProgress }).catch(() => {});
+      }
 
       // C4 — the jury: 12 independent personas (6 on the quick preset, court-skill --quick)
       const quickCourt = job.preset === "quick";
       const jury = quickCourt ? JURORS.filter((_, i) => i % 2 === 0) : JURORS;
       const rebuttalText = rebuttals.map((r) => `${r.by === "prosecution" ? "PROSECUTION" : "DEFENSE"}: ${r.text}`).join("\n\n") || "(no rebuttals)";
-      const jurorVotes: { name: string; lens: string; vote: "GUILTY" | "NOT GUILTY"; reason: string }[] = [];
+      // v2.5.0 resume: votes cast in a previous slice are kept — only the missing
+      // jurors vote in this one (the vote spread is the signal; re-voting would skew it)
+      const jurorVotes: { name: string; lens: string; vote: "GUILTY" | "NOT GUILTY"; reason: string }[] = (courtProgress?.jurorVotes as { name: string; lens: string; vote: "GUILTY" | "NOT GUILTY"; reason: string }[]) ?? [];
       if (prosecutionBrief && defenseBrief) {
         await ctx.emit("court", `The jury is deliberating — ${jury.length} independent personas reading the record`, "Each juror sees the same evidence and briefs but votes through their own lens: the accountant, the first-time customer, the competitor, the retired judge, the statistician… The vote spread is the honest signal.", undefined, { phase: "jury", jurors: jury.length });
         // bounded concurrency: 4 jurors vote at a time — 12 simultaneous calls would
@@ -2274,7 +2319,8 @@ export async function runJob(jobId: string) {
         const JUROR_CONCURRENCY = 4;
         for (let i = 0; i < jury.length; i += JUROR_CONCURRENCY) {
           if (ctx.outOfTime) break;
-          const batch = jury.slice(i, i + JUROR_CONCURRENCY);
+          const batch = jury.slice(i, i + JUROR_CONCURRENCY).filter((j) => !jurorVotes.some((v) => v.name === j.name));
+          if (batch.length === 0) continue;
           const results = await Promise.allSettled(
             batch.map((j) => ctx.llm(jurorPrompt(job.query, j, evidenceRecord, prosecutionBrief, defenseBrief, rebuttalText, job.language), "court-juror", false, 120, { patient: false, timeoutMs: 45_000 }))
           );
@@ -2290,6 +2336,9 @@ export async function runJob(jobId: string) {
               ctx.emit("info", `${juror.name} could not vote (model unavailable) — the verdict proceeds with ${jury.length - 1 - jurorVotes.length} juror(s)`, undefined, undefined, undefined, "verbose").catch(() => {});
             }
           });
+          // v2.5.0: votes persist per batch — a slice boundary mid-deliberation keeps them
+          courtProgress = { ...(courtProgress ?? {}), jurorVotes };
+          await persist("predraft", { courtProgress }).catch(() => {});
         }
         const guilty = jurorVotes.filter((v) => v.vote === "GUILTY").length;
         const notGuilty = jurorVotes.length - guilty;
@@ -2325,6 +2374,8 @@ export async function runJob(jobId: string) {
             quick: quickCourt,
           };
           court = verdict;
+          // v2.5.0: the verdict persists — a resume never re-tries a concluded case
+          await persist("predraft", { courtVerdict: verdict } as Partial<EngineCheckpoint>).catch(() => {});
           await ctx.emit(
             "court",
             `VERDICT: ${verdict.verdict} — ${guilty} to ${notGuilty}`,
@@ -3534,6 +3585,7 @@ ${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
       await db.activityEvent.create({ data: { jobId, type: "error", title: "Research failed", detail: msg, seq: 9_999_999 } }).catch(() => {});
     }
   } finally {
+    if (heart) clearInterval(heart);
     // v2.5.0 continuation: releasing the lease lets the next poll resume the job
     // immediately when the engine exited at a slice boundary (no 30s wait); on
     // completion/failure it simply frees the single-run guard.

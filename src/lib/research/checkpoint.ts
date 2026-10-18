@@ -121,6 +121,8 @@ export interface EngineCheckpoint {
     jurorVotes?: { name: string; lens: string; vote: string; reason: string }[];
     verdictEmitted?: boolean;
   };
+  /** the final verdict object once the trial completes — restored on resume */
+  courtVerdict?: unknown;
 }
 
 export const PHASE_ORDER: Record<EnginePhase, number> = {
