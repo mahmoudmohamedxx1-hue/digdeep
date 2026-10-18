@@ -1039,7 +1039,10 @@ export async function runJob(jobId: string) {
       [{ role: "user", content: planPrompt(job.query, job.breadth, job.language, threadContext || undefined, initSnippets, comprehensionDigest || undefined, job.court) }],
       "plan",
       "Planning the research",
-      { wantThinking: true }
+      // v2.4.0: on the serverless clock the plan must not ride patient cooldowns for
+      // minutes — fast-fail at 40s and let the fallback plan carry the run (a generic
+      // plan with real research beats a perfect plan that eats the research window)
+      SERVERLESS ? { wantThinking: true, fast: { patient: false, timeoutMs: 40_000 } } : { wantThinking: true }
     );
     planPromise.catch(() => {}); // the underlying ride resolves on its own; its catch trips the breaker
     try {
@@ -1103,6 +1106,12 @@ export async function runJob(jobId: string) {
     }
 
     // ---------- STAGE 2: ITERATIVE RESEARCH (P0-2: aspects in parallel) ----------
+    // v2.4.0: the research cutoff is anchored HERE (not at ctx creation) — a slow
+    // plan ride on hot lanes must never consume the window before it opens. Floor:
+    // research always gets at least 25s (one parallel round); reserve: the full tail
+    // (drafts + bundle + grade + one improve round). Past a slow plan the tail
+    // compresses by degrading gracefully — grade/round skip, the report persists.
+    if (SERVERLESS) ctx.researchCutoffAt = Math.max(Date.now() + 25_000, ctx.hardStop - 195_000);
     await updateJob(jobId, { status: "researching", progress: 8 });
     const sectionRows = await db.researchSection.findMany({ where: { jobId }, orderBy: { order: "asc" } });
     const sourcesUsed: SourceRef[] = [];
