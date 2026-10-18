@@ -57,6 +57,9 @@ export interface LlmResult {
   text: string;
   reasoning?: string;
   backendId: string;
+  /** Human label of the lane that ACTUALLY served (e.g. "LLM7 · MiniMax-M2.7 · keyless",
+   *  "Pollinations · keyless") — lets the UI explain substitutions in the user's terms. */
+  backendLabel: string;
   model: string;
   latencyMs: number;
 }
@@ -250,6 +253,40 @@ export function invalidateEndpointsCache() {
   endpointsCache = null;
 }
 
+/** Resolve a pinned pref to its LIVE backend id — "llm7-…" (keyless) or "llm7pro-…"
+ *  (your key) — or null when the pin isn't materialized right now (premium pin
+ *  without a saved LLM7 key: the run rides the pool-led route instead). Used by
+ *  the engine to detect "someone other than my pin answered" and say so. */
+export async function pinnedBackendId(pref: string | undefined | null): Promise<string | null> {
+  const pin = pinModelOf(pref ?? "");
+  if (!pin) return null;
+  try {
+    const pool = (await getPoolEndpoints()).filter((e) => e.enabled);
+    const be = pool.find((e) => e.model.toLowerCase() === pin.toLowerCase());
+    return be?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** v2.8.1 STICKY PIN — how long (ms) a call should wait for a cooling PINNED lane
+ *  before falling through to the pool. The user chose this model explicitly, so it
+ *  deserves the first shot even mid-cooldown — but only a bounded slice of the
+ *  step's OWN patience budget (a chat reply waits ~10s, quick answers ~20s, deep
+ *  research steps up to 90s), never long quota rests, and never on tiny routing
+ *  calls (<15s budget). Pure: exported for tests. 0 = don't wait, fall through. */
+const PIN_STICKY_FLOOR_MS = 6_000; // keep at least this much budget to actually CALL the pin after waiting
+export function pinStickyWaitMs(pref: string | undefined, cooldownLeftMs: number, budgetMs: number | undefined): number {
+  if (cooldownLeftMs <= 0) return 0;
+  if (!pref || !pinModelOf(pref)) return 0;
+  const budget = budgetMs ?? 120_000; // patient default: the same budget the ride itself assumes
+  if (budget < 15_000) return 0; // routing-class fast calls: substitution is fine, latency is not
+  const cap = Math.min(Math.max(Math.round(budget * 0.35), 8_000), 90_000);
+  if (cooldownLeftMs > cap) return 0; // a real quota rest — do not park the reply on it
+  if (cooldownLeftMs + PIN_STICKY_FLOOR_MS > budget) return 0; // wouldn't leave room to call it
+  return cooldownLeftMs + 250;
+}
+
 async function glmBackends(): Promise<PoolEndpoint[]> {
   if (!isSdkAvailable()) return []; // no SDK config in this runtime (e.g. Vercel)
   return GLM_SDK_MODELS.map(
@@ -415,6 +452,19 @@ export async function llmComplete(messages: ChatMsg[], opts: LlmOptions): Promis
   for (let round = 0; round < maxRounds; round++) {
     const roundDeadline = round === 0 ? chainDeadline : chainDeadline + 10_000;
     const backends = await orderedBackends(opts.pref ?? "auto", opts.purpose);
+    // v2.8.1 STICKY PIN: the pinned model gets the first shot even when its lane is
+    // cooling — a bounded wait scaled to this step's own budget — instead of being
+    // silently substituted by the pool ("I picked MiniMax, OpenAI answered"). Long
+    // quota rests and tiny routing calls still fall through instantly.
+    if (round === 0 && backends.length > 0) {
+      const pin = pinModelOf(opts.pref ?? "");
+      const pinBe = pin ? backends.find((e) => e.model.toLowerCase() === pin.toLowerCase()) : undefined;
+      if (pinBe) {
+        const h0 = getHealth(pinBe.id);
+        const wait = pinStickyWaitMs(opts.pref, h0.cooldownUntil - Date.now(), fast ? opts.timeoutMs : opts.maxWaitMs);
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      }
+    }
     const errors: string[] = [];
     for (const be of backends) {
       if (Date.now() >= roundDeadline) {
@@ -432,8 +482,14 @@ export async function llmComplete(messages: ChatMsg[], opts: LlmOptions): Promis
         h.cooldownUntil = 0;
         h.failures = 0;
       }
-      // one retry per backend (skipped in fast mode)
-      const attempts = fast ? 1 : 2;
+      // one retry per backend (skipped in fast mode) — EXCEPT the pinned lane in a
+      // substantive fast call (v2.8.1): a momentary hot window on the user's chosen
+      // model must not substitute it on the first blip. Quota/hard-access errors
+      // break out immediately below, so this only retries soft failures.
+      const pinModel = pinModelOf(opts.pref ?? "");
+      const isPinnedLane = !!pinModel && be.model.toLowerCase() === pinModel.toLowerCase();
+      const fastPinRetry = fast && isPinnedLane && (opts.timeoutMs ?? 0) >= 15_000;
+      const attempts = fast ? (fastPinRetry ? 2 : 1) : 2;
       for (let attempt = 0; attempt < attempts; attempt++) {
         const started = Date.now();
         h.calls++;
@@ -441,7 +497,10 @@ export async function llmComplete(messages: ChatMsg[], opts: LlmOptions): Promis
           const isGlm = be.baseUrl === "z-ai-sdk";
           // v2.4.2: in fast mode the per-call timeout is clamped to the chain's
           // remaining budget (3s floor) — the whole chain must fit opts.timeoutMs.
-          const callTimeout = fast ? Math.max(3_000, roundDeadline - Date.now()) : undefined;
+          // v2.8.1: the PINNED lane's fast attempts clamp to 12s each so the soft
+          // retry above can never eat the whole chain budget by itself.
+          let callTimeout = fast ? Math.max(3_000, roundDeadline - Date.now()) : undefined;
+          if (fastPinRetry && callTimeout != null) callTimeout = Math.min(callTimeout, 12_000);
           const out: Served = isGlm
             ? await callGlm(
                 GLM_SDK_MODELS.find((m) => m.id === be.id)?.model,
@@ -458,6 +517,7 @@ export async function llmComplete(messages: ChatMsg[], opts: LlmOptions): Promis
             text: out.text,
             reasoning: out.reasoning,
             backendId: be.id,
+            backendLabel: be.label,
             // honest attribution: report the model the backend ACTUALLY served — the
             // z.ai SDK ignores requested names (everything comes back glm-4-plus class),
             // and OpenAI-compatible endpoints echo the real model id in `data.model`.
@@ -750,6 +810,17 @@ export async function llmStreamComplete(
   const streamPassDeadline = fastStream ? chainDeadline : Date.now() + Math.min(opts.maxWaitMs ?? 120_000, 150_000);
   const streamPassStart = Date.now();
   const backends = (await orderedBackends(opts.pref ?? "auto", opts.purpose)).filter((e) => e.enabled);
+  // v2.8.1 STICKY PIN (stream pass): a cooling PINNED lane gets a bounded head-start
+  // wait — scaled to this pass's own deadline — before the pool is allowed to answer.
+  if (backends.length > 0) {
+    const pin = pinModelOf(opts.pref ?? "");
+    const pinBe = pin ? backends.find((e) => e.model.toLowerCase() === pin.toLowerCase()) : undefined;
+    if (pinBe) {
+      const h0 = getHealth(pinBe.id);
+      const wait = pinStickyWaitMs(opts.pref, h0.cooldownUntil - Date.now(), fastStream ? opts.timeoutMs : Math.min(opts.maxWaitMs ?? 120_000, 150_000));
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    }
+  }
   for (const be of backends) {
     if (Date.now() >= chainDeadline || Date.now() >= streamPassDeadline) break;
     const h = getHealth(be.id);
@@ -777,7 +848,7 @@ export async function llmStreamComplete(
       h.ok++;
       h.failures = 0;
       h.lastLatencyMs = Date.now() - started;
-      return { text: out.text, reasoning: out.reasoning, backendId: be.id, model: out.servedModel || be.model || be.label, latencyMs: h.lastLatencyMs };
+      return { text: out.text, reasoning: out.reasoning, backendId: be.id, backendLabel: be.label, model: out.servedModel || be.model || be.label, latencyMs: h.lastLatencyMs };
     } catch (err) {
       h.failures++;
       h.lastError = err instanceof Error ? err.message : String(err);

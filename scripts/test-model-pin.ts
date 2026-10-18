@@ -1,10 +1,12 @@
 /** Pinned-model tests — the "choose minimax 2.7 / nemotron" feature.
  *  Run: bun scripts/test-model-pin.ts
  *  Covers: pref parsing/validation/labels (pure), routeInfoFor (llm.ts),
- *  and the REAL backend ordering against the local DB (orderedBackends):
- *  a pinned model must LEAD, the pool must ride behind it, GLM must close. */
+ *  the REAL backend ordering against the local DB (orderedBackends):
+ *  a pinned model must LEAD, the pool must ride behind it, GLM must close —
+ *  and v2.8.1 STICKY PIN: short pin cooldowns get a bounded wait instead of a
+ *  silent substitution, and pinnedBackendId resolves the live lane id. */
 import { LLM7_MODEL_CHOICES, PIN_PREFIX, isValidModelPref, modelPrefPillLabel, pinChoiceOf, pinModelOf } from "../src/lib/model-choices";
-import { routeInfoFor, orderedBackends } from "../src/lib/research/llm";
+import { routeInfoFor, orderedBackends, pinStickyWaitMs, pinnedBackendId } from "../src/lib/research/llm";
 
 let fails = 0;
 const ok = (cond: boolean, msg: string) => {
@@ -73,6 +75,25 @@ ok(chainLlm7[0]?.baseUrl?.includes("llm7.io") || chainLlm7[0]?.baseUrl?.includes
 const chainPremiumNoKey = await orderedBackends("llm7pin:gpt-6-sol" as never);
 ok(chainPremiumNoKey[0]?.model !== "gpt-6-sol", "premium pin without key does NOT lead (no dead lane)");
 ok(chainPremiumNoKey.some((e) => e.baseUrl?.includes("llm7.io")), "premium pin falls back to the live pool");
+
+console.log("— sticky pin (v2.8.1: the pin waits out SHORT cooldowns instead of being silently substituted)");
+ok(pinStickyWaitMs("llm7pin:minimax-m2.7", 8_000, 30_000) === 8_250, "chat 30s budget waits out an 8s pin cooldown (cap 10.5s)");
+ok(pinStickyWaitMs("llm7pin:minimax-m2.7", 60_000, 30_000) === 0, "chat budget never waits out a long quota rest");
+ok(pinStickyWaitMs("llm7pin:minimax-m2.7", 20_000, 60_000) === 20_250, "60s patient budget waits up to its 21s cap");
+ok(pinStickyWaitMs("llm7pin:nemotron-3-nano:30b", 85_000, 300_000) === 85_250, "deep budgets wait up to the 90s cap");
+ok(pinStickyWaitMs("llm7pin:nemotron-3-nano:30b", 95_000, 300_000) === 0, "cooldowns beyond the 90s cap fall through");
+ok(pinStickyWaitMs("llm7pin:minimax-m2.7", 5_000, 12_000) === 0, "routing-class 12s calls never wait (substitution fine, latency not)");
+ok(pinStickyWaitMs("llm7pin:minimax-m2.7", 0, 30_000) === 0, "no cooldown → no wait");
+ok(pinStickyWaitMs("auto", 8_000, 30_000) === 0 && pinStickyWaitMs(undefined, 8_000, 30_000) === 0, "non-pin prefs never wait");
+ok(pinStickyWaitMs("llm7pin:minimax-m2.7", 10_000, 15_000) === 0, "tight budget falls through (6s call floor must fit after the wait)");
+ok(pinStickyWaitMs("llm7pin:minimax-m2.7", 8_000, 15_000) === 8_250, "tight-but-fitting budget still waits (8s + 6s ≤ 15s)");
+ok(pinStickyWaitMs("llm7pin:minimax-m2.7", 40_000, undefined) === 40_250, "patient default budget (120s) waits up to its 42s cap");
+
+console.log("— pinnedBackendId (live lane resolution — powers the substitution notice)");
+ok((await pinnedBackendId("llm7pin:minimax-m2.7")) === "llm7-minimax-m2-7", "minimax pin → its keyless lane id");
+ok((await pinnedBackendId("llm7pin:nemotron-3-nano:30b")) === "llm7-nemotron-3-nano-30b", "colon-id nemotron pin → lane id");
+ok((await pinnedBackendId("auto")) === null && (await pinnedBackendId("llm7")) === null, "route prefs → null");
+ok((await pinnedBackendId("llm7pin:gpt-6-sol")) === null, "premium pin without a key → null (not materialized, no false notice)");
 
 console.log(fails === 0 ? "\nALL PIN TESTS PASS" : `\n${fails} FAILURES`);
 process.exit(fails === 0 ? 0 : 1);

@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
-import { llmComplete, llmStreamComplete, routeInfoFor, type ChatMsg, type LlmResult, type ModelPref, type StreamDelta } from "./llm";
+import { llmComplete, llmStreamComplete, pinnedBackendId, routeInfoFor, type ChatMsg, type LlmResult, type ModelPref, type StreamDelta } from "./llm";
+import { pinChoiceOf } from "@/lib/model-choices";
 import { capabilityQuestion, followUpishHeuristic, heuristicChatIntent, selfKnowledgeTopic, type SelfTopic } from "./intent-heuristics";
 import { searchAll, fetchPageContent, domainOf, type SearchResult } from "./search";
 import { gateByRelevance } from "./relevance";
@@ -721,6 +722,23 @@ A few things I'm good at: quick cited answers for simple lookups, and full multi
 (The free models are being throttled right now, so this is a stock reply — ask again in a minute and I'll answer properly.)`;
 }
 
+/** v2.8.1 — When the user PINNED a specific model but a different lane had to answer
+ *  (the pin's free lane was rate-limited at that moment), SAY SO in the feed instead
+ *  of leaving them wondering why "openai" replied while MiniMax-M2.7 was selected.
+ *  Returns "" when the pin itself served (or no pin is set / pin not materialized). */
+async function maybePinFallbackNote(ctx: Ctx, res: LlmResult): Promise<string> {
+  const pinId = await pinnedBackendId(ctx.pref);
+  if (!pinId || res.backendId === pinId) return "";
+  const pinLabel = pinChoiceOf(ctx.pref)?.label ?? "Your pinned model";
+  const served = res.backendId === "pollinations" ? `Pollinations (${res.model})` : res.backendLabel || res.model;
+  await ctx.emit(
+    "info",
+    `${pinLabel} is rate-limited — answered by ${served} instead`,
+    `You pinned ${pinLabel}, so its lane leads every message while its free quota window is open. That lane is resting right now, so the next healthy lane in the chain answered rather than making you wait. The pin resumes automatically on your next message — nothing to re-select.`
+  );
+  return `${pinLabel} was rate-limited — ${served} answered`;
+}
+
 /** CHAT LANE — direct conversational reply, no search, no report structure.
  *  Self-knowledge questions (engines/process/models/capabilities) get the grounded
  *  SELF_KNOWLEDGE spec injected into the prompt, so the answer is accurate even
@@ -745,6 +763,7 @@ async function runChatLane(
   let reply = "";
   let replyModel = "";
   let fallback = false;
+  let pinNote = "";
   try {
     // The model's thinking AND the reply itself stream live — the user watches the answer
     // being written instead of staring at a spinner. Fast-fail opts: chat must never ride
@@ -757,6 +776,7 @@ async function runChatLane(
     );
     reply = res.text.trim();
     replyModel = res.model;
+    pinNote = await maybePinFallbackNote(ctx, res);
   } catch {
     // every backend is throttled — answer from the built-in script instead of leaving the user hanging
     fallback = true;
@@ -780,7 +800,7 @@ async function runChatLane(
     status: "completed", stage: "Completed", progress: 100, reportMd: reply,
     stats: JSON.stringify(stats), completedAt: new Date(),
   });
-  await ctx.emit("done", "Replied", `Conversational answer in ${Math.round(durationMs / 1000)}s — no sources fetched, no research run${fallback ? " (built-in script — models were throttled)" : ""}`, replyModel, stats);
+  await ctx.emit("done", "Replied", `Conversational answer in ${Math.round(durationMs / 1000)}s — no sources fetched, no research run${fallback ? " (built-in script — models were throttled)" : ""}${pinNote ? ` (${pinNote})` : ""}`, replyModel, stats);
 }
 
 /** QUICK LANE — one focused search pass + a concise cited answer (Perplexity quick answer). */
@@ -868,6 +888,7 @@ async function runQuickLane(
     );
     answer = res.text;
     answerModel = res.model;
+    await maybePinFallbackNote(ctx, res);
   } else {
     // nothing retrievable — answer from general knowledge, honestly flagged
     const res = await ctx.llmLive(
@@ -878,6 +899,7 @@ async function runQuickLane(
     );
     answer = res.text;
     answerModel = res.model;
+    await maybePinFallbackNote(ctx, res);
   }
   await db.researchSection.update({ where: { id: sec.id }, data: { status: "done", draftMd: answer, findings: answer, rounds: 1 } });
   await ctx.emit("draft", "Answer written", `${answer.split(/\s+/).length} words`, answerModel, { section: "Quick answer" });

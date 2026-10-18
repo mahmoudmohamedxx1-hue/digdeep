@@ -1,5 +1,33 @@
 # Changelog
 
+## v2.8.1 — a pinned model stays your model (2026-10-19)
+
+- **"I picked MiniMax-M2.7, but OpenAI answered."** Not a bug — the designed
+  failover: the pin's lane rides a *shared anonymous* LLM7 quota that throttles
+  in waves, and when it was cooling at the moment of a simple question, the
+  fast chat/quick lanes skipped it silently and the next healthy lane answered
+  (Pollinations serves an OpenAI model — the app then honestly attributed the
+  reply to "openai"). Deep research was already patient and rode out cooldowns
+  until the pin served; quick replies weren't. Two fixes:
+- **Sticky pin.** A pinned lane in a *short* cooldown now gets a bounded
+  head-start wait before the pool is allowed to answer — scaled to the step's
+  own patience budget (a chat reply waits up to ~10s, a quick answer ~20s,
+  deep-research steps up to 90s). Long quota rests still fall through instantly
+  (never parks a "hi" for minutes), tiny routing calls never wait, and a pinned
+  lane that fails on a momentary blip gets one soft retry (12s per attempt) in
+  substantive fast calls — quota and hard-access errors still skip immediately.
+- **Substitutions are announced.** When someone other than your pin answers a
+  chat or quick reply, the feed now says it outright — "MiniMax-M2.7 is
+  rate-limited — answered by Pollinations (openai) instead" — plus why (free
+  lane resting), that the next healthy lane answered rather than making you
+  wait, and that the pin resumes automatically on the next message. The done
+  line carries the same note, and `LlmResult.backendLabel` gives the UI the
+  serving lane's human name. Verified E2E on a live throttled window: a
+  "hi there!" with MiniMax pinned completed in 36s with the notice in the feed
+  and `byModel: openai` honestly attributed.
+- Tests: 52 pin assertions (12 new sticky-pin + lane-resolution cases) —
+  all pass; routing suite unaffected; tsc + `next build --webpack` clean.
+
 ## v2.6.0 — the chat stops fighting you + you pick the model route (2026-10-19)
 
 - **Scrolling up no longer gets yanked back down.** The old follow logic used
