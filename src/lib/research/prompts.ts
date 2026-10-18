@@ -449,9 +449,12 @@ export function qualityScorePrompt(query: string, successCriteria: string[], rep
 Success criteria defined BEFORE the research (a great answer must pass these):
 ${crit}
 
-The report:
+The report (head, then tail — the References list is part of what you grade; a claim
+with no visible citation anchor is an evidence problem, so check the citations against
+this list):
 """
-${report.slice(0, 12000)}
+${report.slice(0, 16000)}
+${report.length > 24000 ? "\n[…middle omitted…]\n" + report.slice(-8000) : ""}
 """
 
 Grade on four dimensions, each 0-10 with one decimal: evidence (are claims grounded in the cited sources?), coverage (do the success criteria get answered?), honesty (are uncertainties and disagreements acknowledged rather than papered over?), clarity (is it well-structured and readable?). Then say whether each success criterion is met. Respond with ONLY valid JSON (no fences), in ${language}:
@@ -460,6 +463,44 @@ Grade on four dimensions, each 0-10 with one decimal: evidence (are claims groun
   "dims": [{"name": "evidence | coverage | honesty | clarity", "score": <0-10>, "note": "one short sentence"}],
   "criteria": [{"criterion": "<the criterion>", "met": true | false, "why": "one short sentence"}],
   "biggestWeakness": "one sentence: the single biggest honest weakness of this report"
+}`;
+}
+
+/** Stage 5.5 (v2.3.0) — turn a self-grade into a concrete, actionable repair
+ *  plan. The loop that uses this does REAL work per round (new searches, new
+ *  page reads, section rewrites, citation re-audit, rebuild, re-grade with the
+ *  same brutal rubric) — the score is earned, never declared. */
+export function gapAnalysisPrompt(
+  query: string,
+  quality: { overall: number; dims: { name: string; score: number; note: string }[]; criteria: { criterion: string; met: boolean; why: string }[]; biggestWeakness: string },
+  report: string,
+  sections: { title: string; question: string }[],
+  language: string,
+): string {
+  const weakDims = quality.dims.length
+    ? quality.dims.map((d) => `${d.name} ${d.score}/10 (${d.note})`).join("; ")
+    : "(no dimension notes)";
+  const unmet = quality.criteria.filter((c) => !c.met).map((c) => `${c.criterion} — ${c.why}`).join("; ");
+  return `A research report on "${query}" scored ${quality.overall}/10. The target is 9/10 — and it is earned by fixing what is actually missing, never by re-grading the same text.
+
+What the grader said:
+- Dimensions: ${weakDims}
+- Unmet criteria: ${unmet || "(none explicitly unmet — the weakness is depth/evidence quality)"}
+- Biggest weakness: ${quality.biggestWeakness}
+
+The report's sections:
+${sections.map((s, i) => `${i + 1}. ${s.title} — ${s.question}`).join("\n")}
+
+Report excerpt (tail — the newest sections):
+"""
+${report.slice(-6000)}
+"""
+
+Decide which sections (MAX 3) most need new evidence to raise the score honestly, and write the precise search queries a domain expert would run to get primary or practitioner sources (specific enough to avoid filler matches — name tools, standards, companies, or numbers where relevant). Respond with ONLY valid JSON (no fences), in ${language}:
+{
+  "sections": [
+    {"title": "<exact section title from the list above>", "need": "one sentence: the specific evidence this section is missing", "queries": ["<query 1>", "<query 2>", "<query 3>"]}
+  ]
 }`;
 }
 
@@ -609,6 +650,7 @@ Write the section body in ${language}:
 - Cite inline with [n] immediately after claims, e.g. "adoption grew 340% in 2025 [2]". Every substantive claim from the sources needs a citation.
 - HONESTY RULE — if the findings show the sources did NOT cover this question (off-topic material, or explicitly marked gaps): do NOT write an empty "insufficient evidence" section and do NOT cite irrelevant sources. Instead (a) say plainly, in one sentence, that web sources did not cover this angle; then (b) answer the question from well-established professional knowledge of the field, marked inline at first use like "*(from standard methodology, not from the retrieved sources)*" — no citation numbers on those statements. The reader must always know what is sourced and what is background knowledge.
 - Include concrete data, examples, comparisons and mechanisms. Flag genuine uncertainty ("sources disagree…", "evidence is limited to…").
+- CALIBRATION RULE (this is what graders punish hardest): every generalization must carry its actual evidentiary weight. If only one source supports it, write "one study/vendor reports…" — if it is a vendor's own claim, name the vendor ("according to [n]'s benchmark…"); if no source compares the alternatives, write "no public head-to-head data exists, so the following is expert inference" instead of implying a measured ranking. Never present inference, vendor marketing, or a single anecdote as established industry fact — state its basis inline. A hedged, attributed claim scores; an overclaimed one fails review.
 - Do NOT write a reference list — only cite with [n].`;
 }
 
@@ -619,7 +661,7 @@ export function execSummaryPrompt(query: string, drafts: string, language: strin
   return `Research report on: "${query}"
 ${learned}
 Section drafts (in order):
-${drafts.slice(0, 14000)}
+${drafts.slice(0, 20000)}
 
 Write the report's EXECUTIVE SUMMARY in ${language}, in exactly this shape:
 - First line: ONE sentence (max 30 words) that states the single most important takeaway. No heading, no label.

@@ -19,7 +19,16 @@ STATIC_DST = os.path.join(PROJ, ".next/standalone/.next/static")
 PUBLIC_SRC = os.path.join(PROJ, "public")
 PUBLIC_DST = os.path.join(PROJ, ".next/standalone/public")
 CMD = ["bun", ".next/standalone/server.js"]
-ENV = {**os.environ, "NODE_ENV": "production", "PORT": "3000", "HOSTNAME": "0.0.0.0"}
+# Force the real Postgres URL. The session runner injects a stale
+# DATABASE_URL=file:...custom.db from the project's v1 SQLite era; if the
+# daemon inherits it, every DB call fails and the app looks dead.
+ENV = {
+    **os.environ,
+    "NODE_ENV": "production",
+    "PORT": "3000",
+    "HOSTNAME": "0.0.0.0",
+    "DATABASE_URL": "postgresql://postgres:postgres@localhost:5433/digdeep",
+}
 
 
 def sync_static():

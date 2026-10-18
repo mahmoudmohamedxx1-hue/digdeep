@@ -37,6 +37,7 @@ import {
   reformulateQueriesPrompt,
   redTeamPrompt,
   qualityScorePrompt,
+  gapAnalysisPrompt,
   debateProposerPrompt,
   debateSkepticPrompt,
   debateJudgePrompt,
@@ -100,6 +101,16 @@ function extractJson(text: string): any | null {
   }
   return null;
 }
+
+/** v2.3.0: the self-score shape (Stage 5) — shared by the initial grade and the
+ *  Stage 5.5 re-grades. Named so `let regraded` doesn't reference `typeof quality`
+ *  in its own annotation (TS2502). */
+type QualityScore = {
+  overall: number;
+  dims: { name: string; score: number; note: string }[];
+  criteria: { criterion: string; met: boolean; why: string }[];
+  biggestWeakness: string;
+};
 
 function extractJsonArray(text: string): string[] | null {
   const cleaned = text.replace(/```(json)?/gi, "").trim();
@@ -2091,7 +2102,7 @@ export async function runJob(jobId: string) {
           [{ role: "user", content: draftSectionPrompt(job.query, sec.title, sec.question, sec.findings ?? "(no findings — rely on general knowledge and clearly mark it as background)", srcs, words, job.language, evidenceNotesFor(sec.title), adversarialNotesFor(sec.title), ctx.allLearnings) }],
           "draft",
           `Writing: ${sec.title}`,
-          { streamTo: sec.id, fast: { patient: false, timeoutMs: Math.min(60_000, Math.max(20_000, ctx.hardLeft - 15_000)) } }
+          { streamTo: sec.id, fast: { timeoutMs: Math.min(60_000, Math.max(20_000, ctx.hardLeft - 15_000)) } }
         );
         draftText = draftRes.text;
         draftModel = draftRes.model;
@@ -2154,7 +2165,7 @@ export async function runJob(jobId: string) {
                 sourcesUsed.map((s) => ({ n: s.n, title: s.title, domain: s.domain }))
               ),
             }],
-            "cite-check", false, 900, { patient: false, timeoutMs: 90_000 }
+            "cite-check", false, 900, { timeoutMs: 90_000 }
           );
           const verdicts = extractJson(crRes.text)?.cases ?? [];
           for (let i = 0; i < capped.length; i++) {
@@ -2267,19 +2278,19 @@ export async function runJob(jobId: string) {
       // Clamped to the hard clock so even a late-starting tail still persists.
       court
         ? Promise.resolve({ text: "", model: "", backendId: "court", latencyMs: 0 } as LlmResult)
-        : ctx.llm([{ role: "user", content: execSummaryPrompt(job.query, drafts, job.language, job.preset, ctx.allLearnings) }], "exec-summary", false, undefined, { patient: false, timeoutMs: Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
+        : ctx.llm([{ role: "user", content: execSummaryPrompt(job.query, drafts, job.language, job.preset, ctx.allLearnings) }], "exec-summary", false, undefined, { timeoutMs: Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
       court
         ? Promise.resolve({ text: "", model: "", backendId: "court", latencyMs: 0 } as LlmResult)
-        : ctx.llm([{ role: "user", content: conclusionPrompt(job.query, drafts, job.language) }], "conclusion", false, undefined, { patient: false, timeoutMs: Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
-      ctx.llm([{ role: "user", content: titlePrompt(job.query, plan.restate, job.language) }], "title", false, 60, { patient: false, timeoutMs: Math.min(60_000, Math.max(10_000, ctx.hardLeft - 20_000)) }),
-      ctx.llm([{ role: "user", content: relatedPrompt(job.query, finalSections.map((s) => s.title), job.language) }], "related", false, 300, { patient: false, timeoutMs: Math.min(60_000, Math.max(10_000, ctx.hardLeft - 20_000)) }),
+        : ctx.llm([{ role: "user", content: conclusionPrompt(job.query, drafts, job.language) }], "conclusion", false, undefined, { timeoutMs: Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
+      ctx.llm([{ role: "user", content: titlePrompt(job.query, plan.restate, job.language) }], "title", false, 60, { timeoutMs: Math.min(60_000, Math.max(10_000, ctx.hardLeft - 20_000)) }),
+      ctx.llm([{ role: "user", content: relatedPrompt(job.query, finalSections.map((s) => s.title), job.language) }], "related", false, 300, { timeoutMs: Math.min(60_000, Math.max(10_000, ctx.hardLeft - 20_000)) }),
     ]);
-    const execText = court
+    let execText = court
       ? courtExecMd
       : execR.status === "fulfilled"
         ? execR.value.text
         : "*(Executive summary unavailable — LLM backends were exhausted; see section content below.)*";
-    const concText = court ? "" : concR.status === "fulfilled" ? concR.value.text : "";
+    let concText = court ? "" : concR.status === "fulfilled" ? concR.value.text : "";
     const titleText = titleR.status === "fulfilled" ? titleR.value.text : job.query.slice(0, 80);
     const relatedQuestions =
       relatedR.status === "fulfilled" ? (extractJsonArray(relatedR.value.text) ?? fallbackRelated(job.query, finalSections.map((s) => s.question))) : fallbackRelated(job.query, finalSections.map((s) => s.question));
@@ -2302,7 +2313,7 @@ export async function runJob(jobId: string) {
         try {
           const disR = await ctx.llm(
             [{ role: "user", content: disagreementsPrompt(job.query, ctx.contradictions, contestedClaims.map((c) => ({ claim: c.claim, basis: c.basis })), refuted, job.language) }],
-            "disagreements", false, 700, { patient: false, timeoutMs: Math.min(90_000, Math.max(15_000, ctx.hardLeft - 40_000)) }
+            "disagreements", false, 700, { timeoutMs: Math.min(90_000, Math.max(15_000, ctx.hardLeft - 40_000)) }
           );
           disagreementsMd = disR.text.trim();
         } catch {
@@ -2315,15 +2326,15 @@ export async function runJob(jobId: string) {
     }
 
     // ---------- ASSEMBLE REPORT ----------
-    const durationMs = Date.now() - t0;
-    const reportWords = drafts.split(/\s+/).length;
+    let durationMs = Date.now() - t0;
+    let reportWords = drafts.split(/\s+/).length;
     const modelsUsed = Object.entries(ctx.byModel).map(([m, v]) => `${m} (${v.calls} calls)`);
 
     // Dedupe by URL before numbering: parallel aspect workers can still read the same
     // page in overlapping windows (the ECL run printed the same arxiv URL as both #3
     // and #8). First occurrence keeps its slot; later duplicates remap onto it so every
     // citation of that URL resolves to ONE reference number.
-    const refList: typeof sourcesUsed = [];
+    let refList: typeof sourcesUsed = [];
     const refByUrl = new Map<string, number>(); // url -> position in refList (1-based)
     const remap: Record<number, number> = {};
     for (const s of sourcesUsed) {
@@ -2339,7 +2350,7 @@ export async function runJob(jobId: string) {
     if (refList.length < sourcesUsed.length) {
       await ctx.emit("info", `Deduplicated the reference list — ${sourcesUsed.length - refList.length} repeated page(s) folded onto their first citation`);
     }
-    const refs = refList
+    let refs = refList
       .map((s, i) => `${i + 1}. ${s.title} — *${s.domain}* — ${s.url}`)
       .join("\n");
     // the claim-check ledger was recorded with the engine's internal numbering —
@@ -2471,14 +2482,20 @@ export async function runJob(jobId: string) {
     // ---------- STAGE 5: SELF-SCORE (P1-1) — grade the finished report ----------
     // digdeep grades its own report against the comprehension pass's success
     // criteria on four dimensions, and publishes the score — including bad ones.
-    let quality: { overall: number; dims: { name: string; score: number; note: string }[]; criteria: { criterion: string; met: boolean; why: string }[]; biggestWeakness: string } | null = null;
+    let quality: QualityScore | null = null;
     if (!ctx.outOfTime && ctx.hardLeft >= 50_000) {
     try {
       const scoreRes = await ctx.llmLive(
         [{ role: "user", content: qualityScorePrompt(job.query, comprehensionCriteria, reportMd, job.language) }],
         "score",
         "Grading my own report",
-        { wantThinking: true, maxTokens: 900, fast: { patient: false, timeoutMs: 45_000 } }
+        // v2.3.0: wantThinking OFF and a 2000-token budget — with thinking on, the
+        // 900-token ceiling was consumed by reasoning and the JSON never arrived
+        // (the live RAG run finished with quality:null for exactly this reason).
+        // NOT fast/patient:false — the tail of a run is exactly when the free lanes
+        // are hottest (429s); the grader must ride out the cooldown window instead
+        // of dying and leaving the report unscored. maxWaitMs comes from the ride budget.
+        { wantThinking: false, maxTokens: 2000, fast: { timeoutMs: 60_000 } }
       );
       const q = extractJson(scoreRes.text);
       if (q && typeof q.overall === "number") {
@@ -2505,6 +2522,379 @@ export async function runJob(jobId: string) {
         );
       }
     } catch { /* the score is an enhancement — its absence is not fatal */ }
+    }
+
+    // ---------- STAGE 5.5: EARN THE TARGET SCORE (v2.3.0) ----------
+    // A 4.5/10 report is a broken deliverable, and re-grading the same text is
+    // theater. So each round does REAL work: analyze the graded gaps → search
+    // and read new primary sources → rewrite the weakest sections with the new
+    // evidence → re-audit citations → rebuild the whole report → re-grade with
+    // the SAME brutal rubric. The score is earned, never declared. If the
+    // rounds or the clock run out first, the honest number is published with
+    // the reason. (Court runs skip this — the verdict is the deliverable.)
+    const QUALITY_TARGET = 9;
+    const QUALITY_MAX_ROUNDS = 3;
+    let qualityRounds = 0;
+    if (quality && quality.overall < QUALITY_TARGET && !court && !ctx.outOfTime) {
+      // `current` is the loop's non-null view of the score — TS can't keep the
+      // narrowing across loop back-edges once `quality` is reassigned inside.
+      let current = quality;
+      await updateJob(jobId, { stage: "Improving the report until the score is earned", progress: 97 });
+      while (
+        current.overall < QUALITY_TARGET &&
+        qualityRounds < QUALITY_MAX_ROUNDS &&
+        !ctx.outOfTime &&
+        ctx.hardLeft >= 200_000 &&
+        !(await ctx.isCancelled())
+      ) {
+        qualityRounds++;
+        const scoreBefore = current.overall;
+        await ctx.emit(
+          "refine",
+          `Quality round ${qualityRounds}/${QUALITY_MAX_ROUNDS}: ${scoreBefore.toFixed(1)}/10 — researching what the grader said is missing`,
+          current.biggestWeakness || "",
+          undefined,
+          { round: qualityRounds, before: scoreBefore, target: QUALITY_TARGET },
+        );
+
+        // (a) gap analysis → repair plan (which sections, what evidence, which queries)
+        let repairPlan: { sections?: { title?: unknown; need?: unknown; queries?: unknown }[] } | null = null;
+        try {
+          const gaRes = await ctx.llmLive(
+            [{ role: "user", content: gapAnalysisPrompt(job.query, current, reportMd, finalSections.map((s) => ({ title: s.title, question: s.question })), job.language) }],
+            "gap-analysis",
+            "Analyzing what the report is missing",
+            { wantThinking: false, maxTokens: 800, fast: { timeoutMs: 45_000 } }
+          );
+          repairPlan = extractJson(gaRes.text);
+        } catch { repairPlan = null; }
+        const gaps = (Array.isArray(repairPlan?.sections) ? repairPlan.sections : [])
+          .map((g) => ({
+            title: String(g?.title ?? "").trim(),
+            need: String(g?.need ?? "").slice(0, 300),
+            queries: (Array.isArray(g?.queries) ? g.queries : []).map((q: unknown) => String(q).slice(0, 160)).filter((q: string) => q.length > 3).slice(0, 4),
+          }))
+          .filter((g) => g.title && g.queries.length > 0)
+          .slice(0, 3);
+        if (gaps.length === 0) {
+          await ctx.emit("info", "Gap analysis produced no actionable gaps this round — keeping the current report", undefined, undefined, "verbose");
+          break;
+        }
+
+        // (b) targeted research per gap — the same pipeline an aspect round uses
+        let newSources = 0;
+        const roundFindings = new Map<string, string[]>();
+        for (const g of gaps) {
+          const sec = finalSections.find((s) => s.title.toLowerCase().includes(g.title.toLowerCase()) || g.title.toLowerCase().includes(s.title.toLowerCase()));
+          if (!sec) continue; // gap title didn't match a real section — skip rather than research blind
+          const searchResults: SearchResult[] = [];
+          for (const q of g.queries) {
+            try {
+              const rs = await searchAll(q, { academic: false });
+              await ctx.emit("search", `Searching: “${q}”`, `${rs.length} results — gap round ${qualityRounds}`, undefined, { query: q, count: rs.length, engines: [...new Set(rs.map((r) => r.engine))] });
+              searchResults.push(...rs);
+              await sleep(300 + Math.random() * 400);
+            } catch { /* one dead engine must not kill the round */ }
+          }
+          let fresh = searchResults
+            .filter((r) => r.url && !ctx.seenUrls.has(r.url) && !r.domain.includes("duckduckgo.com"))
+            .filter((r, i, arr) => arr.findIndex((x) => x.url === r.url) === i);
+          fresh = gateByRelevance(sec.question, g.queries.join(" "), fresh).kept;
+          const picked: SearchResult[] = [];
+          const domainCount: Record<string, number> = {};
+          for (const r of fresh) {
+            if (picked.length >= 4) break;
+            if (ctx.seenUrls.has(r.url)) continue; // re-check at pick time
+            const dc = domainCount[r.domain] ?? 0;
+            if (dc >= 2) continue;
+            domainCount[r.domain] = dc + 1;
+            picked.push(r);
+            ctx.seenUrls.add(r.url);
+          }
+          const found: string[] = roundFindings.get(sec.title) ?? [];
+          await Promise.all(
+            picked.map(async (r) => {
+              const page = await fetchPageContent(r.url, 3200, r.excerpt);
+              if (!page) return;
+              const n = ++ctx.sourceN;
+              const excerpt = page.text.split(/\s+/).slice(0, 750).join(" ");
+              await db.source.create({
+                data: { jobId, url: r.url, domain: r.domain || page.domain, title: r.title || page.title || r.domain, snippet: r.snippet || excerpt.slice(0, 280), engine: r.engine, words: page.words, used: true, sectionTitle: sec.title, round: 90 + qualityRounds, quality: 60 },
+              }).catch(() => null);
+              sourcesUsed.push({ n, url: r.url, title: r.title || page.title || r.domain, domain: r.domain || page.domain, ...(r.publishedAt ? { publishedAt: r.publishedAt } : {}) });
+              ctx.registerSource(n, r.title || page.title || r.domain, r.domain || page.domain, excerpt);
+              newSources++;
+              found.push(`- (source ${n}: ${r.title || page.title} — ${r.domain}) ${excerpt.split(/\s+/).slice(0, 120).join(" ")}`);
+              await ctx.emit("read", `Reading ${r.domain} · ${page.words.toLocaleString()} words`, r.title || page.title, undefined, { url: r.url, words: page.words, n }, "verbose");
+            })
+          );
+          if (found.length) roundFindings.set(sec.title, found);
+        }
+        if (newSources === 0) {
+          await ctx.emit("info", "Gap searches found no new readable sources this round", "The engines may be rate-limited — keeping the current report rather than padding it.", undefined, undefined, "verbose");
+        }
+
+        // (c) rewrite the gap sections — deeper each round, and the writer gets the
+        // grader's own dimension notes so the rewrite attacks ALL four dimensions:
+        // new citations for evidence, hedging for honesty, structure for clarity,
+        // and a word target that grows ~35% per round so sections thicken, not churn.
+        const graderRules = [
+          ...current.dims.filter((d) => d.score < 9).map((d) => `FIX ${d.name} (${d.score}/10): ${d.note}`),
+          ...current.criteria.filter((c) => !c.met).map((c) => `UNMET CRITERION: ${c.criterion} — ${c.why}`),
+        ].slice(0, 6);
+        const scale = Math.pow(1.35, qualityRounds - 1);
+        const wordsR: [number, number] = [Math.min(900, Math.round(words[0] * scale + 40)), Math.min(1100, Math.round(words[1] * scale + 60))];
+        // snapshot for regression protection: if this round's rewrites make the score
+        // WORSE, the previous (better-scoring) drafts are restored — the published
+        // artifact is always the one the same rubric scored highest.
+        const preRound = new Map(finalSections.map((s) => [s.id, s.draftMd || ""]));
+        let rewritten = 0;
+        for (const [title, found] of roundFindings) {
+          const sec = finalSections.find((s) => s.title === title);
+          if (!sec) continue;
+          const augmented = `${sec.findings ?? "(no prior findings)"}
+
+ADDITIONAL FINDINGS (gap round ${qualityRounds} — fresh reads; cite them [n]):
+${found.join("\n")}${graderRules.length ? `
+
+THE GRADER'S NOTES FOR THIS REWRITE (obey them):
+${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
+          try {
+            const rwRes = await ctx.llmLive(
+              [{ role: "user", content: draftSectionPrompt(job.query, sec.title, sec.question, augmented, sourcesUsed.slice(0, 80), wordsR, job.language, evidenceNotesFor(sec.title), adversarialNotesFor(sec.title), ctx.allLearnings) }],
+              "draft",
+              `Rewriting with new evidence: ${sec.title}`,
+              { streamTo: sec.id, wantThinking: false, maxTokens: 2500, fast: { timeoutMs: Math.min(90_000, Math.max(20_000, ctx.hardLeft - 30_000)) } }
+            );
+            if (rwRes.text && rwRes.text.split(/\s+/).length > 60) {
+              sec.draftMd = rwRes.text;
+              draftsArr[finalSections.indexOf(sec)] = rwRes.text;
+              await db.researchSection.update({ where: { id: sec.id }, data: { draftMd: rwRes.text } }).catch(() => null);
+              rewritten++;
+            }
+          } catch { /* keep the previous draft — never lose a working section */ }
+        }
+        // no rewrite ⇒ the report did not change ⇒ re-grading it would be theater
+        if (rewritten === 0) {
+          await ctx.emit("info", "No section could be rewritten this round — stopping the quality loop honestly", undefined, undefined, "verbose");
+          break;
+        }
+
+        // (d) citation audit on the rewritten drafts — same rules as Stage 4.5
+        {
+          const lexicalSupport = sharedLexicalSupport;
+          let totalCites = 0;
+          const weak: { sec: (typeof finalSections)[number]; n: number; sentence: string }[] = [];
+          for (const sec of finalSections) {
+            const draft = sec.draftMd || "";
+            if (!draft) continue;
+            for (const sentence of draft.split(/(?<=[.!?])\s+/)) {
+              const nums = [...sentence.matchAll(/\[(\d+)\]/g)].map((m) => Number(m[1]));
+              if (nums.length === 0) continue;
+              totalCites += nums.length;
+              for (const n of nums) {
+                const src = ctx.sourceTexts.get(n);
+                if (!src || src.length < 400) continue;
+                if (lexicalSupport(sentence, src) < 0.3 && !weak.some((w) => w.sec === sec && w.n === n)) weak.push({ sec, n, sentence: sentence.trim() });
+              }
+            }
+          }
+          if (weak.length > 0) {
+            try {
+              const capped = weak.slice(0, 10);
+              const crRes = await ctx.llm(
+                [{
+                  role: "user",
+                  content: citeRepairPrompt(
+                    job.query,
+                    capped.map((w) => ({ n: w.n, sentence: w.sentence, sourceTitle: ctx.sourceMeta.get(w.n)?.title ?? "", sourceExcerpt: ctx.sourceTexts.get(w.n) ?? "" })),
+                    sourcesUsed.map((s) => ({ n: s.n, title: s.title, domain: s.domain }))
+                  ),
+                }],
+                "cite-check", false, 900, { timeoutMs: 90_000 }
+              );
+              const verdicts = extractJson(crRes.text)?.cases ?? [];
+              for (let i = 0; i < capped.length; i++) {
+                const v = (verdicts as { case?: unknown; verdict?: unknown; use?: unknown }[]).find((c) => Number(c?.case) === i + 1);
+                if (!v) continue;
+                const w = capped[i];
+                if (String(v.verdict) === "wrong-source" && Number(v.use) > 0 && sourcesUsed.some((s) => s.n === Number(v.use))) {
+                  w.sec.draftMd = (w.sec.draftMd || "").split(`[${w.n}]`).join(`[${Number(v.use)}]`);
+                  citeStats.repaired++;
+                  citeStats.reanchoredTo.push(Number(v.use));
+                } else if (String(v.verdict) === "unsupported") {
+                  w.sec.draftMd = (w.sec.draftMd || "").split(`[${w.n}]`).join("");
+                  citeStats.dropped++;
+                  citeStats.droppedNs.push(w.n);
+                }
+                draftsArr[finalSections.indexOf(w.sec)] = w.sec.draftMd || "";
+                await db.researchSection.update({ where: { id: w.sec.id }, data: { draftMd: w.sec.draftMd || "" } }).catch(() => null);
+              }
+              await ctx.emit(
+                "citecheck",
+                `Citation re-audit: ${weak.length} weak anchor${weak.length > 1 ? "s were" : " was"} flagged in the rewritten sections`,
+                `${citeStats.repaired} re-anchored to the right source, ${citeStats.dropped} removed as unsupported. Same rules as the pre-publish audit.`,
+                crRes.model,
+                { flaggedWeak: weak.length, ...citeStats }
+              );
+            } catch { /* repair unavailable — the rewrite stands as written */ }
+          }
+          citeStats.checked += weak.length;
+          citeStats.integrity = Math.round(100 * (1 - citeStats.dropped / Math.max(1, totalCites)));
+        }
+
+        // (e) rebuild references + body + summary/conclusion + the report itself
+        {
+          const refByUrl2 = new Map<string, number>();
+          const remap2: Record<number, number> = {};
+          refList = [];
+          for (const s of sourcesUsed) {
+            const existing = refByUrl2.get(s.url);
+            if (existing != null) { remap2[s.n] = existing; continue; }
+            refByUrl2.set(s.url, refList.length + 1);
+            remap2[s.n] = refList.length + 1;
+            refList.push(s);
+          }
+          refs = refList.map((s, i) => `${i + 1}. ${s.title} — *${s.domain}* — ${s.url}`).join("\n");
+          const drafts2 = draftsArr.join("\n\n");
+          const [exec2, conc2] = await Promise.allSettled([
+            ctx.llm([{ role: "user", content: execSummaryPrompt(job.query, drafts2, job.language, job.preset, ctx.allLearnings) }], "exec-summary", false, undefined, { timeoutMs: Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
+            ctx.llm([{ role: "user", content: conclusionPrompt(job.query, drafts2, job.language) }], "conclusion", false, undefined, { timeoutMs: Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
+          ]);
+          if (exec2.status === "fulfilled" && exec2.value.text.trim()) execText = exec2.value.text;
+          if (conc2.status === "fulfilled" && conc2.value.text.trim()) concText = conc2.value.text;
+          const body2 = finalSections
+            .map((s, i) => `## ${i + 1}. ${s.title}\n\n${(s.draftMd || "").replace(/\[(\d+)\]/g, (_, d) => `[${remap2[Number(d)] ?? d}]`)}`)
+            .join("\n\n");
+          reportWords = drafts2.split(/\s+/).length;
+          durationMs = Date.now() - t0;
+          reportMd = [
+            `# ${titleText.replace(/["'`#]/g, "").trim()}`,
+            ``,
+            `## Executive Summary`,
+            ``,
+            execText,
+            ``,
+            body2,
+            ``,
+            ...(concText ? [`## Conclusion`, ``, concText, ``] : []),
+            ...(disagreementsMd ? [`## Where sources disagree`, ``, disagreementsMd, ``] : []),
+            `## References`,
+            ``,
+            refs || "*(no sources were successfully retrieved)*",
+            ``,
+            `---`,
+            `**Research metadata** — Duration: ${Math.round(durationMs / 1000)}s · Sources consulted: ${refList.length} · Report words: ~${reportWords} · LLM calls: ${ctx.llmCalls} · Models: ${modelsUsed.join(", ")} · Preset: ${job.preset} · Citation integrity: ${citeStats.integrity}%${qualityRounds > 0 ? ` · Quality rounds: ${qualityRounds}` : ""}`,
+          ].join("\n");
+          if (diffMd) reportMd = reportMd.replace("## References", `## What changed since the last run\n\n${diffMd}\n\n## References`);
+        }
+
+        // (f) re-grade with the SAME rubric — the score only counts if it was earned
+        let regraded: QualityScore | null = null;
+        try {
+          const scoreRes2 = await ctx.llmLive(
+            [{ role: "user", content: qualityScorePrompt(job.query, comprehensionCriteria, reportMd, job.language) }],
+            "score",
+            `Re-grading after round ${qualityRounds}`,
+            { wantThinking: false, maxTokens: 2000, fast: { timeoutMs: 60_000 } }
+          );
+          const q2 = extractJson(scoreRes2.text);
+          if (q2 && typeof q2.overall === "number") {
+            regraded = {
+              overall: Math.max(0, Math.min(10, Math.round(Number(q2.overall) * 10) / 10)),
+              dims: (Array.isArray(q2.dims) ? q2.dims : []).slice(0, 4).map((d: { name?: unknown; score?: unknown; note?: unknown }) => ({
+                name: String(d?.name ?? "").slice(0, 24),
+                score: Math.max(0, Math.min(10, Number(d?.score) || 0)),
+                note: String(d?.note ?? "").slice(0, 160),
+              })),
+              criteria: (Array.isArray(q2.criteria) ? q2.criteria : []).slice(0, 4).map((c: { criterion?: unknown; met?: unknown; why?: unknown }) => ({
+                criterion: String(c?.criterion ?? "").slice(0, 200),
+                met: c?.met === true,
+                why: String(c?.why ?? "").slice(0, 160),
+              })),
+              biggestWeakness: String(q2.biggestWeakness ?? "").slice(0, 300),
+            };
+          }
+        } catch { regraded = null; }
+        if (!regraded) {
+          await ctx.emit("info", "Re-grade unavailable — keeping the improved report and the previous score", undefined, undefined, "verbose");
+          break;
+        }
+        // Regression protection: a round that makes the SAME rubric score the report
+        // lower is a round that didn't earn its keep — restore the better drafts.
+        if (regraded.overall < current.overall - 0.2) {
+          let reverted = 0;
+          for (const sec of finalSections) {
+            const prevDraft = preRound.get(sec.id);
+            if (prevDraft != null && sec.draftMd !== prevDraft) {
+              sec.draftMd = prevDraft;
+              draftsArr[finalSections.indexOf(sec)] = prevDraft;
+              await db.researchSection.update({ where: { id: sec.id }, data: { draftMd: prevDraft } }).catch(() => null);
+              reverted++;
+            }
+          }
+          if (reverted > 0) {
+            // rebuild the report from the restored drafts so the published artifact is
+            // the one the higher score was measured on (refs + body + summary again)
+            const refByUrl3 = new Map<string, number>();
+            const remap3: Record<number, number> = {};
+            refList = [];
+            for (const s of sourcesUsed) {
+              const existing = refByUrl3.get(s.url);
+              if (existing != null) { remap3[s.n] = existing; continue; }
+              refByUrl3.set(s.url, refList.length + 1);
+              remap3[s.n] = refList.length + 1;
+              refList.push(s);
+            }
+            refs = refList.map((s, i) => `${i + 1}. ${s.title} — *${s.domain}* — ${s.url}`).join("\n");
+            const drafts3 = draftsArr.join("\n\n");
+            reportWords = drafts3.split(/\s+/).length;
+            durationMs = Date.now() - t0;
+            const body3 = finalSections
+              .map((s, i) => `## ${i + 1}. ${s.title}\n\n${(s.draftMd || "").replace(/\[(\d+)\]/g, (_, d) => `[${remap3[Number(d)] ?? d}]`)}`)
+              .join("\n\n");
+            reportMd = [
+              `# ${titleText.replace(/["'`#]/g, "").trim()}`,
+              ``,
+              `## Executive Summary`,
+              ``,
+              execText,
+              ``,
+              body3,
+              ``,
+              ...(concText ? [`## Conclusion`, ``, concText, ``] : []),
+              ...(disagreementsMd ? [`## Where sources disagree`, ``, disagreementsMd, ``] : []),
+              `## References`,
+              ``,
+              refs || "*(no sources were successfully retrieved)*",
+              ``,
+              `---`,
+              `**Research metadata** — Duration: ${Math.round(durationMs / 1000)}s · Sources consulted: ${refList.length} · Report words: ~${reportWords} · LLM calls: ${ctx.llmCalls} · Models: ${modelsUsed.join(", ")} · Preset: ${job.preset} · Citation integrity: ${citeStats.integrity}%${qualityRounds > 0 ? ` · Quality rounds: ${qualityRounds}` : ""}`,
+            ].join("\n");
+            if (diffMd) reportMd = reportMd.replace("## References", `## What changed since the last run\n\n${diffMd}\n\n## References`);
+            await ctx.emit(
+              "info",
+              `Round ${qualityRounds} regressed the score (${current.overall.toFixed(1)} → ${regraded.overall.toFixed(1)}) — restored the better-scoring report`,
+              `${reverted} section draft(s) reverted. The published artifact is always the one the same rubric scored highest.`,
+              undefined,
+              { reverted, round: qualityRounds },
+              "verbose",
+            );
+          }
+          // keep the higher score and STOP — a second regressing round is waste
+          await ctx.emit("score", `Kept the better score: ${current.overall.toFixed(1)}/10 (round ${qualityRounds} regressed)`, undefined, undefined, { ...current });
+          break;
+        }
+        current = regraded;
+        quality = current;
+        await ctx.emit(
+          "score",
+          `Self-score after round ${qualityRounds}: ${current.overall.toFixed(1)}/10`,
+          current.biggestWeakness || (current.overall >= QUALITY_TARGET ? "Target reached — the score was earned with new evidence, not re-grading." : ""),
+          undefined,
+          { ...current, round: qualityRounds, newSources, rewritten },
+        );
+      }
     }
 
     const stats = {
@@ -2546,6 +2936,7 @@ export async function runJob(jobId: string) {
       docsUsed: docEntries.length,
       sourceDiversity: { domains: distinctDomains, topDomain: topDomainEntry?.[0] ?? "", topShare: Math.round(topShare * 100), medianAgeMonths },
       ...(quality ? { quality } : {}),
+      ...(qualityRounds > 0 ? { qualityRounds, qualityTarget: QUALITY_TARGET } : {}),
       ...(diffMd ? { rerunDiff: true } : {}),
       finishedAt: new Date().toISOString(),
     };
@@ -2555,7 +2946,7 @@ export async function runJob(jobId: string) {
       court ? `The trial is over — ${court.verdict}, ${court.guilty} to ${court.notGuilty}` : "Research complete",
       court
         ? `Verdict delivered — ${sourcesUsed.length} sources, ${court.jurors.length} jurors voted, ${ctx.llmCalls} LLM calls, ${fmtMin(durationMs)} total${court.conditions.length ? `. What to change before trying again: ${court.conditions[0].slice(0, 140)}${court.conditions.length > 1 ? "…" : ""}` : ""}`
-        : `Report ready — ${sourcesUsed.length} sources, ~${reportWords.toLocaleString()} words, ${ctx.llmCalls} LLM calls, ${fmtMin(durationMs)} total${quality ? `, self-scored ${quality.overall}/10` : ""}${citeStats.integrity < 100 ? `, citation integrity ${citeStats.integrity}%` : " with verified citations"}${spawnedCount.n > 0 ? `, ${spawnedCount.n} aspect${spawnedCount.n > 1 ? "s" : ""} spawned mid-research (recursive deep-dive)` : ""}`,
+        : `Report ready — ${refList.length} sources, ~${reportWords.toLocaleString()} words, ${ctx.llmCalls} LLM calls, ${fmtMin(durationMs)} total${quality ? `, self-scored ${quality.overall.toFixed(1)}/10${qualityRounds > 0 ? ` after ${qualityRounds} quality round${qualityRounds > 1 ? "s" : ""} (target 9 — earned with new evidence, re-graded by the same rubric)` : ""}` : ""}${citeStats.integrity < 100 ? `, citation integrity ${citeStats.integrity}%` : " with verified citations"}${spawnedCount.n > 0 ? `, ${spawnedCount.n} aspect${spawnedCount.n > 1 ? "s" : ""} spawned mid-research (recursive deep-dive)` : ""}`,
       undefined,
       stats
     );
