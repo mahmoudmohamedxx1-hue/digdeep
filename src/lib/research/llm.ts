@@ -696,8 +696,15 @@ export async function llmStreamComplete(
     streamedAny = true;
     onDelta?.(d);
   };
+  // v2.4.3: fast streaming calls get a CHAIN deadline like llmComplete — the whole
+  // backend loop must fit opts.timeoutMs, each attempt clamped to what remains
+  // (3s floor). Without this, ~19 backends x 60-90s each rode past the serverless
+  // function freeze with the report unpersisted.
+  const fastStream = opts.timeoutMs != null && opts.patient === false;
+  const chainDeadline = fastStream && opts.timeoutMs != null ? Date.now() + opts.timeoutMs : Number.POSITIVE_INFINITY;
   const backends = (await orderedBackends(opts.pref ?? "auto", opts.purpose)).filter((e) => e.enabled);
   for (const be of backends) {
+    if (Date.now() >= chainDeadline) break;
     const h = getHealth(be.id);
     if (h.cooldownUntil > Date.now()) continue;
     if (h.cooldownUntil > 0) {
@@ -707,6 +714,7 @@ export async function llmStreamComplete(
     const started = Date.now();
     h.calls++;
     forward({ attempt: "start" }); // let consumers reset any partial state from a prior attempt
+    const callT = fastStream ? Math.max(3_000, chainDeadline - Date.now()) : undefined;
     try {
       const out =
         be.baseUrl === "z-ai-sdk"
@@ -716,9 +724,9 @@ export async function llmStreamComplete(
               opts.wantThinking ?? false,
               opts.maxTokens,
               forward,
-              Math.min(opts.timeoutMs ?? 60_000, 60_000)
+              Math.min(callT ?? opts.timeoutMs ?? 60_000, 60_000)
             )
-          : await callOpenAiStream(be, messages, opts.maxTokens, forward, opts.timeoutMs ?? 90_000, opts.wantThinking ?? false);
+          : await callOpenAiStream(be, messages, opts.maxTokens, forward, callT ?? opts.timeoutMs ?? 90_000, opts.wantThinking ?? false);
       h.ok++;
       h.failures = 0;
       h.lastLatencyMs = Date.now() - started;
