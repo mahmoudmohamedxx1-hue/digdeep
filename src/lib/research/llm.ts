@@ -486,12 +486,14 @@ export async function llmComplete(messages: ChatMsg[], opts: LlmOptions): Promis
       // Progressive backoff: waiting until the earliest cooldown, but the cap grows with each
       // round (120s → up to 12 min). Deeply exhausted tiers need real rest — hammering a
       // rate-limited backend every 2 minutes can keep its window resetting forever.
+      // v2.5.1: +0-7s jitter — parallel workers waking at the same cooldown end hit the
+      // shared anonymous pool simultaneously and re-trip it; the stagger spreads them.
       const capMs = 120_000 + round * 15_000;
       const nextCooldown = Math.min(
         ...[...health.values()].filter((h) => h.cooldownUntil > Date.now()).map((h) => h.cooldownUntil - Date.now()),
         capMs
       );
-      const waitMs = Math.max(20_000, Math.min(nextCooldown, capMs));
+      const waitMs = Math.max(20_000, Math.min(nextCooldown, capMs)) + Math.random() * 7_000;
       await new Promise((r) => setTimeout(r, waitMs));
     }
   }
@@ -714,11 +716,16 @@ export async function llmStreamComplete(
   // backend loop must fit opts.timeoutMs, each attempt clamped to what remains
   // (3s floor). Without this, ~19 backends x 60-90s each rode past the serverless
   // function freeze with the report unpersisted.
+  // v2.5.1: PATIENT streaming calls get a stream-pass deadline too (bounded by the
+  // ride budget) — the worst case (every lane hanging until its own timeout) must
+  // never outlive the slice; the patient non-streaming ride handles the cooldowns.
   const fastStream = opts.timeoutMs != null && opts.patient === false;
   const chainDeadline = fastStream && opts.timeoutMs != null ? Date.now() + opts.timeoutMs : Number.POSITIVE_INFINITY;
+  const streamPassDeadline = fastStream ? chainDeadline : Date.now() + Math.min(opts.maxWaitMs ?? 120_000, 150_000);
+  const streamPassStart = Date.now();
   const backends = (await orderedBackends(opts.pref ?? "auto", opts.purpose)).filter((e) => e.enabled);
   for (const be of backends) {
-    if (Date.now() >= chainDeadline) break;
+    if (Date.now() >= chainDeadline || Date.now() >= streamPassDeadline) break;
     const h = getHealth(be.id);
     if (h.cooldownUntil > Date.now()) continue;
     if (h.cooldownUntil > 0) {
@@ -728,7 +735,7 @@ export async function llmStreamComplete(
     const started = Date.now();
     h.calls++;
     forward({ attempt: "start" }); // let consumers reset any partial state from a prior attempt
-    const callT = fastStream ? Math.max(3_000, chainDeadline - Date.now()) : undefined;
+    const callT = fastStream ? Math.max(3_000, chainDeadline - Date.now()) : Math.max(3_000, Math.min(streamPassDeadline - Date.now(), opts.timeoutMs ?? 90_000));
     try {
       const out =
         be.baseUrl === "z-ai-sdk"
@@ -766,10 +773,13 @@ export async function llmStreamComplete(
   // v2.4.4: the fallback gets HALF the fast budget — the stream pass already spent
   // its share probing headers; the non-streaming rescue must stay inside the wall
   // time the caller budgeted for the whole call.
+  // v2.5.1: patient rides hand the REMAINING ride budget to the non-streaming chain.
   forward({ attempt: "start" });
+  const streamElapsed = Date.now() - streamPassStart;
   const r = await llmComplete(messages, {
     ...opts,
     ...(fastStream && opts.timeoutMs != null ? { timeoutMs: Math.max(10_000, Math.round(opts.timeoutMs / 2)) } : {}),
+    ...(opts.maxWaitMs != null ? { maxWaitMs: Math.max(15_000, opts.maxWaitMs - streamElapsed) } : {}),
   });
   if (r.reasoning && !streamedAny) forward({ reasoning: r.reasoning });
   return r;

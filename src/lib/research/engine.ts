@@ -1715,12 +1715,18 @@ export async function runJob(jobId: string) {
         let roundNotes = "";
         if (srcForSum.length > 0) {
           try {
-            const sumRes = await ctx.llm([{ role: "user", content: summarizePrompt(sec.title, sec.question, srcForSum, round) }], "summarize", false, undefined, SERVERLESS ? { patient: false, timeoutMs: 25_000 } : undefined);
+            // v2.5.1: PATIENT ride on serverless too — continuation gives each slice a
+            // real clock, so the synthesis step can wait out a 60-90s LLM cooldown
+            // window instead of falling to raw excerpts (which halve the report's
+            // evidence quality). Bounded by maxWaitMs; the hard stop clamps it further.
+            const sumRes = await ctx.llm([{ role: "user", content: summarizePrompt(sec.title, sec.question, srcForSum, round) }], "summarize", false, undefined, SERVERLESS ? { timeoutMs: 30_000, maxWaitMs: 100_000 } : undefined);
             roundNotes = sumRes.text;
             await ctx.emit("summary", `Synthesized findings on “${sec.title}”`, roundNotes.slice(0, 2400), sumRes.model, { section: sec.title, round, sources: srcForSum.length });
           } catch (sumErr) {
             // graceful degradation: keep the raw excerpts as notes rather than killing the run
-            roundNotes = srcForSum.map((s) => `- From ${s.domain} (${s.title}): ${s.excerpt.slice(0, 600)}`).join("\n");
+            // v2.5.1: the raw fallback keeps [n] markers so even a throttled run's
+            // findings carry auditable citations (the citation audit needs them)
+            roundNotes = srcForSum.map((s) => `- [${s.n}] From ${s.domain} (${s.title}): ${s.excerpt.slice(0, 600)}`).join("\n");
             await ctx.emit("info", `Synthesis model unavailable for “${sec.title}” — keeping raw source excerpts as notes`, sumErr instanceof Error ? sumErr.message.slice(0, 200) : undefined);
           }
         }
@@ -1784,7 +1790,9 @@ export async function runJob(jobId: string) {
             [{ role: "user", content: reflectPrompt(sec.title, sec.question, notes, roundsLeft, linkCandidates, ctx.allLearnings, canSpawnThis) }],
             "reflect",
             `Self-reviewing: ${sec.title}`,
-            SERVERLESS ? { wantThinking: true, fast: { patient: false, timeoutMs: 25_000 } } : { wantThinking: true }
+            // v2.5.1: patient ride — the reflection decides the NEXT round's queries;
+            // losing it to a momentary throttle window costs a whole round of depth
+            SERVERLESS ? { wantThinking: true, fast: { timeoutMs: 30_000, maxWaitMs: 100_000 } } : { wantThinking: true }
           );
           const refl = extractJson(reflRes.text);
           // dzhng: dense learnings with entities/numbers/dates accumulate across aspects.
@@ -2499,7 +2507,10 @@ export async function runJob(jobId: string) {
               [{ role: "user", content: draftSectionPrompt(job.query, sec.title, sec.question, sec.findings ?? "(no findings — rely on general knowledge and clearly mark it as background)", srcs, words, job.language, evidenceNotesFor(sec.title), adversarialNotesFor(sec.title), ctx.allLearnings) }],
               "draft",
               `Writing: ${sec.title}`,
-              { streamTo: sec.id, ...(SERVERLESS ? { fast: { patient: false, timeoutMs: 50_000 } } : {}) }
+              // v2.5.1: patient ride — a draft that waits out a cooldown window beats
+              // findings-notes published as a section (the 5.5/10 run's drafts all
+              // fell back; the evidence dim paid for it)
+              { streamTo: sec.id, ...(SERVERLESS ? { fast: { timeoutMs: 60_000, maxWaitMs: 110_000 } } : {}) }
             );
             draftText = draftRes.text;
             draftModel = draftRes.model;
@@ -2585,7 +2596,7 @@ export async function runJob(jobId: string) {
                 sourcesUsed.map((s) => ({ n: s.n, title: s.title, domain: s.domain }))
               ),
             }],
-            "cite-check", false, 900, { ...(SERVERLESS ? { patient: false as const } : {}), timeoutMs: SERVERLESS ? 35_000 : 90_000 }
+            "cite-check", false, 900, { ...(SERVERLESS ? { timeoutMs: 40_000, maxWaitMs: 90_000 } : { timeoutMs: 90_000 }) }
           );
           const verdicts = extractJson(crRes.text)?.cases ?? [];
           for (let i = 0; i < capped.length; i++) {
@@ -2715,15 +2726,15 @@ export async function runJob(jobId: string) {
       // Clamped to the hard clock so even a late-starting tail still persists.
       court
         ? Promise.resolve({ text: "", model: "", backendId: "court", latencyMs: 0 } as LlmResult)
-        : ctx.llm([{ role: "user", content: execSummaryPrompt(job.query, draftsPre, job.language, job.preset, ctx.allLearnings) }], "exec-summary", false, undefined, { ...(SERVERLESS ? { patient: false as const } : {}), timeoutMs: liteCaps ? 20_000 : SERVERLESS ? Math.min(25_000, Math.max(12_000, ctx.hardLeft - 20_000)) : Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }),
+        : ctx.llm([{ role: "user", content: execSummaryPrompt(job.query, draftsPre, job.language, job.preset, ctx.allLearnings) }], "exec-summary", false, undefined, { ...(SERVERLESS ? { timeoutMs: liteCaps ? 20_000 : 30_000, maxWaitMs: 90_000 } : { timeoutMs: Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }) }),
       bundleMode === "full" || court
       ? court
         ? Promise.resolve({ text: "", model: "", backendId: "court", latencyMs: 0 } as LlmResult)
-        : ctx.llm([{ role: "user", content: conclusionPrompt(job.query, draftsPre, job.language) }], "conclusion", false, undefined, { ...(SERVERLESS ? { patient: false as const } : {}), timeoutMs: liteCaps ? 20_000 : SERVERLESS ? Math.min(25_000, Math.max(12_000, ctx.hardLeft - 20_000)) : Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) })
+        : ctx.llm([{ role: "user", content: conclusionPrompt(job.query, draftsPre, job.language) }], "conclusion", false, undefined, { ...(SERVERLESS ? { timeoutMs: liteCaps ? 20_000 : 30_000, maxWaitMs: 90_000 } : { timeoutMs: Math.min(60_000, Math.max(15_000, ctx.hardLeft - 20_000)) }) })
       : Promise.resolve({ text: "", model: "", backendId: "skipped", latencyMs: 0 } as LlmResult),
-      ctx.llm([{ role: "user", content: titlePrompt(job.query, plan.restate, job.language) }], "title", false, 60, { ...(SERVERLESS ? { patient: false as const } : {}), timeoutMs: liteCaps ? 15_000 : SERVERLESS ? 15_000 : Math.min(60_000, Math.max(10_000, ctx.hardLeft - 20_000)) }),
+      ctx.llm([{ role: "user", content: titlePrompt(job.query, plan.restate, job.language) }], "title", false, 60, { ...(SERVERLESS ? { timeoutMs: liteCaps ? 15_000 : 20_000, maxWaitMs: 60_000 } : { timeoutMs: Math.min(60_000, Math.max(10_000, ctx.hardLeft - 20_000)) }) }),
       bundleMode === "full" || court
-        ? ctx.llm([{ role: "user", content: relatedPrompt(job.query, finalSections.map((s) => s.title), job.language) }], "related", false, 300, { ...(SERVERLESS ? { patient: false as const } : {}), timeoutMs: SERVERLESS ? 15_000 : Math.min(60_000, Math.max(10_000, ctx.hardLeft - 20_000)) })
+        ? ctx.llm([{ role: "user", content: relatedPrompt(job.query, finalSections.map((s) => s.title), job.language) }], "related", false, 300, { ...(SERVERLESS ? { timeoutMs: 20_000, maxWaitMs: 60_000 } : { timeoutMs: Math.min(60_000, Math.max(10_000, ctx.hardLeft - 20_000)) }) })
         : Promise.resolve({ text: "", model: "", backendId: "skipped", latencyMs: 0 } as LlmResult),
     ]);
     if (auditR.status === "rejected") await ctx.emit("info", "Citation audit step failed — continuing with the drafts as written", String(auditR.reason ?? "").slice(0, 300));
@@ -3004,7 +3015,7 @@ export async function runJob(jobId: string) {
     // window (bounded by the hard stop via the ride budget). The score is the report's
     // headline number; it deserves the recovery wait more than any polish step.
     const gradeAttempts: Array<{ wantThinking: boolean; maxTokens: number; fast?: { patient?: boolean; timeoutMs: number; maxWaitMs?: number } }> = SERVERLESS
-      ? [{ wantThinking: false, maxTokens: 2000, fast: { patient: false, timeoutMs: 25_000 } }, { wantThinking: false, maxTokens: 2000, fast: { timeoutMs: 45_000, maxWaitMs: 40_000 } }]
+      ? [{ wantThinking: false, maxTokens: 2000, fast: { timeoutMs: 30_000, maxWaitMs: 90_000 } }]
       : [{ wantThinking: false, maxTokens: 2000, fast: { timeoutMs: 60_000 } }];
     for (const attempt of gradeAttempts) {
     try {
@@ -3125,7 +3136,7 @@ export async function runJob(jobId: string) {
             [{ role: "user", content: gapAnalysisPrompt(job.query, current, reportMd, finalSections.map((s) => ({ title: s.title, question: s.question })), job.language) }],
             "gap-analysis",
             "Analyzing what the report is missing",
-            { wantThinking: false, maxTokens: 800, fast: { ...(SERVERLESS ? { patient: false as const } : {}), timeoutMs: SERVERLESS ? 25_000 : 45_000 } }
+            { wantThinking: false, maxTokens: 800, fast: { ...(SERVERLESS ? { timeoutMs: 30_000, maxWaitMs: 90_000 } : { timeoutMs: 45_000 }) } }
           );
           repairPlan = extractJson(gaRes.text);
         } catch { repairPlan = null; }
@@ -3246,7 +3257,7 @@ ${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
               [{ role: "user", content: draftSectionPrompt(job.query, sec.title, sec.question, augmented, sourcesUsed.slice(0, 80), wordsR, job.language, evidenceNotesFor(sec.title), adversarialNotesFor(sec.title), ctx.allLearnings) }],
               "draft",
               `Rewriting with new evidence: ${sec.title}`,
-              { streamTo: sec.id, wantThinking: false, maxTokens: 2500, fast: { ...(SERVERLESS ? { patient: false as const } : {}), timeoutMs: SERVERLESS ? 25_000 : Math.min(90_000, Math.max(20_000, ctx.hardLeft - 30_000)) } }
+              { streamTo: sec.id, wantThinking: false, maxTokens: 2500, fast: { ...(SERVERLESS ? { timeoutMs: 60_000, maxWaitMs: 110_000 } : { timeoutMs: Math.min(90_000, Math.max(20_000, ctx.hardLeft - 30_000)) }) } }
             );
             if (rwRes.text && rwRes.text.split(/\s+/).length > 60) {
               sec.draftMd = rwRes.text;
@@ -3295,7 +3306,7 @@ ${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
                     sourcesUsed.map((s) => ({ n: s.n, title: s.title, domain: s.domain }))
                   ),
                 }],
-                "cite-check", false, 900, { ...(SERVERLESS ? { patient: false as const } : {}), timeoutMs: SERVERLESS ? 25_000 : 90_000 }
+                "cite-check", false, 900, { ...(SERVERLESS ? { timeoutMs: 40_000, maxWaitMs: 90_000 } : { timeoutMs: 90_000 }) }
               );
               const verdicts = extractJson(crRes.text)?.cases ?? [];
               for (let i = 0; i < capped.length; i++) {
@@ -3361,10 +3372,10 @@ ${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
                 [{ role: "user", content: qualityScorePrompt(job.query, comprehensionCriteria, report2pre, job.language) }],
                 "score",
                 `Re-grading after round ${qualityRounds}`,
-                { wantThinking: false, maxTokens: 2000, fast: { patient: false, timeoutMs: 25_000 } }
+                { wantThinking: false, maxTokens: 2000, fast: { timeoutMs: 30_000, maxWaitMs: 90_000 } }
               ),
-              ctx.llm([{ role: "user", content: execSummaryPrompt(job.query, drafts2, job.language, job.preset, ctx.allLearnings) }], "exec-summary", false, undefined, { patient: false as const, timeoutMs: 20_000 }),
-              ctx.llm([{ role: "user", content: conclusionPrompt(job.query, drafts2, job.language) }], "conclusion", false, undefined, { patient: false as const, timeoutMs: 20_000 }),
+              ctx.llm([{ role: "user", content: execSummaryPrompt(job.query, drafts2, job.language, job.preset, ctx.allLearnings) }], "exec-summary", false, undefined, { timeoutMs: 30_000, maxWaitMs: 90_000 }),
+              ctx.llm([{ role: "user", content: conclusionPrompt(job.query, drafts2, job.language) }], "conclusion", false, undefined, { timeoutMs: 30_000, maxWaitMs: 90_000 }),
             ]);
             if (rg.status === "fulfilled") serverlessRegrade = { q2: extractJson(rg.value.text), model: rg.value.model };
             if (ex2.status === "fulfilled" && (ex2.value as LlmResult).text.trim()) execText = (ex2.value as LlmResult).text;
