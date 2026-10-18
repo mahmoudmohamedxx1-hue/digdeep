@@ -236,7 +236,7 @@ class Ctx {
     purpose: string,
     wantThinking = false,
     maxTokens?: number,
-    fast?: { patient?: boolean; timeoutMs?: number },
+    fast?: { patient?: boolean; timeoutMs?: number; maxWaitMs?: number },
     systemOverride?: string
   ): Promise<LlmResult> {
     if (this.hardLeft < 15_000) throw new Error("hard stop — the serverless function clock expired before this step could run");
@@ -250,10 +250,14 @@ class Ctx {
     // Budgeted runs: bound every step's patient ride to a quarter of the remaining budget
     // (1–8 min) so one throttled step can never eat the whole clock — and never past the
     // function's hard death time (hardLeft is Infinity off-serverless). Unlimited runs ride free.
+    // v2.4.6: an explicit maxWaitMs in the fast opts overrides the generic budget (the
+    // patient grade retry bounds its cooldown wait so the final persist always fits).
     const rideBudget =
-      this.hasTimeBudget && opts?.patient !== false
-        ? Math.min(Math.max(Math.round(this.timeLeft * 0.25), 60_000), 8 * 60_000, Math.max(5_000, this.hardLeft - 10_000))
-        : undefined;
+      fast?.maxWaitMs != null
+        ? fast.maxWaitMs
+        : this.hasTimeBudget && opts?.patient !== false
+          ? Math.min(Math.max(Math.round(this.timeLeft * 0.25), 60_000), 8 * 60_000, Math.max(5_000, this.hardLeft - 10_000))
+          : undefined;
     // Heartbeat: an LLM call can sit in patient retries for many minutes under rate limiting.
     // Keep touching updatedAt so the staleness watchdog never mistakes a throttled-but-alive
     // job for a dead one (a 429 retry stretch must not look like a server restart).
@@ -305,7 +309,7 @@ class Ctx {
     o?: {
       wantThinking?: boolean;
       maxTokens?: number;
-      fast?: { patient?: boolean; timeoutMs?: number };
+      fast?: { patient?: boolean; timeoutMs?: number; maxWaitMs?: number };
       /** stream the generated answer into this section's draftMd as it arrives */
       streamTo?: string;
       /** override the system prompt (the chat lane uses its own voice) */
@@ -374,10 +378,15 @@ class Ctx {
     };
 
     const opts = o?.fast ?? (blackedOut ? { patient: false as const, timeoutMs: 45_000 } : undefined);
+    // v2.4.6: an explicit maxWaitMs in the fast opts overrides the generic ride
+    // budget — the patient grade retry uses it to bound its cooldown wait so the
+    // round (or the final persist) still fits the clock.
     const rideBudget =
-      this.hasTimeBudget && opts?.patient !== false
-        ? Math.min(Math.max(Math.round(this.timeLeft * 0.25), 60_000), 8 * 60_000, Math.max(5_000, this.hardLeft - 10_000))
-        : undefined;
+      o?.fast?.maxWaitMs != null
+        ? o.fast.maxWaitMs
+        : this.hasTimeBudget && opts?.patient !== false
+          ? Math.min(Math.max(Math.round(this.timeLeft * 0.25), 60_000), 8 * 60_000, Math.max(5_000, this.hardLeft - 10_000))
+          : undefined;
     const beat = setInterval(() => {
       db.researchJob.update({ where: { id: this.jobId }, data: { updatedAt: new Date() } }).catch(() => {});
     }, 60_000);
@@ -2153,15 +2162,16 @@ export async function runJob(jobId: string) {
             // the section streams into the UI as it is written — the user literally watches
             // the report being typed. Bounded by the hard clock: a stalled draft falls
             // back to findings instead of freezing the whole report.
-            // v2.4.5: PATIENT drafts on the serverless clock — the ride waits out lane
-            // cooldowns (bounded by the hard stop) so a mid-tail 429 window recovers
-            // instead of falling back to raw findings; per-call capped at 60s. Good
-            // lanes: first try succeeds instantly, same as before.
+            // v2.4.6: drafts are FAST on the serverless clock (35s chain + rescue).
+            // A patient ride here eats the whole reserve in a sustained blackout and
+            // the function freezes with NOTHING persisted — a findings-based report
+            // that survives beats a perfect draft that dies at 95%. The GRADE is the
+            // step that gets the patient recovery ride (it is small and it is last).
             const draftRes = await ctx.llmLive(
               [{ role: "user", content: draftSectionPrompt(job.query, sec.title, sec.question, sec.findings ?? "(no findings — rely on general knowledge and clearly mark it as background)", srcs, words, job.language, evidenceNotesFor(sec.title), adversarialNotesFor(sec.title), ctx.allLearnings) }],
               "draft",
               `Writing: ${sec.title}`,
-              { streamTo: sec.id, ...(SERVERLESS ? { fast: { timeoutMs: 60_000 } } : {}) }
+              { streamTo: sec.id, ...(SERVERLESS ? { fast: { patient: false, timeoutMs: 35_000 } } : {}) }
             );
             draftText = draftRes.text;
             draftModel = draftRes.model;
@@ -2604,8 +2614,8 @@ export async function runJob(jobId: string) {
     // then, if the lanes were throttled, ONE patient ride that waits out the cooldown
     // window (bounded by the hard stop via the ride budget). The score is the report's
     // headline number; it deserves the recovery wait more than any polish step.
-    const gradeAttempts: Array<{ wantThinking: boolean; maxTokens: number; fast?: { patient?: boolean; timeoutMs: number } }> = SERVERLESS
-      ? [{ wantThinking: false, maxTokens: 2000, fast: { patient: false, timeoutMs: 25_000 } }, { wantThinking: false, maxTokens: 2000, fast: { timeoutMs: 45_000 } }]
+    const gradeAttempts: Array<{ wantThinking: boolean; maxTokens: number; fast?: { patient?: boolean; timeoutMs: number; maxWaitMs?: number } }> = SERVERLESS
+      ? [{ wantThinking: false, maxTokens: 2000, fast: { patient: false, timeoutMs: 25_000 } }, { wantThinking: false, maxTokens: 2000, fast: { timeoutMs: 45_000, maxWaitMs: 40_000 } }]
       : [{ wantThinking: false, maxTokens: 2000, fast: { timeoutMs: 60_000 } }];
     for (const attempt of gradeAttempts) {
     try {
