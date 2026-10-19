@@ -406,7 +406,28 @@ export function ChatThinking({
         .filter((g): g is ThoughtGroup => !!g),
     [events]
   );
-  if (groups.length === 0) return null;
+  // v3.0.3: chat turns carry info events too — the gavel-stays-down note
+  // ("Court mode is on — but there is nothing to put on trial here"),
+  // "Routed to: chat", "Stop requested" — dropping them hid WHY a turn
+  // answered in seconds instead of running a trial. Render them as quiet lines.
+  const infos = useMemo(
+    () => events.filter((e) => e.type === "info" && e.level !== "verbose"),
+    [events]
+  );
+  const infoLines = infos.length > 0 ? (
+    <div className="mt-1.5 space-y-1">
+      {infos.map((e) => (
+        <div key={e.seq} className="flex items-start gap-2 text-[12px] leading-snug text-muted-foreground">
+          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary/70" aria-hidden />
+          <span dir="auto">
+            {e.title}
+            {e.detail ? <span className="text-muted-foreground/80"> — {e.detail}</span> : null}
+          </span>
+        </div>
+      ))}
+    </div>
+  ) : null;
+  if (groups.length === 0) return infoLines;
   const last = groups[groups.length - 1];
   const live = active && !last.done;
   const showText = live ? (showThinking || expanded) && !!last.text : expanded && !!last.text;
@@ -442,6 +463,7 @@ export function ChatThinking({
             show thinking ▼
           </button>
         )}
+        {infoLines}
       </div>
     );
   }
@@ -461,6 +483,7 @@ export function ChatThinking({
           {thoughtDisplay(last.text, 8000)}
         </div>
       )}
+      {infoLines}
     </div>
   );
 }

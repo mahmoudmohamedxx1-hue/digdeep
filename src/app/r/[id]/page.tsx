@@ -122,17 +122,21 @@ export default function ThreadPage() {
         // first selection via keyboard — rebuild the payload from the owner report
         const owner = claimOwnerTurn;
         if (!owner?.job?.reportMd) return prev;
-        const parsed = parseAnswer(owner.job.reportMd, owner.job.mode);
-        return {
-          check,
-          refs: parsed.refs,
-          sources: owner.sources,
-          reportMd: owner.job.reportMd,
-          allChecks: owner.job.stats?.claimChecks,
-          summaryLine: owner.job.stats?.claimVerdict
-            ? `${owner.job.stats.claimVerdict.fullySupported} of ${owner.job.stats.claimVerdict.citedSources} sources fully support their claims`
-            : undefined,
-        };
+        try {
+          const parsed = parseAnswer(owner.job.reportMd, owner.job.mode);
+          return {
+            check,
+            refs: parsed.refs,
+            sources: owner.sources,
+            reportMd: owner.job.reportMd,
+            allChecks: owner.job.stats?.claimChecks,
+            summaryLine: owner.job.stats?.claimVerdict
+              ? `${owner.job.stats.claimVerdict.fullySupported} of ${owner.job.stats.claimVerdict.citedSources} sources fully support their claims`
+              : undefined,
+          };
+        } catch {
+          return prev; // v3.0.3: a poison report can never crash the keyboard flow
+        }
       });
       focusChipOf(check.id, check.n);
     },
@@ -333,13 +337,20 @@ export default function ThreadPage() {
   const lastTurn = turns && turns.length > 0 ? turns[turns.length - 1] : null;
 
   // report sections → right-rail TOC
+  // v3.0.3: this memo runs at PAGE level, outside the per-turn error boundary —
+  // a throw here white-screens the whole thread. parseAnswer is hardened, and
+  // this try/catch is the belt-and-braces so no future parser bug can kill the page.
   const tocHeadings = useMemo(() => {
     if (!lastTurn?.job || lastTurn.job.status !== "completed" || !lastTurn.job.reportMd) return [];
-    const parsed = parseAnswer(lastTurn.job.reportMd, lastTurn.job.mode);
-    // the verdict card renders the jury/foreman/judge sections — the body (and
-    // therefore the TOC) drops them so the record is never shown twice
-    const body = lastTurn.job.stats?.court ? parsed.body.replace(/## The Jury[\s\S]*?(?=## The Evidence Record)/, "") : parsed.body;
-    return extractHeadings(body);
+    try {
+      const parsed = parseAnswer(lastTurn.job.reportMd, lastTurn.job.mode);
+      // the verdict card renders the jury/foreman/judge sections — the body (and
+      // therefore the TOC) drops them so the record is never shown twice
+      const body = lastTurn.job.stats?.court ? parsed.body.replace(/## The Jury[\s\S]*?(?=## The Evidence Record)/, "") : parsed.body;
+      return extractHeadings(body);
+    } catch {
+      return [];
+    }
   }, [lastTurn?.job]);
 
   // ---------- scrolling: intent-aware follow + jump pill ----------

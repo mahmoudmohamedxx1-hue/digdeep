@@ -72,6 +72,10 @@ scripts/*
 !scripts/test-routing.ts
 !scripts/test-model-pin.ts
 !scripts/test-jury.ts
+!scripts/test-relevance.ts
+!scripts/test-court-render.ts
+!scripts/inject-trial.ts
+!scripts/probe-stop.ts
 !scripts/mock-llm.js
 !scripts/benchmark-harness.mjs
 !scripts/replay-self-questions.sh

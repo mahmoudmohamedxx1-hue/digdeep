@@ -70,8 +70,19 @@ export function parseReport(md: string): ParsedReport {
   };
 }
 
-/** Mode-aware parse: chat = plain reply; quick = answer + references; research = full report. */
+/** Mode-aware parse: chat = plain reply; quick = answer + references; research = full report.
+ *  v3.0.3 HARDENING: reportMd is a stats-adjacent blob, not a typed promise —
+ *  a poison record (reportMd as a number/object/null from a bad write or a
+ *  hand-edited cache) must render what's there, never throw. A throw here
+ *  used to escape the thread error boundary via the page-level TOC memo and
+ *  white-screen the whole page. */
 export function parseAnswer(md: string, mode?: string): ParsedReport {
+  if (typeof md !== "string") {
+    // null/undefined → honestly empty; anything else → show it as text
+    const asText = md == null ? "" : String(md);
+    if (mode === "chat") return { exec: "", body: asText, conclusion: "", diff: "", refs: [] };
+    md = asText;
+  }
   if (mode === "chat") return { exec: "", body: md, conclusion: "", diff: "", refs: [] };
   if (!md.includes("## Executive Summary")) {
     const idx = md.indexOf("## References");
