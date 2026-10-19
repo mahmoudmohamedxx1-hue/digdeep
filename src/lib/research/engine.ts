@@ -1,7 +1,7 @@
 import { db } from "@/lib/db";
 import { llmComplete, llmStreamComplete, pinnedBackendId, routeInfoFor, type ChatMsg, type LlmResult, type ModelPref, type StreamDelta } from "./llm";
 import { pinChoiceOf } from "@/lib/model-choices";
-import { capabilityQuestion, followUpishHeuristic, heuristicChatIntent, selfKnowledgeTopic, type SelfTopic } from "./intent-heuristics";
+import { capabilityQuestion, courtMetaQuestion, courtTrialWorthiness, followUpishHeuristic, heuristicChatIntent, selfKnowledgeTopic, type SelfTopic } from "./intent-heuristics";
 import { searchAll, fetchPageContent, domainOf, type SearchResult } from "./search";
 import { gateByRelevance } from "./relevance";
 import {
@@ -521,16 +521,24 @@ async function updateJob(jobId: string, data: Record<string, unknown>) {
  *  wants (UNDERSTANDING line) and then the lane, so routing is never a black box and
  *  the understanding itself is shown to the user. Falls back to a shape-based read
  *  (NOT a blind "research") when every backend is unavailable. */
+/**
+ * @param court when court mode is on: "trial-fallback" lets an ambiguous
+ * question fall back to TRIAL if every router model is throttled (the user
+ * asked for the gavel — a real claim must not lose its trial to a throttle
+ * wave); "no-trial" is passed for clearly-not-a-claim shapes, which fall back
+ * to research like the normal router. undefined = court off.
+ */
 async function classifyIntent(
   ctx: Ctx,
   query: string,
   recentTurns: string,
-  preset: string
-): Promise<{ intent: Intent; how: string; raw: string }> {
+  preset: string,
+  court?: "trial-fallback" | "no-trial"
+): Promise<{ intent: Intent; trial: boolean; how: string; raw: string }> {
   try {
     const res = await Promise.race([
       ctx.llmLive(
-        [{ role: "user", content: classifyPrompt(query, recentTurns, preset) }],
+        [{ role: "user", content: classifyPrompt(query, recentTurns, preset, court) }],
         "classify",
         "Understanding your message",
         { wantThinking: true, maxTokens: 800, fast: { patient: false, timeoutMs: !!process.env.VERCEL ? 12_000 : 18_000 } }
@@ -541,15 +549,17 @@ async function classifyIntent(
     // Strict parse first: the RESTATE/INTENT/STRATEGY lines may themselves contain the
     // words "chat"/"research" ("the user asks whether I can research…"), so the LANE:
     // line is the only source of truth; the last line is a fallback for sloppy formats.
-    let intent: Intent | null = null;
-    const laneMatch = [...text.matchAll(/lane\s*[:\-]?\s*\**\s*"?(chat|quick|research)/gi)].pop();
-    if (laneMatch) intent = laneMatch[1].toLowerCase() as Intent;
-    if (!intent) {
+    let lane: string | null = null;
+    const laneMatch = [...text.matchAll(/lane\s*[:\-]?\s*\**\s*"?(chat|quick|research|trial)/gi)].pop();
+    if (laneMatch) lane = laneMatch[1].toLowerCase();
+    if (!lane) {
       const lastLine = text.split("\n").map((l) => l.trim()).filter(Boolean).pop() ?? "";
-      const w = lastLine.match(/\b(chat|quick|research)\b/i);
-      if (w) intent = w[1].toLowerCase() as Intent;
+      const w = lastLine.match(/\b(chat|quick|research|trial)\b/i);
+      if (w) lane = w[1].toLowerCase();
     }
-    if (!intent) intent = "research"; // format mangled — the safe default for real questions
+    if (!lane) lane = "research"; // format mangled — the safe default for real questions
+    const trial = !!court && lane === "trial"; // trial runs ON the research pipeline
+    const intent: Intent = lane === "trial" ? "research" : (lane as Intent);
     const pick = (tag: string) =>
       (text.match(new RegExp(`${tag}\\s*[:\\-]?\\s*(.+)`, "i"))?.[1] ?? "")
         .replace(/\s*(restate|intent|strategy|lane)\s*[:\-].*$/i, "")
@@ -559,30 +569,52 @@ async function classifyIntent(
     const intentLine = pick("intent");
     const strategy = pick("strategy");
     const read = [restate, intentLine, strategy].filter(Boolean).join(" · ");
+    const laneName = trial
+      ? "the court — this reads as a real claim, so it gets a prosecutor, a defense, a jury of 12 and a judge"
+      : intent === "chat"
+      ? "a direct reply"
+      : intent === "quick"
+      ? "a quick answer"
+      : "deep research";
     return {
       intent,
+      trial,
       how: read
-        ? `I read your message as: “${read.slice(0, 320)}” — so I am routing it to ${
-            intent === "chat" ? "a direct reply" : intent === "quick" ? "a quick answer" : "deep research"
-          }`
-        : `the router read your message and picked ${intent}`,
+        ? `I read your message as: “${read.slice(0, 320)}” — so I am routing it to ${laneName}`
+        : `the router read your message and picked ${trial ? "the court" : intent}`,
       raw: read.slice(0, 240),
     };
   } catch (err) {
     // Every backend is unavailable — read the message's SHAPE instead of blindly
     // researching: short casual messages get a direct reply; anything question-like
-    // still defaults to research (the choice that can never under-answer).
+    // still defaults to research (the choice that can never under-answer), and with
+    // the gavel up an ambiguous question defaults to its TRIAL.
     const s = query.toLowerCase().trim();
     const words = s.split(/\s+/).filter(Boolean);
     const casual =
       words.length <= 3 ||
       /^(hi|hey|hello|thanks|thank you|ok|okay|cool|nice|great|good|bye|yo|sup)\b/.test(s) ||
       (/^(make|tell|say|write|draw)\b/.test(s) && words.length <= 5);
+    if (casual) {
+      return {
+        intent: "chat",
+        trial: false,
+        how: `the router model is unavailable right now (${err instanceof Error ? err.message.slice(0, 60) : "error"}), so I read the message's shape myself: short and conversational — replying directly`,
+        raw: "",
+      };
+    }
+    if (court === "trial-fallback") {
+      return {
+        intent: "research",
+        trial: true,
+        how: `the router model is unavailable right now (${err instanceof Error ? err.message.slice(0, 60) : "error"}), but this reads like a real claim and court mode is on — straight to trial`,
+        raw: "",
+      };
+    }
     return {
-      intent: casual ? "chat" : "research",
-      how: `the router model is unavailable right now (${err instanceof Error ? err.message.slice(0, 60) : "error"}), so I read the message's shape myself: ${
-        casual ? "short and conversational — replying directly" : "it reads like a real question — deep research, the choice that cannot under-answer"
-      }${["deep", "exhaustive", "unlimited"].includes(preset) ? ` (your "${preset}" mode still applies only to real research questions)` : ""}`,
+      intent: "research",
+      trial: false,
+      how: `the router model is unavailable right now (${err instanceof Error ? err.message.slice(0, 60) : "error"}), so I read the message's shape myself: it reads like a real question — deep research, the choice that cannot under-answer${["deep", "exhaustive", "unlimited"].includes(preset) ? ` (your "${preset}" mode still applies only to real research questions)` : ""}`,
       raw: "",
     };
   }
@@ -739,21 +771,44 @@ async function maybePinFallbackNote(ctx: Ctx, res: LlmResult): Promise<string> {
   return `${pinLabel} was rate-limited — ${served} answered`;
 }
 
+/** v2.9 VERDICT RECALL — the full court record of a trial that already ran,
+ *  formatted for the chat model so "what is the court opinion" / "what did the
+ *  jury say" is answered from the actual verdict instead of re-trying the case
+ *  or researching the literal words. */
+function courtRecallText(recall: { query: string; verdict: CourtVerdict }): string {
+  const v = recall.verdict;
+  const jurors = (v.jurors ?? [])
+    .slice(0, 12)
+    .map((j) => `- ${j.name} (${j.lens}): ${j.vote} — ${String(j.reason || "").slice(0, 140)}`)
+    .join("\n");
+  return `THE COURT TRIAL THAT ALREADY RAN IN THIS THREAD — the user is asking about it (their question may use words like "the court", "the verdict", "the jury", "the judge"):
+
+Charge that was on trial: "${v.charge}"
+Final verdict: ${v.verdict} — the jury split ${v.guilty} guilty / ${v.notGuilty} not guilty${v.quick ? " (quick trial: 6 jurors)" : ""}
+The judge's summary: ${v.judgeSummary}
+${v.chargesStuck?.length ? `\nCharges that stuck:\n${v.chargesStuck.map((c) => `- ${c}`).join("\n")}\n` : ""}${v.defenseWins?.length ? `What the defense won:\n${v.defenseWins.map((c) => `- ${c}`).join("\n")}\n` : ""}${v.conditions?.length ? `The judge's conditions (what to change before trying again):\n${v.conditions.map((c) => `- ${c}`).join("\n")}\n` : ""}${jurors ? `Jury votes:\n${jurors}\n` : ""}
+Answer the user's question FROM THIS RECORD ONLY. Report the verdict, the split, the judge's reasoning and the juror positions exactly as recorded — never invent proceedings, votes or arguments that are not here. If the record does not cover what they asked, say so plainly. Do NOT start a new trial and do NOT suggest a research run for this.`;
+}
+
 /** CHAT LANE — direct conversational reply, no search, no report structure.
  *  Self-knowledge questions (engines/process/models/capabilities) get the grounded
  *  SELF_KNOWLEDGE spec injected into the prompt, so the answer is accurate even
- *  though the model has never seen the codebase. */
+ *  though the model has never seen the codebase. With courtRecall, the reply is
+ *  answered from the trial record of a previous turn in this thread instead. */
 async function runChatLane(
   ctx: Ctx,
   job: { id: string; query: string },
-  threadContext: string
+  threadContext: string,
+  courtRecall?: { query: string; verdict: CourtVerdict }
 ): Promise<void> {
   const selfTopic = selfKnowledgeTopic(job.query) ?? (capabilityQuestion(job.query) ? ("capabilities" as SelfTopic) : null);
   await updateJob(ctx.jobId, { status: "planning", stage: "Thinking…", progress: 40, startedAt: new Date() });
   await ctx.emit(
     "info",
     "Chat mode — no research needed for this",
-    selfTopic
+    courtRecall
+      ? `You asked about the trial that already ran in this thread — I am recalling the verdict (${courtRecall.verdict.verdict}, ${courtRecall.verdict.guilty}–${courtRecall.verdict.notGuilty}) from the court record instead of re-trying a concluded case.`
+      : selfTopic
       ? `This asks about my own ${selfTopicWord(selfTopic)} — I know that from my configuration, so I am answering directly from my product spec instead of launching the research pipeline.`
       : "This message reads as conversation (greeting / small talk / about DigDeep), so I am replying directly instead of launching the research pipeline. Ask any real question and I will dig deep."
   );
@@ -769,7 +824,7 @@ async function runChatLane(
     // being written instead of staring at a spinner. Fast-fail opts: chat must never ride
     // minutes of throttling; the built-in script below catches total exhaustion.
     const res = await ctx.llmLive(
-      [{ role: "user", content: chatPrompt(job.query, threadContext ? threadContext.slice(0, 1200) : "", selfTopic) }],
+      [{ role: "user", content: chatPrompt(job.query, threadContext ? threadContext.slice(0, 1200) : "", selfTopic, courtRecall ? courtRecallText(courtRecall) : undefined) }],
       "chat-reply",
       "Thinking about your message",
       { system: CHAT_SYS, streamTo: sec.id, fast: { patient: false, timeoutMs: 30_000 } }
@@ -800,7 +855,7 @@ async function runChatLane(
     status: "completed", stage: "Completed", progress: 100, reportMd: reply,
     stats: JSON.stringify(stats), completedAt: new Date(),
   });
-  await ctx.emit("done", "Replied", `Conversational answer in ${Math.round(durationMs / 1000)}s — no sources fetched, no research run${fallback ? " (built-in script — models were throttled)" : ""}${pinNote ? ` (${pinNote})` : ""}`, replyModel, stats);
+  await ctx.emit("done", "Replied", `Conversational answer in ${Math.round(durationMs / 1000)}s — no sources fetched, no research run${courtRecall ? " — recalled from the court record of this thread's trial" : ""}${fallback ? " (built-in script — models were throttled)" : ""}${pinNote ? ` (${pinNote})` : ""}`, replyModel, stats);
 }
 
 /** QUICK LANE — one focused search pass + a concise cited answer (Perplexity quick answer). */
@@ -1161,14 +1216,20 @@ export async function runJob(jobId: string) {
     let threadMemory = "";
     let prevQuery = "";
     let prevReportMd = "";
+    // v2.9 court-routing state: the thread's most recent trial (for verdict
+    // recall), the recall handed to the chat lane, and the "gavel stays down"
+    // override for messages that are not claims.
+    let lastCourt: { query: string; verdict: CourtVerdict } | null = null;
+    let courtRecall: { query: string; verdict: CourtVerdict } | undefined;
+    let noTrial = false;
     if (job.threadId) {
-      let hist: { query: string; mode: string; reportMd: string | null }[] = [];
+      let hist: { query: string; mode: string; reportMd: string | null; stats: string | null }[] = [];
       try {
         hist = await db.researchJob.findMany({
           where: { threadId: job.threadId, status: "completed", id: { not: job.id }, reportMd: { not: null } },
           orderBy: { createdAt: "desc" },
           take: 6,
-          select: { query: true, mode: true, reportMd: true },
+          select: { query: true, mode: true, reportMd: true, stats: true },
         });
       } catch { hist = []; }
       const turns = [...hist].reverse(); // oldest → newest — the conversation reads in order
@@ -1187,6 +1248,19 @@ export async function runJob(jobId: string) {
         recentTurns = threadMemory.slice(0, 900);
         prevQuery = last.query;
         prevReportMd = last.reportMd ?? "";
+        // v2.9 VERDICT RECALL: find the most recent turn in this thread that ran
+        // a court trial (its persisted stats carry the full verdict record) —
+        // "what is the court opinion" recalls THIS, instead of re-trying the case.
+        for (let i = turns.length - 1; i >= 0; i--) {
+          if (!turns[i].stats) continue;
+          try {
+            const st = JSON.parse(turns[i].stats!) as { court?: CourtVerdict };
+            if (st?.court && typeof st.court.verdict === "string" && st.court.charge) {
+              lastCourt = { query: turns[i].query, verdict: st.court };
+              break;
+            }
+          } catch { /* not JSON — skip this turn */ }
+        }
       }
     }
 
@@ -1202,11 +1276,15 @@ export async function runJob(jobId: string) {
     // ---------- STAGE 0: UNDERSTAND FIRST, THEN ROUTE (chat vs quick answer vs deep research) ----------
     // The selected mode (quick…unlimited) sets HOW DEEP real questions get researched —
     // it must NEVER force research onto conversational or capability questions.
-    // v2.7: that guard now includes COURT MODE — a greeting or capability question with
+    // v2.7: that guard includes COURT MODE — a greeting or capability question with
     // the gavel on still gets a direct reply; "hi" must never think for 40 minutes.
-    // Real propositions skip the classifier by design (the user asked for a trial),
-    // but a follow-up proposition is RESOLVED against the conversation memory first,
-    // so "what is the court opinion" tries the thread's actual topic.
+    // v2.9 CHAT-WITH-COURT: the gavel being up no longer makes EVERY message a trial.
+    // A question about a trial that already ran recalls its verdict from the record;
+    // a clear claim shape goes straight to court; everything else gets the same
+    // understanding-first routing as court-off messages (court-aware: the classifier
+    // can still send a genuine proposition to trial). Follow-up propositions are
+    // RESOLVED against the conversation memory first, so "and is that actually true"
+    // tries the thread's actual topic.
     // v2.5.0: on a resumed run (checkpoint exists) routing already happened — the
     // chat/quick lanes complete inside a single slice, so a checkpoint means research.
     let plan: ResearchPlan | null = null;
@@ -1249,19 +1327,67 @@ export async function runJob(jobId: string) {
           "Give me a real claim or question and the gavel comes down: a prosecutor, a defense, a jury of 12 and a judge, over cited evidence."
         );
       }
-    } else if (job.court) {
-      intent = "research";
-      // the proposition is read AGAINST the conversation before the gavel — a
-      // follow-up like "what is the court opinion" tries the thread's topic
-      q = await resolveFollowUp(ctx, job.query, threadMemory, true);
-      routeWhy = "court mode — you asked for a trial, so this proposition gets a prosecutor, a defense, a jury of 12 and a judge";
+    } else if (courtMetaQuestion(job.query) && lastCourt) {
+      // v2.9 VERDICT RECALL — a question about the trial that already ran gets
+      // the verdict from the record; a concluded case is never re-tried just
+      // because you asked what the judge said.
+      intent = "chat";
+      courtRecall = lastCourt;
+      routeWhy = `a question about the trial that already ran in this thread — recalling its verdict (${lastCourt.verdict.verdict}, ${lastCourt.verdict.guilty}–${lastCourt.verdict.notGuilty}) instead of re-trying a concluded case`;
+      const tid = `route-${jobId}`;
+      await ctx.emit("think", "Reading your message against the trial in this thread", undefined, undefined, { thoughtId: tid, started: true });
       await ctx.emit(
-        "court",
-        "Court is in session",
-        `The proposition on trial: “${q.slice(0, 240)}”${q !== job.query ? " — your words, read in the context of this conversation" : ""}. Evidence is gathered first by the research engine (both for and against), then the prosecution and the defense build their cases from it, a jury of 12 independent personas votes, and the judge reads the verdict — with what to change before trying again.`,
+        "think",
+        "Reading your message against the trial in this thread",
+        `Reading your message: “${job.query.slice(0, 200)}”. This asks about the trial this thread already ran — the one that put “${lastCourt.verdict.charge.slice(0, 140)}” on trial and returned ${lastCourt.verdict.verdict} (${lastCourt.verdict.guilty}–${lastCourt.verdict.notGuilty}). Nothing needs re-trying: the verdict and the jury's votes are on the record, so I am recalling them directly.`,
         undefined,
-        { phase: "opening", charge: q.slice(0, 300) }
+        { thoughtId: tid, done: true, model: "instant read — no model call needed" }
       );
+    } else if (job.court) {
+      // v2.9 CHAT-WITH-COURT: the gavel being up must never turn every message
+      // into a trial. Clear claim shapes go straight to court (no classifier —
+      // the user asked for the gavel); everything else gets the SAME
+      // understanding-first routing as court-off messages, court-aware: the
+      // classifier can still send a genuine proposition to trial.
+      const worth = courtTrialWorthiness(job.query);
+      let toTrial = false;
+      let read = "";
+      if (worth === "trial") {
+        toTrial = true; // unambiguous claim shape — the trial the user asked for, zero extra latency
+      } else {
+        const cls = await classifyIntent(ctx, job.query, recentTurns, job.preset, worth === "info" ? "no-trial" : "trial-fallback");
+        toTrial = cls.trial;
+        read = cls.how;
+        if (!toTrial) {
+          intent = cls.intent;
+          if (intent !== "chat") q = await resolveFollowUp(ctx, job.query, threadMemory, false);
+          noTrial = true; // the gavel stays down for this message
+          routeWhy =
+            read +
+            (intent === "chat"
+              ? ". Court mode is on, but this is conversation, not a claim — the gavel stays down for it. Give me a real claim and the full trial fires"
+              : intent === "quick"
+              ? ". Court mode is on, but a simple lookup is not a claim to adjudicate — no trial for this one. Give me a real claim and the gavel comes down"
+              : ". Court mode is on, but this is an information question, not a claim — researching it normally. Give me a proposition and the gavel comes down");
+        }
+      }
+      if (toTrial) {
+        intent = "research";
+        // the proposition is read AGAINST the conversation before the gavel — a
+        // follow-up claim like "and is that actually true" tries the thread's topic
+        q = await resolveFollowUp(ctx, job.query, threadMemory, true);
+        routeWhy =
+          worth === "trial"
+            ? "court mode — this reads as a claim, so it gets a prosecutor, a defense, a jury of 12 and a judge"
+            : read || "court mode — on the router's read this is a real proposition: it gets a prosecutor, a defense, a jury of 12 and a judge";
+        await ctx.emit(
+          "court",
+          "Court is in session",
+          `The proposition on trial: “${q.slice(0, 240)}”${q !== job.query ? " — your words, read in the context of this conversation" : ""}. Evidence is gathered first by the research engine (both for and against), then the prosecution and the defense build their cases from it, a jury of 12 independent personas votes, and the judge reads the verdict — with what to change before trying again.`,
+          undefined,
+          { phase: "opening", charge: q.slice(0, 300) }
+        );
+      }
     } else {
       const cls = await classifyIntent(ctx, job.query, recentTurns, job.preset);
       intent = cls.intent;
@@ -1273,7 +1399,7 @@ export async function runJob(jobId: string) {
     await updateJob(jobId, { mode: intent });
     if (intent === "chat") {
       await ctx.emit("info", "Routed to: chat", routeWhy);
-      await runChatLane(ctx, job, threadContext);
+      await runChatLane(ctx, job, threadContext, courtRecall);
       return;
     }
     if (intent === "quick") {
@@ -1285,9 +1411,15 @@ export async function runJob(jobId: string) {
     await updateJob(jobId, { status: "planning", stage: "Understanding the question", startedAt: new Date(), progress: 4 });
     await ctx.emit(
       "info",
-      job.court ? "Routed to: the court" : "Routed to: deep research",
+      job.court && !noTrial ? "Routed to: the court" : "Routed to: deep research",
       `${routeWhy}. Mode: ${unlimited ? "UNLIMITED — no caps on aspects, rounds, sources or time; research continues until coverage is genuinely sufficient" : `breadth ${job.breadth} · depth ${job.depth} · max ${job.maxSources} sources · budget ${job.maxMinutes} min`} · route: ${routeInfoFor(job.modelPref).route}`
     );
+
+    // v2.9: when court mode is on but this message is not a claim, the gavel
+    // stays down for it — the in-memory flag goes false so the plan, the debate
+    // stage and the report all treat this as a normal research run (the DB row
+    // keeps the user's toggle for the thread's history).
+    if (noTrial) job = { ...job, court: false };
 
     // ---------- STAGE 1: PLAN ----------
     // Guard: a real research question never researches the literal text of a question
@@ -1306,7 +1438,7 @@ export async function runJob(jobId: string) {
           : "This message asks about my own abilities rather than a research topic, so I am answering it directly instead of researching the literal text. Nothing is lost — give me a real topic and the full pipeline fires."
       );
       await updateJob(jobId, { mode: "chat" });
-      await runChatLane(ctx, job, threadContext);
+      await runChatLane(ctx, job, threadContext, courtRecall);
       return;
     }
     // v2.7 CONVERSATION CONTINUITY: from here on the engine works on the RESOLVED

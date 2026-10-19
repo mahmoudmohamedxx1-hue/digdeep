@@ -176,5 +176,89 @@ for (const { q, want } of followUps) {
   console.log(`${ok ? "PASS" : "FAIL"}  ${JSON.stringify(q)}  →  ${got}  (want ${want})`);
 }
 
+// ---- v2.9 court routing: chatting with the gavel up must stay chatting ----
+// worthiness: with court ON, is a message a claim (→ trial), an info/conversation
+// request (→ normal lanes, never a trial), or ambiguous (→ court-aware classifier)?
+import { courtMetaQuestion, courtTrialWorthiness } from "../src/lib/research/intent-heuristics";
+const worth: { q: string; want: "trial" | "info" | null }[] = [
+  // ---- the complaint: simple chat with court ON must NOT go to trial ----
+  { q: "what is 2+2", want: "info" },
+  { q: "what is the capital of france", want: "info" },
+  { q: "who is elon musk", want: "info" },
+  { q: "tell me a joke", want: "info" },
+  { q: "write me a poem about the sea", want: "info" },
+  { q: "what time is it", want: "info" },
+  { q: "translate hello to french", want: "info" },
+  { q: "how do i screenshot on windows", want: "info" },
+  { q: "tell me about quantum computing", want: "info" },
+  { q: "explain how photosynthesis works", want: "info" },
+  { q: "how does bitcoin work", want: "info" },
+  { q: "what is python programming language", want: "info" },
+  { q: "recommend me a good laptop", want: "info" },
+  { q: "is it going to rain today", want: "info" }, // here-and-now, not a claim (falls to classifier)
+  { q: "is this app free", want: null }, // addressed to the assistant — classifier decides
+  { q: "can you tell me about ancient rome", want: "info" },
+  { q: "do you know what time it is", want: "info" },
+  { q: "summarize the article i sent", want: "info" },
+  // ---- real claims DO go to trial with the gavel up ----
+  { q: "is minimax m2.7 better than deepseek v4", want: "trial" },
+  { q: "is it true that the earth is flat", want: "trial" },
+  { q: "do you think ai will replace programmers", want: "trial" },
+  { q: "quantum computing is overhyped", want: "trial" },
+  { q: "react vs vue for large apps", want: "trial" },
+  { q: "which is better for beginners python or rust", want: "trial" },
+  { q: "should social media be banned for kids", want: "trial" },
+  { q: "prove that the great pyramid was built by paid workers", want: "trial" },
+  { q: "i think electric cars are worse for the environment", want: "trial" },
+  { q: "my friend says fasting is bad for you what do you think", want: "trial" },
+  { q: "everyone knows apple is a scam", want: "trial" },
+  { q: "does the keto diet actually work", want: "trial" },
+  { q: "is nuclear energy the future", want: "trial" },
+  { q: "are we alone in the universe", want: "trial" },
+  { q: "cold showers are overrated", want: "trial" },
+  // ---- ambiguous → the court-aware classifier decides ----
+  { q: "the earth is flat", want: null }, // statement asserting a claim — classifier reads it
+  { q: "artificial intelligence", want: null },
+  { q: "bitcoin", want: null },
+];
+console.log("\n--- v2.9 court trial-worthiness (gavel up: claim vs chat) ---");
+for (const { q, want } of worth) {
+  const got = courtTrialWorthiness(q);
+  const ok = got === want;
+  if (!ok) fails++;
+  console.log(`${ok ? "PASS" : "FAIL"}  ${JSON.stringify(q)}  →  ${got ?? "(classifier)"}  (want ${want ?? "(classifier)"})`);
+}
+
+// ---- v2.9 verdict recall: questions ABOUT the trial that already ran ----
+const meta: { q: string; want: boolean }[] = [
+  // recall the verdict — never re-try a concluded case
+  { q: "what is the court opinion", want: true },
+  { q: "what is the court's opinion", want: true },
+  { q: "what was the court's verdict", want: true },
+  { q: "what did the jury say", want: true },
+  { q: "why did the judge rule guilty", want: true },
+  { q: "what was the verdict", want: true },
+  { q: "summarize the trial", want: true },
+  { q: "explain the verdict", want: true },
+  { q: "what did the jurors vote", want: true },
+  { q: "show me the judge's summary", want: true },
+  // real-world courts and trials with their own topic — NOT our trial
+  { q: "what is the supreme court opinion on abortion", want: false },
+  { q: "what did the international court say about the war", want: false },
+  { q: "summarize the trial of socrates", want: false },
+  { q: "how did the defense play in the match yesterday", want: false },
+  { q: "what did the jury say about the chauvin trial outcome", want: false }, // long, own topic
+  // claims about the world that merely mention trials/judges
+  { q: "is the jury system fair", want: false }, // worthiness: trial (a claim) — meta must not catch it
+  { q: "are judges biased against defendants", want: false },
+];
+console.log("\n--- v2.9 court meta questions (verdict recall gate) ---");
+for (const { q, want } of meta) {
+  const got = courtMetaQuestion(q);
+  const ok = got === want;
+  if (!ok) fails++;
+  console.log(`${ok ? "PASS" : "FAIL"}  ${JSON.stringify(q)}  →  ${got}  (want ${want})`);
+}
+
 console.log(fails === 0 ? "\nALL PASS" : `\n${fails} FAILURES`);
 process.exit(fails === 0 ? 0 : 1);

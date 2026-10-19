@@ -14,7 +14,10 @@ export const RESEARCHER_SYS =
  *  ------------------------------------------------------------------ */
 export type Intent = "chat" | "quick" | "research";
 
-export function classifyPrompt(message: string, recentTurns: string, preset?: string): string {
+export function classifyPrompt(message: string, recentTurns: string, preset?: string, court?: "trial-fallback" | "no-trial"): string {
+  const courtBlock = court
+    ? `\n5. COURT MODE IS ON: a claim, proposition, or genuinely debatable question gets a full trial — prosecution vs defense, a jury of 12, a judge's verdict, over cited evidence. Route to LANE: trial ONLY when the message is a claim or debatable proposition someone could argue FOR or AGAINST ("is X overhyped", "X vs Y", "is it true that X", "should X be legal", "do you think X", "my friend says X", "X is a scam"). Conversation, greetings, simple factual lookups ("what is X", "who won Y"), how-to's, info requests ("tell me about X"), math, translations and open-ended research topics ("how does X work", "compare the state of X") are NOT claims — route them to the normal lanes (chat/quick/research); the gavel stays down for those.\n`
+    : "";
   return `You are the intent router for DigDeep, a deep-research assistant. Work the way a careful assistant reads a new message: understand it FIRST, then decide what to do.
 
 The user's latest message:
@@ -28,14 +31,14 @@ Read it in this order:
 2. A "can you …?" question about the ASSISTANT'S OWN ABILITIES with NO topic ("can you make a deep research?", "are you able to run a research?") — the user is asking WHETHER it can be done → ALWAYS chat (answer "yes — give me a topic"). The same phrasing WITH a real topic ("can you research the best electric cars?") IS a genuine request → research.
 3. One simple factual question answerable from 2-4 sources in a single pass (definitions, "what is X", "who won Y", lookups)? → quick.
 4. Anything needing multi-source, multi-angle investigation — comparisons, analysis, "why/how", state of a field, open-ended topics → research.
-
+${courtBlock}
 CRITICAL: A selected depth mode (like "unlimited") only sets HOW DEEP real questions go — it never forces research onto conversational or capability questions. Unsure between quick and research → research. Clearly not a real question about the world → chat.
 
 Respond with EXACTLY these four lines, nothing else:
 RESTATE: <one short sentence — what the message literally says>
 INTENT: <one short sentence — what the user actually wants to happen>
 STRATEGY: <one short sentence — the best way to respond, and why>
-LANE: <chat | quick | research>`;
+LANE: ${court ? "<chat | quick | research | trial>" : "<chat | quick | research>"}`;
 }
 
 /** ------------------------------------------------------------------
@@ -133,8 +136,19 @@ const SELF_TOPIC_INSTRUCTIONS: Record<SelfTopic, string> = {
     "one or two sentences on what a run looks like, then invite a topic (once).",
 };
 
-export function chatPrompt(message: string, prevTurnSummary: string, selfTopic?: SelfTopic | null): string {
+export function chatPrompt(message: string, prevTurnSummary: string, selfTopic?: SelfTopic | null, courtRecall?: string): string {
   const ctx = prevTurnSummary ? `Context — the user's recent conversation in this thread:\n"""\n${prevTurnSummary.slice(0, 1200)}\n"""\n\n` : "";
+  // v2.9 verdict recall: the user is asking about the trial that already ran —
+  // answer from the court record, never re-try the case
+  if (courtRecall) {
+    return `${ctx}The user says:
+
+"""
+${message.slice(0, 1500)}
+"""
+
+${courtRecall}`;
+  }
   if (selfTopic) {
     return `${ctx}The user says:
 

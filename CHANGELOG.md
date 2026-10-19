@@ -1,5 +1,36 @@
 # Changelog
 
+## v2.9.0 — chatting with the gavel up stays chatting (2026-10-19)
+
+- **"Chatting while court is activated is really bad."** Root cause: with Court
+  mode on, the router sent EVERY message that wasn't a greeting to a full trial —
+  "what is 2+2", "tell me a joke", "who is Elon Musk" all launched prosecutor +
+  defense + jury + judge. The gavel now respects what a message actually is:
+  - **Claims go to trial, instantly.** Clear claim/debate shapes — "is X better
+    than Y", "X vs Y", "is it true that…", "should X be banned", "do you think…",
+    "X is overhyped", first-person opinions, hearsay ("my friend says…") — skip
+    the classifier and go straight to court (zero added latency).
+  - **Everything else gets the normal lanes.** Simple lookups, info requests,
+    how-to's, jokes, translations and open-ended topics run through the same
+    understanding-first router as court-off messages — now court-aware: it can
+    still send a genuine proposition to trial on its own read, and says so when
+    it doesn't ("Court mode is on, but this is conversation, not a claim — the
+    gavel stays down for it"). Verified live: joke → 2s chat; "what is 2+2" →
+    17s quick answer with 3 cited sources.
+  - **A concluded case is never re-tried.** "What is the court opinion",
+    "what did the jury say", "why did the judge rule guilty" used to launch a
+    brand-new trial of the thread's topic; now they recall the actual verdict
+    from the thread's court record (charge, jury split, every juror's vote and
+    reason, the judge's summary, charges that stuck, conditions) — answered in
+    chat mode in ~3s, from the record, never invented. Real-world courts
+    ("supreme court opinion on abortion", "trial of Socrates") never trigger
+    the recall.
+  - **Throttle-safe.** If the router model is unavailable and the gavel is up,
+    an ambiguous question still gets its trial; a clearly-not-a-claim message
+    still researches normally — and the in-memory court flag is dropped for
+    no-trial runs so the plan, the debate stage and the report all treat it as
+    ordinary research.
+
 ## v2.8.1 — a pinned model stays your model (2026-10-19)
 
 - **"I picked MiniMax-M2.7, but OpenAI answered."** Not a bug — the designed

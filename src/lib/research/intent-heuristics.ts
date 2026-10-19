@@ -163,6 +163,119 @@ export function followUpishHeuristic(raw: string): boolean {
   return false;
 }
 
+/* ==================================================================
+ *  COURT MODE ROUTING (v2.9) — "chatting with the gavel up"
+ *  Court mode ON must never mean "every message becomes a trial".
+ *  Only genuine claims / propositions / debatable questions go to
+ *  court; conversation, simple lookups and info requests keep the
+ *  normal lanes, and questions ABOUT a trial that already ran get
+ *  its verdict recalled instead of re-trying a concluded case.
+ * ================================================================== */
+
+/** Real-world courts/cases that must never be mistaken for DigDeep's own trial. */
+const REAL_WORLD_COURT =
+  /(supreme|international|criminal|civil|family|federal|district|high|constitutional|european|world|local|municipal|appeals?|small claims|sharia|juvenile|labor|labour|tax|military|state|county|provincial|national)\s+courts?\b/;
+
+/**
+ * Is this message asking ABOUT the trial DigDeep ran (its verdict, the jury's
+ * votes, the judge's reasoning) rather than putting a new proposition on trial?
+ * "what is the court opinion", "what did the jury say", "why did the judge rule
+ * guilty", "summarize the trial" — a concluded case is never re-tried just
+ * because you asked what the judge said.
+ *
+ * Deliberately conservative: short (≤9 words), question-shaped, and only
+ * DigDeep's distinctive trial machinery (court/verdict/jury/judge/gavel).
+ * Real-world courts ("supreme court opinion on X", "trial of socrates") and
+ * longer messages with a topic of their own never match — those are real
+ * questions and route normally. The engine only recalls when a court turn
+ * actually exists in the thread.
+ */
+export function courtMetaQuestion(raw: string): boolean {
+  const s = normalize(raw);
+  if (!s) return false;
+  // real-world courts/cases that must never be mistaken for DigDeep's own trial
+  if (REAL_WORLD_COURT.test(s)) return false;
+  // "the trial of socrates", "court in paris" — a real-world case, not our trial
+  if (/\b(courts?|trials?)\s+(of|in|against|vs)\b/.test(s)) return false;
+  // worldly CONCEPTS built from trial words — "the jury system", "jury duty",
+  // "the jury is still out on X" — claims about the world, not our trial
+  if (/\b(jury|judge|court|verdict|trial)s?\s+(system|systems|duty|duties|selection|process|reform|law|laws|precedent)\b/.test(s)) return false;
+  if (/\bstill out\b/.test(s)) return false;
+  const words = s.split(/\s+/).filter(Boolean);
+  if (words.length > 9) return false;
+  // "the court's opinion/verdict/ruling", "the trial's outcome" (normalize turns
+  // "court's" into "court s")
+  if (/\b(court s|courts|court|trial s|trials|trial)\s+(opinion|verdict|view|ruling|decision|say|said|says|think|thinks|found|finding|findings|conclusion|concluded|summary|outcome|result)\b/.test(s)) return true;
+  // "what was the verdict", "what did the jury say", "why did the judge rule guilty"
+  if (
+    /^(what|why|how|when|who|is|was|did|does|do|can|could|tell me|explain|summarize|summarise|show me|give me)\b/.test(s) &&
+    /(\bverdict\b|\bthe jury\b|\bjurors?\b|\bthe judge\b|\bgavel\b|\bthe trials?\b)/.test(s)
+  ) return true;
+  return false;
+}
+
+/**
+ * With court mode ON, is this message SHAPED like a claim / proposition /
+ * debate (→ trial), an information or conversation request (→ never a trial),
+ * or ambiguous (→ the court-aware classifier decides)?
+ *
+ * "trial" answers must be confident: the fast path skips the classifier
+ * entirely, so a simple question misread as a claim would go straight to a
+ * full trial. "info" answers only block the throttle-fallback from sending an
+ * ambiguous-but-clearly-not-a-claim message to court; the classifier can still
+ * route a genuinely debatable message to trial on its own read.
+ */
+export function courtTrialWorthiness(raw: string): "trial" | "info" | null {
+  const s = normalize(raw);
+  if (!s) return "info";
+  const words = s.split(/\s+/).filter(Boolean);
+
+  // ---- clear CLAIM / DEBATE shapes → trial ----
+  // opinion solicitation
+  if (/\b(do you (think|agree|believe|find)|in your opinion|what do you think)\b/.test(s)) return "trial";
+  // truth-testing openers
+  if (/^(is|are) (it|this|that) (true|right|fair|safe|legal|real|possible|correct|wise|smart)\b/.test(s)) return "trial";
+  if (/^is it true that\b/.test(s)) return "trial";
+  // argument verbs
+  if (/^(prove|disprove|refute|defend|argue|debate|settle|adjudicate|make (the )?case)\b/.test(s)) return "trial";
+  // first-person opinion statements
+  if (/^(i (think|believe|feel|guess|reckon|bet|say)|in my opinion|imo|imho|honestly i|to be honest i|personally i)\b/.test(s)) return "trial";
+  // hearsay / received claims
+  if (/\b(everyone knows|everybody knows|people say|they say|my friend says|my friend thinks|experts say|scientists say|studies show|it is said)\b/.test(s)) return "trial";
+  // charged claim vocabulary
+  if (/\b(overrated|underrated|overhyped|underhyped|scam|hoax|conspiracy|myth|better (for|than)|worse (for|than)|superior to|inferior to|waste of|no future)\b/.test(s)) return "trial";
+  // head-to-head comparisons
+  if (words.length >= 3 && /(^|\s)(vs|versus)(\s|$)/.test(s)) return "trial";
+  if (/^which is (better|worse|best|worst|safer|faster|smarter|cheaper|more|less)\b/.test(s)) return "trial";
+  // prescriptive claims: "should we / should companies / must the government…"
+  if (/\b(should|shouldnt|must|mustnt)\s+(we|i|you|they|people|anyone|the|it|this|companies|governments|schools|developers|kids|students|beginners|users)\b/.test(s)) return "trial";
+  // "should X be banned/legal/taught…" and messages that OPEN with should/must
+  // ("should i learn python or rust") — prescriptive asks, trial-shaped
+  if (/\b(should|shouldn t|shouldnt|must|mustn t|mustnt)\s+[\w\s]{1,40}\bbe\s+(banned|legal|illegal|allowed|taught|regulated|stopped|built|adopted|trusted|cancelled|canceled|mandatory|free|paid|taxed|subsidized)\b/.test(s)) return "trial";
+  if (/^(should|shouldn t|shouldnt|must|mustn t|mustnt)\b/.test(s)) return "trial";
+  // grand assertions: "X is the future", "X is the past"
+  if (/\bis (the|our|a) (future|past|present)\b/.test(s)) return "trial";
+  // debatable aux-initial question with a real topic — but questions addressed
+  // to the assistant itself ("is this app free", "are you sure") or about the
+  // here-and-now (weather, time) are NOT claims; those fall through to null
+  const aux = s.match(/^(is|are|was|were|will|would|could|can|does|do|did|has|have|had)\s+([^?]+)$/);
+  if (aux) {
+    const rest = aux[2].trim();
+    const toAssistant = /^(you|u|this|that|it|digdeep|the app)\b/.test(rest);
+    const hereNow = /\b(rain|weather|temperature|time|date|day|today|tonight|tomorrow|my (ip|location|city|battery|phone|wifi))\b/.test(rest);
+    if (hereNow) return "info"; // the here-and-now is never a claim
+    if (!toAssistant && rest.split(/\s+/).length >= 2) return "trial";
+  }
+
+  // ---- clear INFO / CONVERSATION shapes → never a trial ----
+  if (/^(what|who|whos|whose|when|where|why|how many|how much|how old|how tall|how far|how long|how deep|what time|what year|which country|which city|which planet)\b/.test(s)) return "info";
+  if (/^(tell me about|explain|teach me|describe|define|what is|what are|who is|who was|who were|how does|how do|how did|why does|why do|why did|how can i|how to|what do you know about)\b/.test(s)) return "info";
+  if (/^(tell me a|write|make me|make a|make|create|generate|give me|recommend|suggest|list|name|translate|calculate|solve|convert|summarize|summarise|rewrite|reword|fix|improve|review|find me|find|search for|look up|help me|i want to know|i need to know|i am curious about|curious about|can you tell me|do you know|does anyone know)\b/.test(s)) return "info";
+  // creative / entertainment asks
+  if (/\b(joke|poem|poetry|story|song|lyrics|riddle|haiku|limerick|rap|meme)\b/.test(s)) return "info";
+  return null; // ambiguous — the court-aware classifier decides
+}
+
 export function heuristicChatIntent(raw: string): "chat" | null {
   const s = normalize(raw);
   if (!s) return "chat";
