@@ -334,6 +334,7 @@ class Ctx {
         pref: this.pref,
         wantThinking,
         maxTokens,
+        shouldStop: this.shouldStop, // v3.0.2: stop lands inside the ride, not after it
         ...(opts?.patient === false ? { patient: false } : {}),
         ...(opts?.timeoutMs != null ? { timeoutMs: opts.timeoutMs } : {}),
         ...(rideBudget != null ? { maxWaitMs: rideBudget } : {}),
@@ -360,6 +361,22 @@ class Ctx {
     const job = await db.researchJob.findUnique({ where: { id: this.jobId }, select: { cancelRequested: true } });
     return !job || job.cancelRequested;
   }
+
+  /** v3.0.2 CACHED CANCEL PROBE — the stop hooks inside llm.ts (round gates, backend
+   *  attempts, every 2.5s tick of a cooldown sleep) call this; a raw DB query per
+   *  check would hammer Postgres from parallel workers, so the answer is memoized
+   *  for 2.5s and the in-flight promise is shared. A stop click now lands in ≤2.5s
+   *  even mid-throttle-ride (the audit measured 90s+ of 429 loops past the click). */
+  private cancelProbeAt = 0;
+  private cancelProbeVal: Promise<boolean> | null = null;
+  shouldStop = (): Promise<boolean> => {
+    const now = Date.now();
+    if (this.cancelProbeVal == null || now - this.cancelProbeAt > 2_500) {
+      this.cancelProbeAt = now;
+      this.cancelProbeVal = this.isCancelled().catch(() => false);
+    }
+    return this.cancelProbeVal;
+  };
   /** llmLive — llm() with INSTANT visible thinking. The model's reasoning (and, with
    *  streamTo, the answer text itself) is streamed to the activity feed the moment each
    *  token is generated — a "Thinking — <label>" event appears the instant the call
@@ -472,6 +489,7 @@ class Ctx {
               pref: this.pref,
               wantThinking,
               maxTokens: o?.maxTokens,
+              shouldStop: this.shouldStop, // v3.0.2
               ...(opts?.patient === false ? { patient: false } : {}),
               ...(opts?.timeoutMs != null ? { timeoutMs: opts.timeoutMs } : {}),
               ...(rideBudget != null ? { maxWaitMs: rideBudget } : {}),
@@ -2195,7 +2213,7 @@ export async function runJob(jobId: string) {
       try {
         await runNextAspect();
       } catch (err) {
-        if (err instanceof Cancelled) {
+        if (err instanceof Cancelled || (err as { cancelled?: boolean } | null)?.cancelled === true) {
           stopAll = true;
           return;
         }
@@ -4027,7 +4045,9 @@ ${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
       stats
     );
   } catch (err) {
-    if (err instanceof Cancelled) {
+    // v3.0.2: LlmStoppedError (thrown by the stop hooks inside the LLM ride) is a
+    // cancellation, not a failure — same clean path as the engine's own Cancelled.
+    if (err instanceof Cancelled || (err as { cancelled?: boolean } | null)?.cancelled === true) {
       await updateJob(jobId, { status: "cancelled", stage: "Cancelled", completedAt: new Date() }).catch(() => {});
       await db.activityEvent.create({ data: { jobId, type: "info", title: "Research cancelled by user", seq: 9_999_999 } }).catch(() => {});
     } else {

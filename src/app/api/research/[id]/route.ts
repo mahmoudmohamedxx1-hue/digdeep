@@ -79,6 +79,11 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (body.action === "cancel") {
       if (!ACTIVE.includes(job.status)) return NextResponse.json({ error: "Job already finished" }, { status: 400 });
       await db.researchJob.update({ where: { id }, data: { cancelRequested: true, stage: "Stopping…" } });
+      // v3.0.2: the stop is now visible in the feed the moment it is requested —
+      // the engine's stop hooks land it within ~2.5s even mid-throttle-ride
+      await db.activityEvent
+        .create({ data: { jobId: id, type: "info", title: "Stop requested", detail: "Halting now — a call already in flight gets a moment to land, then everything stops.", seq: 9_999_998 } })
+        .catch(() => {});
       return NextResponse.json({ ok: true });
     }
     if (body.action === "retry") {

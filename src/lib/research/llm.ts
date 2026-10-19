@@ -420,6 +420,44 @@ export interface LlmOptions {
   maxWaitMs?: number;
   /** STREAMING: invoked the instant each reasoning/content fragment is generated. */
   onDelta?: (d: StreamDelta) => void;
+  /** v3.0.2 STOP HOOKS: the audit found a stopped trial riding 429 retry loops for
+   *  90s+ because cancelRequested was only checked at STAGE boundaries — never
+   *  inside the patient LLM ride. The engine passes a cached checker (DB hit at
+   *  most once per 2.5s, shared across parallel workers); every round gate,
+   *  backend attempt and cooldown sleep below honors it by throwing
+   *  LlmStoppedError, which the engine maps onto its own Cancelled path. */
+  shouldStop?: () => boolean | Promise<boolean>;
+}
+
+/** thrown the moment a run's cancellation is noticed mid-ride — the engine's
+ *  catch treats it exactly like its own Cancelled (job status → cancelled). */
+export class LlmStoppedError extends Error {
+  readonly cancelled = true;
+  constructor() {
+    super("stopped — the user cancelled this run");
+    this.name = "LlmStoppedError";
+  }
+}
+
+/** gate: throw LlmStoppedError if the engine says the run is cancelled */
+async function stopGate(shouldStop?: () => boolean | Promise<boolean>) {
+  if (shouldStop && (await shouldStop())) throw new LlmStoppedError();
+}
+
+/** a cancellable sleep: waits `ms` in ≤2.5s ticks, checking the stop hook between
+ *  ticks — a 12-minute cooldown rest no longer outranks the user's stop click. */
+async function sleepCancellable(ms: number, shouldStop?: () => boolean | Promise<boolean>) {
+  if (!shouldStop) {
+    await new Promise((r) => setTimeout(r, ms));
+    return;
+  }
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    await stopGate(shouldStop);
+    const left = end - Date.now();
+    await new Promise((r) => setTimeout(r, Math.min(2_500, left)));
+  }
+  await stopGate(shouldStop);
 }
 
 /**
@@ -450,6 +488,7 @@ export async function llmComplete(messages: ChatMsg[], opts: LlmOptions): Promis
   const rideStart = Date.now();
   let lastError = "";
   for (let round = 0; round < maxRounds; round++) {
+    await stopGate(opts.shouldStop); // v3.0.2: a stop click lands in ≤2.5s, not after the ride
     const roundDeadline = round === 0 ? chainDeadline : chainDeadline + 10_000;
     const backends = await orderedBackends(opts.pref ?? "auto", opts.purpose);
     // v2.8.1 STICKY PIN: the pinned model gets the first shot even when its lane is
@@ -462,11 +501,12 @@ export async function llmComplete(messages: ChatMsg[], opts: LlmOptions): Promis
       if (pinBe) {
         const h0 = getHealth(pinBe.id);
         const wait = pinStickyWaitMs(opts.pref, h0.cooldownUntil - Date.now(), fast ? opts.timeoutMs : opts.maxWaitMs);
-        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+        if (wait > 0) await sleepCancellable(wait, opts.shouldStop);
       }
     }
     const errors: string[] = [];
     for (const be of backends) {
+      await stopGate(opts.shouldStop); // v3.0.2: between backend attempts too
       if (Date.now() >= roundDeadline) {
         errors.push(`chain deadline (${opts.timeoutMs}ms) hit — ${be.label} not tried`);
         break;
@@ -554,7 +594,7 @@ export async function llmComplete(messages: ChatMsg[], opts: LlmOptions): Promis
           } else {
             errors.push(`${be.label}: ${h.lastError}`);
           }
-          if (attempt === 0 && attempts > 1) await new Promise((r) => setTimeout(r, 1500));
+          if (attempt === 0 && attempts > 1) await sleepCancellable(1_500, opts.shouldStop);
         }
       }
     }
@@ -562,7 +602,7 @@ export async function llmComplete(messages: ChatMsg[], opts: LlmOptions): Promis
     if (round < maxRounds - 1) {
       if (fast) {
         // v2.4.4: the fast rescue stagger — short wait, then one more pass
-        await new Promise((r) => setTimeout(r, 8_000));
+        await sleepCancellable(8_000, opts.shouldStop);
         continue;
       }
       // ride-budget bound: a budgeted run must not let one step's patience eat the whole clock
@@ -580,7 +620,9 @@ export async function llmComplete(messages: ChatMsg[], opts: LlmOptions): Promis
         capMs
       );
       const waitMs = Math.max(20_000, Math.min(nextCooldown, capMs)) + Math.random() * 7_000;
-      await new Promise((r) => setTimeout(r, waitMs));
+      // v3.0.2: THE big one — this progressive backoff used to be an uncancellable
+      // 20s–12min sleep. A stop click now lands within one 2.5s tick of it.
+      await sleepCancellable(waitMs, opts.shouldStop);
     }
   }
   throw new Error(`All LLM backends failed [${opts.purpose}] after ${maxRounds} rounds. ${lastError}`);
@@ -810,6 +852,7 @@ export async function llmStreamComplete(
   const streamPassDeadline = fastStream ? chainDeadline : Date.now() + Math.min(opts.maxWaitMs ?? 120_000, 150_000);
   const streamPassStart = Date.now();
   const backends = (await orderedBackends(opts.pref ?? "auto", opts.purpose)).filter((e) => e.enabled);
+  await stopGate(opts.shouldStop); // v3.0.2
   // v2.8.1 STICKY PIN (stream pass): a cooling PINNED lane gets a bounded head-start
   // wait — scaled to this pass's own deadline — before the pool is allowed to answer.
   if (backends.length > 0) {
@@ -818,10 +861,11 @@ export async function llmStreamComplete(
     if (pinBe) {
       const h0 = getHealth(pinBe.id);
       const wait = pinStickyWaitMs(opts.pref, h0.cooldownUntil - Date.now(), fastStream ? opts.timeoutMs : Math.min(opts.maxWaitMs ?? 120_000, 150_000));
-      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      if (wait > 0) await sleepCancellable(wait, opts.shouldStop);
     }
   }
   for (const be of backends) {
+    await stopGate(opts.shouldStop); // v3.0.2: stop lands between stream attempts too
     if (Date.now() >= chainDeadline || Date.now() >= streamPassDeadline) break;
     const h = getHealth(be.id);
     if (h.cooldownUntil > Date.now()) continue;

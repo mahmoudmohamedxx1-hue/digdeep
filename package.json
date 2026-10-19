@@ -1,7 +1,7 @@
 {
   "name": "digdeep",
   "version": "3.0.0",
-  "description": "Free, open-source deep research engine — visible thinking, self-auditing citations, self-graded reports. Keyless by default.",
+  "description": "Free, open-source deep research engine \u2014 visible thinking, self-auditing citations, self-graded reports. Keyless by default.",
   "license": "MIT",
   "private": true,
   "scripts": {
@@ -21,7 +21,9 @@
     "db:reset": "prisma migrate reset",
     "pg:start": "bun scripts/pg-dev.ts",
     "pg:stop": "bun scripts/pg-dev.ts stop",
-    "postinstall": "prisma generate && bash scripts/db-migrate-deploy.sh"
+    "postinstall": "prisma generate && bash scripts/db-migrate-deploy.sh",
+    "test:render": "bun scripts/test-court-render.ts",
+    "test:all": "bun scripts/test-routing.ts && bun scripts/test-jury.ts && bun scripts/test-model-pin.ts && bun scripts/test-relevance.ts && bun scripts/test-court-render.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

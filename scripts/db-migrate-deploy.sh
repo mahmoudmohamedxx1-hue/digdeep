@@ -15,6 +15,17 @@
 #     stopped local Postgres during postinstall does not wedge installs.
 set -uo pipefail
 
+# ── stale .env auto-repair (4th occurrence: sandbox resets keep restoring a SQLite
+#    file: URL into .env while schema.prisma is postgresql — every prisma CLI call
+#    then fails with "the URL must start with the protocol postgresql://").
+#    Runs from postinstall AND build, so any install or build heals it.
+if [ -f .env ] && [ -f prisma/schema.prisma ] \
+   && grep -q 'provider *= *"postgresql"' prisma/schema.prisma \
+   && grep -Eq '^DATABASE_URL=("|'"'"')?file:' .env; then
+  echo "db-migrate: stale SQLite DATABASE_URL in .env (schema is postgresql) — repairing to local Postgres"
+  sed -i '1s|^DATABASE_URL=.*|DATABASE_URL=postgresql://postgres:postgres@localhost:5433/digdeep|' .env
+fi
+
 on_vercel() { [ -n "${VERCEL:-}" ] && [ "${VERCEL}" != "0" ]; }
 
 # a non-postgres DATABASE_URL (e.g. a stale file: path exported in the shell)

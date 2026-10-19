@@ -16,7 +16,7 @@ export async function startResearchRun(opts: {
   docs?: AttachedDoc[];
 }): Promise<{ id: string; threadId: string } | { error: string }> {
   const question = opts.query.trim();
-  if (question.length < 3) return { error: "Please enter a research question first" };
+  if (question.length < 2) return { error: "Please enter a research question first" }; // v3.0.2: 2-char floor
 
   const s = useSettings.getState();
   const useTid =

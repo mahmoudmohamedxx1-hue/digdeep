@@ -63,7 +63,7 @@ export default function HomePage() {
 
   const start = async (q?: string, withDocs?: AttachedDoc[]) => {
     const question = (q ?? query).trim();
-    if (question.length < 3) {
+    if (question.length < 2) { // v3.0.2: 2-char floor — "hi" is a greeting the trivial-guard answers instantly
       toast({ title: "Please enter a research question first", variant: "destructive" });
       return;
     }

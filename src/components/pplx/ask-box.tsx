@@ -203,7 +203,9 @@ export function AskBox({
   }, [autoFocus]);
 
   const modeLabel = MODES.find((m) => m.id === mode)?.label ?? "Standard";
-  const canSubmit = value.trim().length >= 3 && !busy;
+  // v3.0.2: 2-char floor — "hi" is a greeting the trivial-guard answers instantly;
+  // the old 3-char floor silently disabled the button with no explanation
+  const canSubmit = value.trim().length >= 2 && !busy;
 
   const setAdvKey = (key: keyof AdvParams, v: number) => {
     const next = { ...adv, [key]: v };

@@ -6,6 +6,7 @@ import { ArrowLeft, ChevronsDown, ChevronsUp, Compass, Eye, Loader2, Plus, Refre
 import { Button } from "@/components/ui/button";
 import { AskBox } from "@/components/pplx/ask-box";
 import { ThreadTurn } from "@/components/pplx/turn";
+import { ThreadErrorBoundary } from "@/components/pplx/thread-error-boundary";
 import { SourcesPanel } from "@/components/pplx/sources-row";
 import { Toc } from "@/components/research/toc";
 import { EvidencePanel } from "@/components/research/evidence-panel";
@@ -640,37 +641,40 @@ export default function ThreadPage() {
             const prevDay = i > 0 && turns[i - 1].job?.createdAt ? dayKey(turns[i - 1].job!.createdAt!) : null;
             const newDay = i > 0 && day != null && day !== prevDay;
             return (
-              <div key={t.jobId}>
-                {newDay && (
-                  <div className="mb-7 flex items-center gap-3" aria-hidden="true">
-                    <span className="h-px flex-1 bg-border/70" />
-                    <span className="text-[10.5px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
-                      {dayLabel(t.job!.createdAt!)}
-                    </span>
-                    <span className="h-px flex-1 bg-border/70" />
-                  </div>
-                )}
-                <ThreadTurn
-                  turn={t}
-                  showThinking={settings.showThinking}
-                  now={now}
-                  elapsedMs={turnElapsed(t)}
-                  onStop={() => void stopJob(t.jobId)}
-                  onRetry={() => void retryJob(t.jobId)}
-                  onFollowUp={(q) => void startFollowUpFrom(q)}
-                  onRerun={(q) => void startFollowUpFrom(q)}
-                  animate={ACTIVE_STATUSES.includes(t.job?.status ?? "") || !t.job}
-                  onSelectClaim={selectClaim}
-                  selectedClaimId={sel?.check.id}
-                />
-              </div>
+              <ThreadErrorBoundary key={t.jobId}>
+                <div>
+                  {newDay && (
+                    <div className="mb-7 flex items-center gap-3" aria-hidden="true">
+                      <span className="h-px flex-1 bg-border/70" />
+                      <span className="text-[10.5px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
+                        {dayLabel(t.job!.createdAt!)}
+                      </span>
+                      <span className="h-px flex-1 bg-border/70" />
+                    </div>
+                  )}
+                  <ThreadTurn
+                    turn={t}
+                    showThinking={settings.showThinking}
+                    now={now}
+                    elapsedMs={turnElapsed(t)}
+                    onStop={() => void stopJob(t.jobId)}
+                    onRetry={() => void retryJob(t.jobId)}
+                    onFollowUp={(q) => void startFollowUpFrom(q)}
+                    onRerun={(q) => void startFollowUpFrom(q)}
+                    animate={ACTIVE_STATUSES.includes(t.job?.status ?? "") || !t.job}
+                    onSelectClaim={selectClaim}
+                    selectedClaimId={sel?.check.id}
+                  />
+                </div>
+              </ThreadErrorBoundary>
             );
           })}
         </div>
 
         {/* right rail (xl) — claim evidence FIRST, then sources, then TOC */}
         {lastTurn && (
-          <aside aria-label="Report tools — claim evidence, sources and outline" className="sticky top-16 hidden h-fit w-[300px] shrink-0 space-y-6 xl:block">
+          <ThreadErrorBoundary>
+            <aside aria-label="Report tools — claim evidence, sources and outline" className="sticky top-16 hidden h-fit w-[300px] shrink-0 space-y-6 xl:block">
             {sel ? (
               <div id="evidence-panel">
                 <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground/80">Claim evidence</p>
@@ -712,7 +716,8 @@ export default function ThreadPage() {
                 {fmtElapsed(turnElapsed(lastTurn))} elapsed · honest ETA in steps
               </p>
             )}
-          </aside>
+            </aside>
+          </ThreadErrorBoundary>
         )}
       </div>
 
