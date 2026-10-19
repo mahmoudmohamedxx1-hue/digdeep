@@ -82,10 +82,17 @@ export interface JobItem {
     /** the trial verdict, when this run was a court run */
     court?: {
       charge: string;
-      verdict: "GUILTY" | "NOT GUILTY";
+      /** v3.0: a tied final ballot is a HUNG JURY — declared, not misread */
+      verdict: "GUILTY" | "NOT GUILTY" | "HUNG JURY";
       guilty: number;
       notGuilty: number;
-      jurors: { name: string; lens: string; vote: "GUILTY" | "NOT GUILTY"; reason: string }[];
+      jurors: { name: string; lens: string; vote: "GUILTY" | "NOT GUILTY"; reason: string; confidence?: number; changedVote?: boolean; deliberationReply?: string }[];
+      /** the blind first ballot, when the jury deliberated */
+      firstBallot?: { guilty: number; notGuilty: number };
+      /** true when a deliberation round ran between the two ballots */
+      deliberated?: boolean;
+      /** the foreman's summing-up of the deliberation */
+      foremanSummary?: string;
       chargesStuck: string[];
       defenseWins: string[];
       conditions: string[];

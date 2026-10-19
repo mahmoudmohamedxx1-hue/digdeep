@@ -45,10 +45,11 @@ import {
   debateSkepticPrompt,
   debateJudgePrompt,
   diffDigestPrompt,
+  msg,
   type Intent,
 } from "./prompts";
 import { PIPELINE_ONE_LINER } from "./self-knowledge";
-import { JURORS, prosecutionPrompt, defensePrompt, rebuttalPrompt, jurorPrompt, judgePrompt, type CourtVerdict } from "./court";
+import { JURORS, prosecutionPrompt, defensePrompt, rebuttalPrompt, jurorPrompt, deliberationPrompt, foremanPrompt, judgePrompt, finalVerdictOf, ballotContested, parseStrictVote, juryQuorate, type CourtVerdict, type JurorBallot, type JurorVote } from "./court";
 import {
   acquireLease,
   releaseLease,
@@ -779,15 +780,19 @@ function courtRecallText(recall: { query: string; verdict: CourtVerdict }): stri
   const v = recall.verdict;
   const jurors = (v.jurors ?? [])
     .slice(0, 12)
-    .map((j) => `- ${j.name} (${j.lens}): ${j.vote} — ${String(j.reason || "").slice(0, 140)}`)
+    .map((j) => `- ${j.name} (${j.lens}): ${j.vote}${j.changedVote ? " (changed their vote in deliberation)" : ""}${j.confidence != null ? `, conviction ${j.confidence}%` : ""} — ${String(j.reason || "").slice(0, 140)}`)
     .join("\n");
+  const changedN = (v.jurors ?? []).filter((j) => j.changedVote).length;
+  const deliberationLine = v.firstBallot
+    ? `\nHow the jury got there: the blind first ballot split ${v.firstBallot.guilty}–${v.firstBallot.notGuilty};${v.deliberated ? ` after deliberating on each other's reasons the final ballot was ${v.guilty}–${v.notGuilty}${changedN ? ` (${changedN} juror${changedN === 1 ? "" : "s"} changed their vote${changedN === 1 ? "" : "s"}${v.foremanSummary ? "" : ""})` : " (no vote moved in deliberation)"}` : ""}.${v.foremanSummary ? `\nThe foreman's summing-up of the deliberation: ${v.foremanSummary}` : ""}\n`
+    : "";
   return `THE COURT TRIAL THAT ALREADY RAN IN THIS THREAD — the user is asking about it (their question may use words like "the court", "the verdict", "the jury", "the judge"):
 
 Charge that was on trial: "${v.charge}"
-Final verdict: ${v.verdict} — the jury split ${v.guilty} guilty / ${v.notGuilty} not guilty${v.quick ? " (quick trial: 6 jurors)" : ""}
-The judge's summary: ${v.judgeSummary}
+Final verdict: ${v.verdict === "HUNG JURY" ? `HUNG JURY — the jury deadlocked ${v.guilty} to ${v.notGuilty} and NO verdict was reached on the proposition` : `${v.verdict} — the jury split ${v.guilty} guilty / ${v.notGuilty} not guilty`}${v.quick ? " (quick trial: 6 jurors)" : ""}
+${deliberationLine}The judge's summary: ${v.judgeSummary}
 ${v.chargesStuck?.length ? `\nCharges that stuck:\n${v.chargesStuck.map((c) => `- ${c}`).join("\n")}\n` : ""}${v.defenseWins?.length ? `What the defense won:\n${v.defenseWins.map((c) => `- ${c}`).join("\n")}\n` : ""}${v.conditions?.length ? `The judge's conditions (what to change before trying again):\n${v.conditions.map((c) => `- ${c}`).join("\n")}\n` : ""}${jurors ? `Jury votes:\n${jurors}\n` : ""}
-Answer the user's question FROM THIS RECORD ONLY. Report the verdict, the split, the judge's reasoning and the juror positions exactly as recorded — never invent proceedings, votes or arguments that are not here. If the record does not cover what they asked, say so plainly. Do NOT start a new trial and do NOT suggest a research run for this.`;
+Answer the user's question FROM THIS RECORD ONLY. Report the verdict, the split, the deliberation, the judge's reasoning and the juror positions exactly as recorded — never invent proceedings, votes or arguments that are not here. If the record does not cover what they asked, say so plainly. Do NOT start a new trial and do NOT suggest a research run for this.`;
 }
 
 /** CHAT LANE — direct conversational reply, no search, no report structure.
@@ -2592,52 +2597,187 @@ export async function runJob(jobId: string) {
         await persist("predraft", { courtProgress }).catch(() => {});
       }
 
-      // C4 — the jury: 12 independent personas (6 on the quick preset, court-skill --quick)
+      // C4 — THE PERFECT JURY (v3.0): 12 independent personas (6 on the quick
+      // preset, court-skill --quick). Two ballots around a real deliberation:
+      // a BLIND first ballot (the honest spread) → the jury sees the split and
+      // argues it, each juror answering the strongest opposing point → a FINAL
+      // ballot they may hold or change, never for free → the foreman sums up.
+      // A tie is a HUNG JURY — declared, never misread as an acquittal.
       const quickCourt = job.preset === "quick";
       const jury = quickCourt ? JURORS.filter((_, i) => i % 2 === 0) : JURORS;
       const rebuttalText = rebuttals.map((r) => `${r.by === "prosecution" ? "PROSECUTION" : "DEFENSE"}: ${r.text}`).join("\n\n") || "(no rebuttals)";
-      // v2.5.0 resume: votes cast in a previous slice are kept — only the missing
-      // jurors vote in this one (the vote spread is the signal; re-voting would skew it)
-      const jurorVotes: { name: string; lens: string; vote: "GUILTY" | "NOT GUILTY"; reason: string }[] = (courtProgress?.jurorVotes as { name: string; lens: string; vote: "GUILTY" | "NOT GUILTY"; reason: string }[]) ?? [];
+      // v3.0 resume: firstBallot is the blind vote; jurorVotes holds the FINAL
+      // votes once deliberation ran (or was consciously skipped). Votes cast in
+      // a previous slice are kept — only the missing jurors vote in this one.
+      let firstBallot: { name: string; lens: string; vote: JurorVote; reason: string; confidence?: number }[] =
+        (courtProgress?.firstBallot as typeof firstBallot) ?? [];
+      let jurorVotes: JurorBallot[] = (courtProgress?.jurorVotes as JurorBallot[]) ?? [];
+      let deliberationRan = courtProgress?.deliberationRan ?? false;
+      let foremanSummary: string | undefined = courtProgress?.foremanSummary;
+      // legacy v2.x checkpoint resume: jurorVotes already hold a complete single
+      // ballot — promote them to the first ballot and proceed straight to the judge
+      if (firstBallot.length === 0 && jurorVotes.length > 0) {
+        firstBallot = jurorVotes.map((v) => ({ name: v.name, lens: v.lens, vote: v.vote, reason: v.reason, confidence: v.confidence }));
+      }
       if (prosecutionBrief && defenseBrief) {
-        await ctx.emit("court", `The jury is deliberating — ${jury.length} independent personas reading the record`, "Each juror sees the same evidence and briefs but votes through their own lens: the accountant, the first-time customer, the competitor, the retired judge, the statistician… The vote spread is the honest signal.", undefined, { phase: "jury", jurors: jury.length });
+        await ctx.emit("court", `The jury convenes — ${jury.length} independent personas take the first ballot`, "Each juror reads the same evidence and briefs but votes blind through their own lens: the accountant, the first-time customer, the competitor, the retired judge, the statistician… The vote spread is the honest signal.", undefined, { phase: "jury", jurors: jury.length });
         // bounded concurrency: 4 jurors vote at a time — 12 simultaneous calls would
         // hammer the keyless chain into cooldown for every other step of the trial
         const JUROR_CONCURRENCY = 4;
+        // one juror's ballot, strictly parsed: a spoiled ballot is NEVER silently
+        // read as an acquittal (v2.x bug) — it gets one strict retry, then no vote
+        const castBallot = async (
+          messages: ChatMsg[],
+          juror: { name: string; lens: string }
+        ): Promise<{ vote: JurorVote; confidence?: number; reason: string; reply?: string } | { error: string }> => {
+          try {
+            let res = await ctx.llm(messages, "court-juror", false, 200, { patient: false, timeoutMs: 45_000 });
+            let parsed = extractJson(res.text);
+            let vote = parseStrictVote(parsed?.vote);
+            if (!vote) {
+              res = await ctx.llm(
+                [...messages, msg("user", "Your previous reply could not be read as a ballot. Reply again with ONLY the JSON object — nothing before it, nothing after it.")],
+                "court-juror", false, 120, { patient: false, timeoutMs: 45_000 }
+              );
+              parsed = extractJson(res.text);
+              vote = parseStrictVote(parsed?.vote);
+            }
+            if (!vote) return { error: "unreadable ballot" };
+            const confNum = Number(parsed?.confidence);
+            const confidence = Number.isFinite(confNum) ? Math.max(0, Math.min(100, Math.round(confNum))) : undefined;
+            const reason = String(parsed?.reason || "").slice(0, 320).trim() || "(no reason given)";
+            const reply = String(parsed?.reply || "").slice(0, 400).trim() || undefined;
+            return { vote, confidence, reason, reply };
+          } catch (err) {
+            return { error: err instanceof Error ? err.message.slice(0, 120) : "model unavailable" };
+          }
+        };
+        // ---- the FIRST ballot (blind, independent) ----
         for (let i = 0; i < jury.length; i += JUROR_CONCURRENCY) {
           if (ctx.outOfTime) break;
-          const batch = jury.slice(i, i + JUROR_CONCURRENCY).filter((j) => !jurorVotes.some((v) => v.name === j.name));
+          const batch = jury.slice(i, i + JUROR_CONCURRENCY).filter((j) => !firstBallot.some((v) => v.name === j.name));
           if (batch.length === 0) continue;
           const results = await Promise.allSettled(
-            batch.map((j) => ctx.llm(jurorPrompt(job.query, j, evidenceRecord, prosecutionBrief, defenseBrief, rebuttalText, job.language), "court-juror", false, 120, { patient: false, timeoutMs: 45_000 }))
+            batch.map((j) => castBallot(jurorPrompt(job.query, j, evidenceRecord, prosecutionBrief, defenseBrief, rebuttalText, job.language), j))
           );
           results.forEach((r, k) => {
             const juror = batch[k];
-            if (r.status === "fulfilled") {
-              const v = extractJson(r.value.text);
-              const vote = String(v?.vote).toUpperCase() === "GUILTY" ? "GUILTY" : "NOT GUILTY";
-              const reason = String(v?.reason || r.value.text).slice(0, 240).trim() || "(no reason given)";
-              jurorVotes.push({ name: juror.name, lens: juror.lens, vote, reason });
-              ctx.emit("court", `Juror voted ${vote} — ${juror.name}`, reason, r.value.model, { phase: "juror", juror: juror.name, vote, reason }).catch(() => {});
+            const ballot = r.status === "fulfilled" ? r.value : { error: "model unavailable" };
+            if (!("error" in ballot)) {
+              firstBallot.push({ name: juror.name, lens: juror.lens, vote: ballot.vote, reason: ballot.reason, confidence: ballot.confidence });
+              ctx.emit("court", `First ballot: ${ballot.vote} — ${juror.name}`, ballot.reason, undefined, { phase: "juror", juror: juror.name, vote: ballot.vote, reason: ballot.reason, ballot: "first", confidence: ballot.confidence }).catch(() => {});
             } else {
-              ctx.emit("info", `${juror.name} could not vote (model unavailable) — the verdict proceeds with ${jury.length - 1 - jurorVotes.length} juror(s)`, undefined, undefined, undefined, "verbose").catch(() => {});
+              ctx.emit("info", `${juror.name} could not cast a ballot (${ballot.error}) — no vote is invented for them`, undefined, undefined, undefined, "verbose").catch(() => {});
             }
           });
-          // v2.5.0: votes persist per batch — a slice boundary mid-deliberation keeps them
-          courtProgress = { ...(courtProgress ?? {}), jurorVotes };
+          // v3.0: the first ballot persists per batch — a slice boundary mid-ballot keeps it
+          courtProgress = { ...(courtProgress ?? {}), firstBallot, jurorVotes: jurorVotes.filter((v) => firstBallot.some((f) => f.name === v.name)) };
           await persist("predraft", { courtProgress }).catch(() => {});
+        }
+        const firstGuilty = firstBallot.filter((v) => v.vote === "GUILTY").length;
+        const firstNotGuilty = firstBallot.length - firstGuilty;
+        // ---- DELIBERATION: only when the first ballot is contested (margin close
+        // enough that argument could move the outcome). Unanimous or near-unanimous
+        // ballots are confirmed without one — and the court says so honestly. The
+        // quick preset is a single-ballot trial by design.
+        const contested = ballotContested(firstGuilty, firstNotGuilty, firstBallot.length);
+        // QUORUM: a verdict is never read from a handful of votes — at least half
+        // the jury must have returned a ballot. Below quorum the verdict is
+        // withheld (briefs still publish); a resumed slice re-polls the missing
+        // jurors, so a throttle wave does not kill the trial, it delays it.
+        const quorate = juryQuorate(firstBallot.length, jury.length);
+        if (firstBallot.length > 0 && !quorate) {
+          await ctx.emit(
+            "court",
+            `The jury could barely convene — ${firstBallot.length} of ${jury.length} ballots returned`, 
+            "Model throttling spoiled the other ballots, and a verdict is never read from a handful of votes: honest briefs stand, the verdict is withheld. If this run continues, the missing jurors are re-polled as the throttle wave passes.",
+            undefined,
+            { phase: "jury", returned: firstBallot.length, expected: jury.length, quorate: false }
+          );
+        }
+        if (quorate && firstBallot.length > 0 && !ctx.outOfTime && jurorVotes.length < firstBallot.length) {
+          if (!quickCourt && contested) {
+            if (!deliberationRan) {
+              await ctx.emit(
+                "court",
+                `First ballot: ${firstGuilty} guilty · ${firstNotGuilty} not guilty — the jury deliberates`,
+                `The blind vote split, so the jury argues it: each juror hears every other juror's reason, answers the strongest one voting against them, and then casts a final vote — held or changed, never for free. The foreman will sum up what moved the room.`,
+                undefined,
+                { phase: "deliberation", guilty: firstGuilty, notGuilty: firstNotGuilty }
+              );
+            }
+          for (let i = 0; i < jury.length; i += JUROR_CONCURRENCY) {
+            if (ctx.outOfTime) break;
+            const batch = jury.slice(i, i + JUROR_CONCURRENCY).filter((j) => firstBallot.some((f) => f.name === j.name) && !jurorVotes.some((v) => v.name === j.name));
+            if (batch.length === 0) continue;
+            const results = await Promise.allSettled(
+              batch.map((j) => {
+                const own = firstBallot.find((f) => f.name === j.name)!;
+                return castBallot(deliberationPrompt(job.query, j, own, firstBallot, job.language), j);
+              })
+            );
+            results.forEach((r, k) => {
+              const juror = batch[k];
+              const own = firstBallot.find((f) => f.name === juror.name)!;
+              const ballot = r.status === "fulfilled" ? r.value : { error: "model unavailable" };
+              if (!("error" in ballot)) {
+                const changed = ballot.vote !== own.vote; // the vote record decides, not the self-report
+                jurorVotes.push({ name: juror.name, lens: juror.lens, vote: ballot.vote, reason: ballot.reason, confidence: ballot.confidence, changedVote: changed, deliberationReply: ballot.reply });
+                ctx.emit("court", `${changed ? `Juror changed to ${ballot.vote}` : `Juror held ${ballot.vote}`} — ${juror.name}`, ballot.reply ?? ballot.reason, undefined, { phase: "juror", juror: juror.name, vote: ballot.vote, reason: ballot.reason, ballot: "final", changed, confidence: ballot.confidence }).catch(() => {});
+              } else {
+                // a juror who cannot deliberate keeps their first-ballot vote — it was legitimately cast
+                jurorVotes.push({ ...own, changedVote: false });
+                ctx.emit("info", `${juror.name} could not join the deliberation (${ballot.error}) — their first-ballot vote stands`, undefined, undefined, undefined, "verbose").catch(() => {});
+              }
+            });
+            courtProgress = { ...(courtProgress ?? {}), firstBallot, jurorVotes, deliberationRan: true };
+            deliberationRan = true; // the local gate matters: foreman, judge record and verdict spread read it
+            await persist("predraft", { courtProgress }).catch(() => {});
+          }
+          } else {
+            // single-ballot trial (quick) or a decisive first ballot — no deliberation needed
+            jurorVotes = firstBallot.map((b) => ({ ...b, changedVote: false }));
+            const note = quickCourt
+              ? "Quick trial: one ballot by design — six jurors, no deliberation round."
+              : `The first ballot was ${firstGuilty}–${firstNotGuilty} — decisive enough that deliberation could not change the outcome; the jury confirms the verdict without extended argument.`;
+            await ctx.emit("court", `First ballot stands: ${firstGuilty} guilty · ${firstNotGuilty} not guilty`, note, undefined, { phase: "votes", guilty: firstGuilty, notGuilty: firstNotGuilty, single: true });
+            courtProgress = { ...(courtProgress ?? {}), firstBallot, jurorVotes, deliberationRan: true };
+            deliberationRan = true; // stage resolved (skipped) — the verdict still records the first ballot
+            await persist("predraft", { courtProgress }).catch(() => {});
+          }
         }
         const guilty = jurorVotes.filter((v) => v.vote === "GUILTY").length;
         const notGuilty = jurorVotes.length - guilty;
+        const changedCount = jurorVotes.filter((v) => v.changedVote).length;
         if (jurorVotes.length > 0) {
-          await ctx.emit("court", `The jury has voted: ${guilty} guilty · ${notGuilty} not guilty`, `${jurorVotes.length} of ${jury.length} jurors returned a verdict${jurorVotes.length < jury.length ? " — the missing votes are noted honestly, not invented" : ""}.`, undefined, { phase: "votes", guilty, notGuilty, returned: jurorVotes.length, expected: jury.length });
+          await ctx.emit("court", `The final ballot: ${guilty} guilty · ${notGuilty} not guilty`, `${jurorVotes.length} of ${jury.length} jurors returned a verdict${jurorVotes.length < jury.length ? " — the missing votes are noted honestly, not invented" : ""}.${deliberationRan && !quickCourt && contested ? `${changedCount > 0 ? ` ${changedCount} juror${changedCount === 1 ? "" : "s"} changed their vote${changedCount === 1 ? "" : "s"} in deliberation (first ballot: ${firstGuilty}–${firstNotGuilty}).` : " No juror changed their vote — the argument hardened positions rather than moving them."}` : ""}`, undefined, { phase: "votes", guilty, notGuilty, returned: jurorVotes.length, expected: jury.length, changed: changedCount });
+        }
+
+        // ---- the FOREMAN sums up the deliberation (only when one actually ran) ----
+        if (deliberationRan && !quickCourt && contested && jurorVotes.length > 0 && !foremanSummary && !ctx.outOfTime) {
+          try {
+            const foremanRes = await ctx.llm(foremanPrompt(job.query, firstBallot, jurorVotes, job.language), "court-foreman", false, 450, { patient: false, timeoutMs: 60_000 });
+            const f = extractJson(foremanRes.text);
+            const summary = String(f?.summary ?? "").slice(0, 1000).trim();
+            if (summary) {
+              foremanSummary = summary;
+              await ctx.emit("court", "The foreman sums up the deliberation", foremanSummary, foremanRes.model, { phase: "foreman" });
+              courtProgress = { ...(courtProgress ?? {}), foremanSummary };
+              await persist("predraft", { courtProgress }).catch(() => {});
+            }
+          } catch {
+            await ctx.emit("info", "The foreman could not sum up — the votes stand on their own record", undefined, undefined, undefined, "verbose").catch(() => {});
+          }
         }
 
         // C5 — the judge reads the verdict (charges that stuck, defense wins, conditions)
         if (jurorVotes.length > 0 && !ctx.outOfTime) {
           let judge: { chargesStuck?: string[]; defenseWins?: string[]; conditions?: string[]; summary?: string } | null = null;
           try {
-            const judgeRes = await ctx.llm(judgePrompt(job.query, evidenceRecord, prosecutionBrief, defenseBrief, rebuttalText, jurorVotes, job.language), "court-judge", false, 800, { patient: false, timeoutMs: 60_000 });
+            const judgeRes = await ctx.llm(
+              judgePrompt(job.query, evidenceRecord, prosecutionBrief, defenseBrief, rebuttalText, jurorVotes, job.language, deliberationRan && !quickCourt && contested ? { firstBallot: { guilty: firstGuilty, notGuilty: firstNotGuilty }, foremanSummary } : undefined),
+              "court-judge", false, 800, { patient: false, timeoutMs: 60_000 }
+            );
             judge = extractJson(judgeRes.text);
             if (judge?.summary) {
               await ctx.emit("court", "The judge reads the verdict", String(judge.summary).slice(0, 1200), judgeRes.model, { phase: "judge", ...judge });
@@ -2645,9 +2785,10 @@ export async function runJob(jobId: string) {
           } catch (judgeErr) {
             await ctx.emit("info", "The judge could not read the verdict — the raw vote stands without commentary", judgeErr instanceof Error ? judgeErr.message.slice(0, 160) : undefined);
           }
+          const verdictType = finalVerdictOf(guilty, notGuilty);
           const verdict: CourtVerdict = {
             charge: job.query.slice(0, 600),
-            verdict: guilty > notGuilty ? "GUILTY" : "NOT GUILTY",
+            verdict: verdictType,
             guilty,
             notGuilty,
             jurors: jurorVotes,
@@ -2657,18 +2798,21 @@ export async function runJob(jobId: string) {
             chargesStuck: (judge?.chargesStuck ?? []).map((c) => String(c).slice(0, 300)).slice(0, 5),
             defenseWins: (judge?.defenseWins ?? []).map((c) => String(c).slice(0, 300)).slice(0, 5),
             conditions: (judge?.conditions ?? []).map((c) => String(c).slice(0, 300)).slice(0, 6),
-            judgeSummary: String(judge?.summary ?? `The jury voted ${guilty} to ${notGuilty}.`).slice(0, 800),
+            judgeSummary: String(judge?.summary ?? (verdictType === "HUNG JURY" ? `The jury deadlocked ${guilty} to ${notGuilty} — no verdict was reached.` : `The jury voted ${guilty} to ${notGuilty}.`)).slice(0, 800),
             quick: quickCourt,
+            ...(deliberationRan && !quickCourt ? { firstBallot: { guilty: firstGuilty, notGuilty: firstNotGuilty }, ...(contested ? { deliberated: true } : {}), ...(foremanSummary ? { foremanSummary } : {}) } : {}),
           };
           court = verdict;
           // v2.5.0: the verdict persists — a resume never re-tries a concluded case
           await persist("predraft", { courtVerdict: verdict } as Partial<EngineCheckpoint>).catch(() => {});
           await ctx.emit(
             "court",
-            `VERDICT: ${verdict.verdict} — ${guilty} to ${notGuilty}`,
+            verdictType === "HUNG JURY"
+              ? `VERDICT: HUNG JURY — the jury deadlocked ${guilty} to ${notGuilty}`
+              : `VERDICT: ${verdictType} — ${guilty} to ${notGuilty}`,
             `${verdict.judgeSummary}${verdict.conditions.length ? `\n\nWhat to change before trying again:\n${verdict.conditions.map((c) => `• ${c}`).join("\n")}` : ""}`,
             undefined,
-            { phase: "verdict", verdict: verdict.verdict, guilty, notGuilty }
+            { phase: "verdict", verdict: verdictType, guilty, notGuilty }
           );
         }
       }
@@ -3200,13 +3344,16 @@ export async function runJob(jobId: string) {
             ? [
                 `## The Jury`,
                 ``,
-                `| Juror | Vote | What decided them |`,
-                `| --- | --- | --- |`,
-                ...court.jurors.map((j) => `| ${j.name} | **${j.vote}** | ${j.reason.replace(/\|/g, "/")} |`),
+                `| Juror | Final vote | Conviction | What decided them |`,
+                `| --- | --- | --- | --- |`,
+                ...court.jurors.map((j) => `| ${j.name}${j.changedVote ? " *(changed in deliberation)*" : ""} | **${j.vote}** | ${j.confidence != null ? `${j.confidence}%` : "—"} | ${j.reason.replace(/\|/g, "/")} |`),
                 ``,
-                `*Each juror read the same record through a different lens — the vote spread, not any single opinion, is the signal (${court.guilty} guilty · ${court.notGuilty} not guilty). ${court.quick ? "Quick trial: 6 jurors." : "Full jury: 12 personas."}*`,
+                `*Each juror read the same record through a different lens — the vote spread, not any single opinion, is the signal (${court.guilty} guilty · ${court.notGuilty} not guilty${court.firstBallot && court.deliberated ? `; the blind first ballot was ${court.firstBallot.guilty}–${court.firstBallot.notGuilty}${court.jurors.some((j) => j.changedVote) ? `, ${court.jurors.filter((j) => j.changedVote).length} changed their vote in deliberation` : ", no vote moved in deliberation"}` : ""}). ${court.verdict === "HUNG JURY" ? "The jury deadlocked — a hung jury: no verdict was reached on this proposition." : `${court.quick ? "Quick trial: 6 jurors, one ballot." : court.deliberated ? "Full trial: 12 personas, two ballots around a deliberation." : "Full jury: 12 personas."}`}*`,
                 ``,
               ]
+            : []),
+          ...(court.foremanSummary
+            ? [`## The Foreman's Summing-Up`, ``, court.foremanSummary, ``]
             : []),
           ...(court.chargesStuck.length || court.defenseWins.length || court.conditions.length
             ? [
@@ -3872,7 +4019,7 @@ ${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
     await persist("done").catch(() => {}); // informational — the job is complete
     await ctx.emit(
       "done",
-      court ? `The trial is over — ${court.verdict}, ${court.guilty} to ${court.notGuilty}` : "Research complete",
+      court ? `The trial is over — ${court.verdict === "HUNG JURY" ? `HUNG JURY, the jury deadlocked ${court.guilty} to ${court.notGuilty}` : `${court.verdict}, ${court.guilty} to ${court.notGuilty}`}${court.deliberated ? ` (first ballot ${court.firstBallot?.guilty}–${court.firstBallot?.notGuilty}, then deliberation)` : ""}` : "Research complete",
       court
         ? `Verdict delivered — ${sourcesUsed.length} sources, ${court.jurors.length} jurors voted, ${ctx.llmCalls} LLM calls, ${fmtMin(durationMs)} total${court.conditions.length ? `. What to change before trying again: ${court.conditions[0].slice(0, 140)}${court.conditions.length > 1 ? "…" : ""}` : ""}`
         : `Report ready — ${refList.length} sources, ~${reportWords.toLocaleString()} words, ${ctx.llmCalls} LLM calls, ${fmtMin(durationMs)} total${quality ? `, self-scored ${quality.overall.toFixed(1)}/10${qualityRounds > 0 ? ` after ${qualityRounds} quality round${qualityRounds > 1 ? "s" : ""} (target 9 — earned with new evidence, re-graded by the same rubric)` : ""}` : ""}${citeStats.integrity < 100 ? `, citation integrity ${citeStats.integrity}%` : " with verified citations"}${spawnedCount.n > 0 ? `, ${spawnedCount.n} aspect${spawnedCount.n > 1 ? "s" : ""} spawned mid-research (recursive deep-dive)` : ""}${sliceN > 1 ? `, continued across ${sliceN} serverless slices` : ""}`,

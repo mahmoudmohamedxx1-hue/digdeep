@@ -243,8 +243,8 @@ export function VerdictStrip({ job }: { job: JobItem }) {
           <Cell
             icon={<Gavel className="h-3.5 w-3.5" aria-hidden />}
             label="trial verdict"
-            value={<>{stats.court.verdict}{stats.court.jurors.length > 0 ? ` ${stats.court.guilty}–${stats.court.notGuilty}` : ""}</>}
-            toneCls={stats.court.verdict === "GUILTY" ? "text-[#c4261e] dark:text-[#ff6961]" : "text-[#1e7a33] dark:text-[#4ade80]"}
+            value={<>{stats.court.jurors.length > 0 ? stats.court.verdict : "WITHHELD"}{stats.court.jurors.length > 0 ? ` ${stats.court.guilty}–${stats.court.notGuilty}` : ""}</>}
+            toneCls={stats.court.jurors.length === 0 || stats.court.verdict === "HUNG JURY" ? "text-[#b25000] dark:text-[#ff9f0a]" : stats.court.verdict === "GUILTY" ? "text-[#c4261e] dark:text-[#ff6961]" : "text-[#1e7a33] dark:text-[#4ade80]"}
           />
         )}
         {integrity != null && (

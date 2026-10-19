@@ -122,7 +122,13 @@ export interface EngineCheckpoint {
     prosecutionBrief?: string;
     defenseBrief?: string;
     rebuttals?: { by: string; text: string }[];
-    jurorVotes?: { name: string; lens: string; vote: string; reason: string }[];
+    /** v3.0 perfect jury: the blind first ballot (jurorVotes holds the FINAL votes) */
+    firstBallot?: { name: string; lens: string; vote: string; reason: string; confidence?: number }[];
+    /** true once the deliberation round has run (or was consciously skipped) */
+    deliberationRan?: boolean;
+    /** the foreman's summing-up of the deliberation */
+    foremanSummary?: string;
+    jurorVotes?: { name: string; lens: string; vote: string; reason: string; confidence?: number; changedVote?: boolean; deliberationReply?: string }[];
     verdictEmitted?: boolean;
   };
   /** the final verdict object once the trial completes — restored on resume */

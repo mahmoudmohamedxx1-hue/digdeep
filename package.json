@@ -1,12 +1,13 @@
 {
   "name": "digdeep",
-  "version": "1.0.0",
+  "version": "3.0.0",
   "description": "Free, open-source deep research engine — visible thinking, self-auditing citations, self-graded reports. Keyless by default.",
   "license": "MIT",
   "private": true,
   "scripts": {
     "test:routing": "bun scripts/test-routing.ts",
     "test:pin": "bun scripts/test-model-pin.ts",
+    "test:jury": "bun scripts/test-jury.ts",
     "mock-llm": "node scripts/mock-llm.js",
     "bench": "node scripts/benchmark-harness.mjs",
     "dev": "next dev -p 3000 2>&1 | tee dev.log",

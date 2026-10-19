@@ -216,6 +216,16 @@ const worth: { q: string; want: "trial" | "info" | null }[] = [
   { q: "is nuclear energy the future", want: "trial" },
   { q: "are we alone in the universe", want: "trial" },
   { q: "cold showers are overrated", want: "trial" },
+  // ---- v3.0 comparative ASSERTIONS — "more/less ADJ than", "ADJ-er than",
+  // "X makes Y more Z" are head-to-head claims → trial; info asks stay info ----
+  { q: "remote work makes software teams more productive than office work", want: "trial" },
+  { q: "python is more popular than javascript", want: "trial" },
+  { q: "electric cars are safer than gas cars", want: "trial" },
+  { q: "ai coding tools make developers faster", want: "trial" },
+  { q: "nuclear power is less expensive than solar", want: "trial" },
+  { q: "how do i make my site faster than wordpress", want: "info" }, // how-to ask, not a proposition
+  { q: "what is faster than light", want: "info" }, // lookup, not a claim
+  { q: "i want to know if python is faster than java", want: "info" }, // info opener dominates
   // ---- ambiguous → the court-aware classifier decides ----
   { q: "the earth is flat", want: null }, // statement asserting a claim — classifier reads it
   { q: "artificial intelligence", want: null },

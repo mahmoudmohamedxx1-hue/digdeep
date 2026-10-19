@@ -335,7 +335,10 @@ export default function ThreadPage() {
   const tocHeadings = useMemo(() => {
     if (!lastTurn?.job || lastTurn.job.status !== "completed" || !lastTurn.job.reportMd) return [];
     const parsed = parseAnswer(lastTurn.job.reportMd, lastTurn.job.mode);
-    return extractHeadings(parsed.body);
+    // the verdict card renders the jury/foreman/judge sections — the body (and
+    // therefore the TOC) drops them so the record is never shown twice
+    const body = lastTurn.job.stats?.court ? parsed.body.replace(/## The Jury[\s\S]*?(?=## The Evidence Record)/, "") : parsed.body;
+    return extractHeadings(body);
   }, [lastTurn?.job]);
 
   // ---------- scrolling: intent-aware follow + jump pill ----------

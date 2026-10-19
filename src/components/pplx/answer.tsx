@@ -13,6 +13,7 @@ import { copyText } from "@/lib/utils";
 import type { SourceItem, SectionItem, JobItem } from "@/components/research/types";
 import { fmtElapsed, ACTIVE_STATUSES } from "@/components/research/types";
 import { VerdictStrip } from "@/components/research/verdict-strip";
+import { VerdictCard } from "@/components/pplx/verdict-card";
 import { parseAnswer, parseExec, type ReportRef } from "@/lib/report-parse";
 import type { CitationContext, ClaimSelection } from "@/components/research/citation-chip";
 
@@ -316,7 +317,7 @@ export function AnswerView({
 
   // ---------- COMPLETED: QUICK ANSWER / RESEARCH REPORT ----------
   if (job.status === "completed" && job.reportMd && parsed) {
-    const { exec, body, conclusion, diff, refs } = parsed;
+    const { exec, body: rawBody, conclusion, diff, refs } = parsed;
     const audit = job.stats?.citationAudit;
     const related = job.stats?.relatedQuestions ?? [];
     const isQuick = job.mode === "quick";
@@ -325,6 +326,10 @@ export function AnswerView({
     const claimChecks = job.stats?.claimChecks ?? undefined;
     const cv = job.stats?.claimVerdict;
     const claimSummaryLine = cv ? `${cv.fullySupported} of ${cv.citedSources} sources fully support their claims` : undefined;
+    // the verdict card renders the jury grid, the foreman and the judge's
+    // instructions — don't show the same record twice: strip those sections
+    // from the body markdown (the raw reportMd keeps them for export/share)
+    const body = job.stats?.court ? rawBody.replace(/## The Jury[\s\S]*?(?=## The Evidence Record)/, "") : rawBody;
 
     return (
       <div className="fade-up">
@@ -332,6 +337,11 @@ export function AnswerView({
         <div className="mb-6">
           <VerdictStrip job={job} />
         </div>
+
+        {/* the trial's front page — banner verdict, ballot swing, the jury grid
+            with conviction + changed votes, the foreman, the judge's instructions.
+            The full trial record (briefs, rebuttals, jury table) stays in the body. */}
+        {job.stats?.court && <VerdictCard court={job.stats.court} />}
 
         {/* executive summary — a short lead plus 3–5 key findings */}
         {showFindings && execShape && (

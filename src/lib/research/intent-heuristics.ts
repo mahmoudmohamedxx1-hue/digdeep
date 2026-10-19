@@ -244,6 +244,16 @@ export function courtTrialWorthiness(raw: string): "trial" | "info" | null {
   if (/\b(everyone knows|everybody knows|people say|they say|my friend says|my friend thinks|experts say|scientists say|studies show|it is said)\b/.test(s)) return "trial";
   // charged claim vocabulary
   if (/\b(overrated|underrated|overhyped|underhyped|scam|hoax|conspiracy|myth|better (for|than)|worse (for|than)|superior to|inferior to|waste of|no future)\b/.test(s)) return "trial";
+  // comparative ASSERTIONS — "X is more productive than Y", "X is faster than
+  // Y", "X makes teams more productive than Y": head-to-head claims, trial-
+  // shaped. Only when the message is not an info/how-to ask — "how do i make
+  // my site faster than wordpress" is a lookup, not a proposition.
+  const INFO_ASK = /^(what|whos|whose|when|where|why|how|which|tell|explain|teach|describe|define|write|make me|make a|create|generate|give|recommend|suggest|list|name|translate|calculate|solve|convert|summar|rewrite|reword|fix|improve|review|find|search|look|help|does anyone|do you know|i want|i need|curious|show)\b/.test(s);
+  const comparative =
+    /\b(more|less|fewer)\s+\w+(\s+\w+)?\s+than\b/.test(s) ||
+    /\b(faster|slower|safer|riskier|cheaper|costlier|cleaner|greener|smarter|stronger|weaker|harder|easier|simpler|tougher|bigger|smaller|larger|older|newer|higher|lower|deeper|wider|busier|quieter|healthier|happier|richer|poorer|more secure|more reliable|more efficient|more effective|more productive|more popular|more dangerous|more sustainable)\s+than\b/.test(s) ||
+    /\bmakes?\s+[\w\s]{0,30}\b(more|less|faster|slower|safer|riskier|cheaper|better|worse|stronger|weaker|harder|easier|smarter)\b/.test(s);
+  if (comparative && !INFO_ASK) return "trial";
   // head-to-head comparisons
   if (words.length >= 3 && /(^|\s)(vs|versus)(\s|$)/.test(s)) return "trial";
   if (/^which is (better|worse|best|worst|safer|faster|smarter|cheaper|more|less)\b/.test(s)) return "trial";
