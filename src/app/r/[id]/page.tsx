@@ -273,6 +273,50 @@ export default function ThreadPage() {
         return;
       }
 
+      // v3.2 — refresh COMPLETED turns from the server (the "sources never
+      // open" fix). IndexedDB copies of finished runs are write-once: the
+      // poller stops when a run completes, so a copy saved a moment BEFORE the
+      // final sources landed (or adopted with partial data) keeps showing an
+      // empty/stale sources row forever. The server is the source of truth
+      // for finished runs — re-fetch each completed non-shared turn and take
+      // the richer copy. Active turns are skipped (the poller owns them).
+      if (navigator.onLine) {
+        const refreshable = loaded.filter(
+          (t) => t.job && !t.job.sharedSnapshot && !ACTIVE_STATUSES.includes(t.job.status)
+        );
+        if (refreshable.length > 0) {
+          const fresh = await Promise.all(
+            refreshable.map(async (t) => {
+              try {
+                const d = await fetch(`/api/research/${t.jobId}`).then((x) => (x.ok ? x.json() : null));
+                if (!d?.job) return null;
+                const serverTurn: Turn = {
+                  jobId: t.jobId,
+                  job: d.job,
+                  events: (d.events ?? []) as Turn["events"],
+                  sources: (d.sources ?? []) as Turn["sources"],
+                  sections: (d.sections ?? []) as Turn["sections"],
+                };
+                // keep whichever copy knows more — server for a finished run
+                // has the final report+sources, but a flaky response or an
+                // older server snapshot should never LOSE local data
+                const localBetter =
+                  serverTurn.sources.length < (t.sources?.length ?? 0) ||
+                  serverTurn.events.length < (t.events?.length ?? 0);
+                return localBetter ? null : serverTurn;
+              } catch {
+                return null; // offline mid-load — the IDB copy stands
+              }
+            })
+          );
+          fresh.forEach((ft) => {
+            if (!ft) return;
+            const idx = loaded.findIndex((x) => x.jobId === ft.jobId);
+            if (idx >= 0) loaded[idx] = ft;
+          });
+        }
+      }
+
       const isShared = loaded.some((t) => t.job?.sharedSnapshot);
       for (const t of loaded) {
         if (isShared) {

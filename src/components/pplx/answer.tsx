@@ -2,10 +2,11 @@
 
 import { useMemo, useState } from "react";
 import {
-  BadgeCheck, Check, ChevronDown, Copy, Cpu, FileDown, FileText, RefreshCw,
+  BadgeCheck, Check, ChevronDown, Copy, Cpu, FileDown, FileSpreadsheet, FileText, RefreshCw,
   RotateCw, Share2, SquarePen, FastForward, TriangleAlert, WifiOff, Gauge, Brain, Telescope,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Markdown } from "@/components/research/markdown";
 import { useTyper } from "@/hooks/use-typer";
 import { toast } from "@/hooks/use-toast";
@@ -392,20 +393,39 @@ export function AnswerView({
             <span className="sr-only">{copied ? "Copied" : "Copy"}</span>
           </Button>
           {!job.sharedSnapshot && (
-            <>
-              <a href={`/api/research/${job.id}/export?format=pdf`} target="_blank" rel="noreferrer" title="Export as PDF">
-                <Button size="sm" variant="ghost" className="press-scale h-9 w-9 rounded-full p-0 text-muted-foreground hover:text-foreground">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="ghost" className="press-scale h-9 w-9 rounded-full p-0 text-muted-foreground hover:text-foreground" title="Export the report">
                   <FileDown className="h-4 w-4" />
-                  <span className="sr-only">PDF</span>
+                  <span className="sr-only">Export</span>
                 </Button>
-              </a>
-              <a href={`/api/research/${job.id}/export?format=md`} target="_blank" rel="noreferrer" title="Export as Markdown">
-                <Button size="sm" variant="ghost" className="press-scale h-9 w-9 rounded-full p-0 text-muted-foreground hover:text-foreground">
-                  <FileText className="h-4 w-4" />
-                  <span className="sr-only">Markdown</span>
-                </Button>
-              </a>
-            </>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-52">
+                <DropdownMenuLabel className="text-[11px] text-muted-foreground">Export the report</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem asChild>
+                  <a href={`/api/research/${job.id}/export?format=pdf`} target="_blank" rel="noreferrer" className="gap-2.5 rounded-[10px] py-2">
+                    <FileText className="h-4 w-4 shrink-0 text-primary/85" /> PDF <span className="ml-auto text-[10px] text-muted-foreground">formatted</span>
+                  </a>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <a href={`/api/research/${job.id}/export?format=docx`} target="_blank" rel="noreferrer" className="gap-2.5 rounded-[10px] py-2">
+                    <FileText className="h-4 w-4 shrink-0 text-primary/85" /> Word <span className="ml-auto text-[10px] text-muted-foreground">.docx</span>
+                  </a>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <a href={`/api/research/${job.id}/export?format=xlsx`} target="_blank" rel="noreferrer" className="gap-2.5 rounded-[10px] py-2">
+                    <FileSpreadsheet className="h-4 w-4 shrink-0 text-primary/85" /> Excel <span className="ml-auto text-[10px] text-muted-foreground">sources+claims</span>
+                  </a>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem asChild>
+                  <a href={`/api/research/${job.id}/export?format=md`} target="_blank" rel="noreferrer" className="gap-2.5 rounded-[10px] py-2">
+                    <FileText className="h-4 w-4 shrink-0 text-muted-foreground" /> Markdown <span className="ml-auto text-[10px] text-muted-foreground">.md</span>
+                  </a>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
           <ShareButton job={job} />
           {!isQuick && onRerun && !job.sharedSnapshot && (

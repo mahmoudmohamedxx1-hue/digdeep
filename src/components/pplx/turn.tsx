@@ -103,8 +103,10 @@ function ThreadTurnImpl({
             />
           )}
 
-          {/* sources row */}
-          <SourcesRow sources={turn.sources} />
+          {/* sources row — clickable: opens the full list in a bottom sheet
+              (the evidence rail is xl-only; every smaller screen sees the
+              sheet — v3.2 "sources don't open" fix) */}
+          <SourcesRow sources={turn.sources} audit={turn.job?.stats?.citationAudit} />
 
           {/* streaming answer */}
           <AnswerView
