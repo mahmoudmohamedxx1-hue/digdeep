@@ -220,3 +220,16 @@ Work Log:
 
 Stage Summary:
 - v3.1 shipped: the chat is now a genuinely wide, balanced two-column conversation — user prompts right in teal bubbles, responses left with the avatar gutter, composer flush on the conversation axis at every breakpoint, wide monitors get 812px beside the evidence rail. SPACE repo honestly assessed as a code-execution sandbox (not UI) — not integrated, and the reasoning is documented above and in the final reply to the user.
+
+---
+Task ID: 29 (live addendum)
+Agent: main (Z.ai)
+Task: v3.1 live verification on digdeepx.vercel.app.
+
+Work Log:
+- Deploy landed fast this time (~2 min after push, 57816a2 + worklog commit).
+- Definitive CSS code inspection (the v3.0.3 lesson applied — no chunk-hash comparisons): live stylesheet af95dcda7785b868.css contains max(min(812px,88%),420px) exactly once, ZERO occurrences of the old min(768px,50%), app-window max-width:1440px present, report-prose 72ch present.
+- Live browser smoke at 1440px: home composer measures 812px (was 570), zero console/page errors, screenshot v31-live-home.png.
+
+Stage Summary:
+- v3.1 verified end-to-end on production: local (tsc, 5 suites, build, DOM measurements at 1920/1440/375, VLM visual pass) and live (CSS code inspection + browser measurement). Wider, balanced chat is what the world sees now.
