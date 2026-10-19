@@ -199,3 +199,24 @@ Work Log:
 
 Stage Summary:
 - The verification battery is fully closed: 6 suites (static/unit/build/server/E2E-browser/poison + live), 2 real bugs found→fixed→verified locally→verified on production, stop timing measured (instant event, 30s worst-case cancel), .env self-heal proven, render suite permanently committed (12 variants / 48 assertions). Production = v3.0.3.
+
+---
+Task ID: 29
+Agent: main (Z.ai)
+Task: User: integrate github.com/perplexityai/SPACE "to make the experience really different" + wider prompt area + chat with user prompts right / responses left, "pro and neat and balanced".
+
+Work Log:
+- SPACE REPO VERDICT (fetched and read): perplexityai/SPACE = "Sandboxed Platform for Agentic Code Execution" — a Rust/Firecracker microVM sandbox with an HTTP API for running code in isolated Linux environments. It is NOT a UI/design library; it powers nothing visible in Perplexity's chat, and it cannot run on Vercel (Firecracker needs KVM bare metal). Integrating it would not change the visible experience. The user's actual goal (wider composer, right/left chat, balanced) is a UI transformation — delivered as v3.1 instead. If sandboxed code execution is ever wanted as a FEATURE (research agents running analysis code), that is a separate self-hosted backend project.
+- ENV RECOVERY (6th sandbox reset): .next/ wiped (incl. standalone static assets), PG data wiped, stale shell DATABASE_URL (file:...sqlite) — pg-dev.ts re-init, prisma db push (with explicit postgres URL prefix), rebuilt twice.
+- MYSTERY SOLVED — "max-w-ax(": greps/sed/eval outputs displayed the class as max-w-ax(min(...)) but hexdump + includes() booleans proved the real string is max-w-[max(min(...))] everywhere (source AND DOM); the Bash tool display eats the sequence "[m" in that context. The real bug was never the class string — it was static assets missing from .next/standalone (404 on ALL _next/static: page rendered as bare SSR HTML with zero CSS/JS). Fixed by copying .next/static into .next/standalone/.next/static and killing the stale server (process name is "next-server (v16.1.3)" — pkill -f "standalone/server.js" misses it).
+- v3.1 CHANGES (5 files):
+  1. Width formula everywhere: max-w-[max(min(768px,50%),340px)] → max-w-[max(min(812px,88%),420px)] — home hero/composer/chips, thread skeleton, shared banner, turns column, dock column, error-boundary card. Desktop thread column: 503→678px on 1280-capped window, 812px on wide monitors; home composer 570→812px.
+  2. DOCK AXIS MIRROR: the follow-up dock now reproduces the chat area geometry (max-w-[1180px] wrapper + px-4 + flex justify-center gap-7 + 300px xl-only ghost spacer) so the composer sits EXACTLY on the conversation column at every breakpoint — before, the dock was viewport-centered while the column sat left of center beside the evidence rail (164px axis mismatch at xl). The composer now also spans the column edge-to-edge (py only, no px inset) so its sides align with the messages above.
+  3. Containers 1140→1180px (turns/skeleton/banner/dock wrappers) so 812+28+300+padding fits without flex-shrink (was shrinking the column to 780).
+  4. app-window max-width 1280→1440px — wide monitors now reach the full 812px column beside the rail; discover/library unaffected (own caps 760/820).
+  5. Balance polish: user bubble max-w 75→82%, text 14→15px (matches the composer's input size), px-3.5 py-2 → px-4 py-2.5; report-prose 66→72ch for the wider measure.
+- VERIFICATION: tsc clean; ALL 5 suites green (routing, model-pin 52, jury 61, relevance, court-render 48/48 across 12 variants); production build clean twice; DOM-measured at 1920: column 812px, dock 812px, aligned ≤1px, rail flush beside column; at 1440 (window-capped): 678px both, aligned; at 375: scrollWidth exactly 375, zero overflow, column=dock=343 aligned; zero console/page errors; VLM visual pass: user question in teal bubble RIGHT + assistant LEFT with avatar/steps/verdict card confirmed, home composer wide+prominent on desktop and clean on mobile. Test thread v31-check cleaned from local DB.
+- Committed 57816a2, pushed to origin/main; Vercel deploy verification follows.
+
+Stage Summary:
+- v3.1 shipped: the chat is now a genuinely wide, balanced two-column conversation — user prompts right in teal bubbles, responses left with the avatar gutter, composer flush on the conversation axis at every breakpoint, wide monitors get 812px beside the evidence rail. SPACE repo honestly assessed as a code-execution sandbox (not UI) — not integrated, and the reasoning is documented above and in the final reply to the user.
