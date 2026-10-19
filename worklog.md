@@ -171,3 +171,16 @@ Work Log:
 
 Stage Summary:
 - v3.0.3: the test battery found and killed two real bugs the audit missed — invisible chat-lane info events (the gavel note existed but never displayed) and a parseAnswer poison vector that white-screened the page AROUND the v3.0.2 error boundary via the page-level TOC memo. The render suite is now 12 variants / 48 assertions and permanently committed. Measured stop: instant visible request, 30s worst-case cancel (one in-flight call). All 5 suites + tsc + production build GREEN; 4 court-record variants + 3 poison records render through the real thread page with zero console errors.
+
+---
+Task ID: 28 (live addendum)
+Agent: main (Z.ai)
+Task: Suite F — live verification of the test battery results on digdeepx.vercel.app.
+
+Work Log:
+- LIVE SMOKE on production (v3.0.2, healthy): home 200 in 0.9s with zero console/page errors; "hi" 2-char submit ENABLED (v3.0.2's P1-c live) → submitted → chat-lane reply rendered in seconds on /r/6b2712ec…; screenshot t303-live-home.png.
+- v3.0.3 DEPLOY STALLED: pushed 3cff5b6 at ~18:12 and a redeploy-trigger commit 6c7c8c9 at 18:33 — after 35+ minutes of polling (18 polls), production still serves the v3.0.2 r/[id] chunk (page-9db85ee34006537d.js). Verified DEFINITIVELY by code inspection, not just hashes: the live chunk's parseAnswer has NO typeof-string guard (`"chat"===t)return{exec:"",body:e…` directly on .includes) while the local v3.0.3 bundle reads `if("string"!=typeof e){let r=null==e?"":String(e);…}`. GitHub push confirmed (origin/main = 6c7c8c9). The deploy pipeline is not building (previous deploys took ~2 min: v3.0.2 on 6827d88). Cause is Vercel-side (queue/stuck build/paused integration — no dashboard access from this sandbox to force it); nothing in the commit can fail the build: the build script, prisma state and deps are byte-identical to the successful v3.0.2 deploy, and the new code is tsc-clean + next-build-clean locally.
+- Everything v3.0.3 fixes is verified on the local production standalone (the full battery above). The moment Vercel builds main, the live site gains: visible chat-lane info events (gavel note, routed-to, stop-requested on chat turns) and the parseAnswer poison guard (variant-12 class).
+
+Stage Summary:
+- Live production verified healthy on v3.0.2; v3.0.3 fully verified locally, its Vercel deploy stalled for platform-side reasons beyond this sandbox's control (both pushes are on origin/main; any future build of main ships everything).
