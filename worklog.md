@@ -138,3 +138,16 @@ Work Log:
 
 Stage Summary:
 - v3.0.2: the thread page cannot white-screen anymore (defensive card + per-turn error boundary with a cache-reset escape), a stop click lands in ≤2.5s even mid-throttle-ride (16s worst case live, one in-flight call), the recurring stale-.env self-heals on every install/build, 11-variant render regression suite guards the crash class permanently, stops are visible in the feed, and "hi" submits with the gavel up. All suites PASS: routing, jury (61), pin (52), relevance, court-render (11). tsc clean; next build --webpack clean.
+
+---
+Task ID: 27 (P2 addendum)
+Agent: main (Z.ai)
+Task: P2 — live Vercel verification of v3.0.2 (deployed as chunk page-6b55da262cd06cc5, "Reset local cache" string confirmed in the served bundle).
+
+Work Log:
+- LIVE DEPLOY CONFIRMED: v3.0.2 live on digdeepx.vercel.app ~2 min after push (6827d88).
+- LIVE STOP TEST: real trial ("remote work makes teams more productive") on production → Court in session instantly → Stop clicked mid-research → run stopped cleanly with the honest card "This run was stopped. The evidence gathered so far is preserved in the steps above." (9 steps preserved). No zombie riding.
+- LIVE FULL TRIAL: "electric cars are better for the environment than gasoline cars" with the gavel up — ran 14m 18s across multiple serverless slices (the v2.5.0 continuation engine checkpointed and resumed live, honest "previous function slice reached its ~5-minute platform clock" note visible), gathered 26 sources across 11 domains, self-scored 6.5/10 with 97% citation integrity. A shared-anonymous-quota throttle wave hit during the jury phase → the v3.0.1 QUORUM RULE fired honestly: jury could not convene → VERDICT WITHHELD (amber banner, "briefs only, no verdict invented"), prosecution/defense briefs published — and the v3.0.2 defensive card rendered the juryless partial record flawlessly (the exact render-suite variant 4, now proven in production). Zero console errors. Screenshot: download/verification/v302-live-trial-withheld.png.
+
+Stage Summary:
+- P2 closed: live deploy verified, live stop verified, live trial end-to-end with the honest withheld-verdict path rendered by the hardened UI. The 6.5/10 quality score is honest under throttling (a clean-quota window seats the full jury — Task 26's live trials did); the integrity number (97%) held.
