@@ -88,7 +88,7 @@ export default function HomePage() {
     <div className="relative flex min-h-full w-full flex-col items-center justify-center overflow-x-clip px-4 py-12 sm:py-16">
       <div aria-hidden className="dot-grid inset-x-0 top-0 h-[440px]" />
       <AuroraHero />
-      <div className="relative z-10 flex w-full max-w-[max(min(768px,50%),340px)] flex-col items-center text-center">
+      <div className="relative z-10 flex w-full max-w-[max(min(812px,88%),420px)] flex-col items-center text-center">
         <span className="badge-aurora rise-in h-8 items-center gap-1.5 rounded-full px-3.5 text-[11.5px] font-medium text-foreground/85">
           <Sparkles className="h-3 w-3 shrink-0 text-primary" />
           Free &amp; open-source deep research
@@ -102,7 +102,7 @@ export default function HomePage() {
       </div>
 
       {/* the composer — the star; its focus glow is the one deliberate moment */}
-      <div className="group/composer rise-in relative z-10 mt-7 w-full max-w-[max(min(768px,50%),340px)] [animation-delay:340ms]">
+      <div className="group/composer rise-in relative z-10 mt-7 w-full max-w-[max(min(812px,88%),420px)] [animation-delay:340ms]">
         <div aria-hidden className="composer-glow opacity-70 transition-opacity duration-500 group-focus-within/composer:opacity-100" />
         <AskBox
           value={query}
@@ -142,7 +142,7 @@ export default function HomePage() {
       </div>
 
       {/* starter chips — spotlight pills that wake under the cursor */}
-      <div className="relative z-10 mt-7 flex w-full max-w-[max(min(768px,50%),340px)] flex-wrap items-center justify-center gap-2">
+      <div className="relative z-10 mt-7 flex w-full max-w-[max(min(812px,88%),420px)] flex-wrap items-center justify-center gap-2">
         {SUGGESTIONS.map((s, i) => (
           <StaggerIn key={s.label} index={i} enterDelay={0.5} className="inline-flex">
             <SpotlightCard size={190} className="rounded-full">

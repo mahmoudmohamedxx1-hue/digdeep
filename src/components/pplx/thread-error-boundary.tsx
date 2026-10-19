@@ -52,7 +52,7 @@ export class ThreadErrorBoundary extends React.Component<Props, State> {
     if (!this.state.error) return this.props.children;
     const { resetting } = this.state;
     return (
-      <div className="mx-auto w-full max-w-[max(min(768px,50%),340px)] pt-10">
+      <div className="mx-auto w-full max-w-[max(min(812px,88%),420px)] pt-10">
         <div className="rounded-[20px] border border-[#ff9f0a]/35 bg-[#ff9f0a]/[0.05] p-6">
           <p className="flex items-center gap-2.5 text-[15px] font-semibold">
             <AlertTriangle className="h-4.5 w-4.5 shrink-0 text-[#b25000] dark:text-[#ff9f0a]" aria-hidden />

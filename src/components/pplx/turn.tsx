@@ -68,9 +68,11 @@ function ThreadTurnImpl({
   return (
     <article className="space-y-4">
       {/* user question — right-aligned gradient bubble; the one place color pops.
-          A quiet meta row under it (time + copy) fades in on hover, always on touch. */}
+          v3.1: wider column needs a roomier bubble — 82% measure, 15px type
+          (matches the composer's input size), softer padding. A quiet meta row
+          under it (time + copy) fades in on hover, always on touch. */}
       <div className="group/msg flex flex-col items-end">
-        <p className="bubble-in chat-bubble-user max-w-[75%] whitespace-pre-wrap px-3.5 py-2 text-[14px] leading-[1.5]">
+        <p className="bubble-in chat-bubble-user max-w-[82%] whitespace-pre-wrap px-4 py-2.5 text-[15px] leading-[1.55]">
           {job.query}
         </p>
         <div className="mt-0.5 flex h-4 items-center gap-1 pr-0.5 opacity-0 transition-opacity duration-200 group-hover/msg:opacity-100 focus-within:opacity-100 max-sm:opacity-100">

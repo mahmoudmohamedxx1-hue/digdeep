@@ -480,13 +480,13 @@
 
 /* ==================================================================
    READING LAYER — the report body reads like a well-set book:
-   serif at a ~68-character measure, generous leading, sans headings.
+   serif at a ~72-character measure, generous leading, sans headings.
    ================================================================== */
 .report-prose {
   font-family: var(--font-serif); /* Geist — the v2 reading voice */
   font-size: 16px;   /* v2 compact: 17.5 → 16 (~8% smaller) */
   line-height: 1.68; /* v2 compact: 1.72 → 1.68 (~16% tighter rhythm) */
-  max-width: 66ch;
+  max-width: 72ch;   /* v3.1: 66 → 72ch — fills the widened 812px column, still a comfortable measure */
   letter-spacing: 0.002em;
 }
 .report-prose p, .report-prose li {
@@ -884,7 +884,10 @@
       #07080b;
   }
   .app-window {
-    max-width: 1280px;
+    max-width: 1440px; /* v3.1: 1280 → 1440 — wide monitors get the full 812px
+                          conversation column beside the evidence rail; the
+                          floating-window frame is untouched (smaller screens
+                          still fill whatever they have) */
     height: min(840px, calc(100dvh - 48px));
     margin: 0 auto;
     border-radius: 24px;

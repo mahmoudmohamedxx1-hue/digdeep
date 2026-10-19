@@ -593,13 +593,19 @@ export default function ThreadPage() {
   // ---------- loading ----------
   if (turns == null) {
     return (
-      <div className="mx-auto w-full max-w-[max(min(768px,50%),340px)] space-y-3.5 px-4 pb-20 pt-7" aria-label="Loading thread">
-        <div className="flex justify-end">
-          <div className="skeleton-line h-10 w-2/3 rounded-[22px]" />
-        </div>
-        <div className="skeleton-line h-24 rounded-[20px]" />
-        <div className="flex justify-center py-6">
-          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      /* v3.1: same 1140 + 88% axis as the live thread — the skeleton sits
+         exactly where the conversation will land, no center-jump on swap. */
+      <div className="mx-auto w-full max-w-[1180px] px-4 pb-20 pt-7" aria-label="Loading thread">
+        <div className="mx-auto flex w-full justify-center gap-7">
+          <div className="w-full max-w-[max(min(812px,88%),420px)] space-y-3.5">
+            <div className="flex justify-end">
+              <div className="skeleton-line h-10 w-2/3 rounded-[22px]" />
+            </div>
+            <div className="skeleton-line h-24 rounded-[20px]" />
+            <div className="flex justify-center py-6">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -628,25 +634,34 @@ export default function ThreadPage() {
 
       {/* shared snapshot banner — the read-only state, said plainly */}
       {isShared && (
-        <div
-          role="note"
-          className="mx-auto mb-2 mt-3 flex w-full max-w-[max(min(768px,50%),340px)] items-start gap-2.5 rounded-[16px] border border-border/70 bg-muted/40 px-4 py-3 sm:mt-4"
-        >
-          <Eye className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
-          <p className="text-[12.5px] leading-relaxed text-muted-foreground">
-            <span className="font-medium text-foreground">Shared, read-only snapshot.</span> Saved
-            {sharedAt ? ` ${new Date(sharedAt).toLocaleDateString()}` : ""} by whoever shared it — the report,
-            sources and claim evidence travel with the link. Follow-ups start a new thread in your browser.
-          </p>
+        /* v3.1: banner rides the conversation axis (1140 wrapper + rail-sized
+           spacer at xl) — not viewport-center, so it opens flush above the
+           widened column instead of offset beside the evidence rail. */
+        <div className="mx-auto w-full max-w-[1180px] px-4 pt-5 sm:pt-6">
+          <div className="mx-auto flex w-full justify-center gap-7">
+            <div
+              role="note"
+              className="flex w-full max-w-[max(min(812px,88%),420px)] items-start gap-2.5 rounded-[16px] border border-border/70 bg-muted/40 px-4 py-3"
+            >
+              <Eye className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+              <p className="text-[12.5px] leading-relaxed text-muted-foreground">
+                <span className="font-medium text-foreground">Shared, read-only snapshot.</span> Saved
+                {sharedAt ? ` ${new Date(sharedAt).toLocaleDateString()}` : ""} by whoever shared it — the report,
+                sources and claim evidence travel with the link. Follow-ups start a new thread in your browser.
+              </p>
+            </div>
+            <div aria-hidden className="hidden w-[300px] shrink-0 xl:block" />
+          </div>
         </div>
       )}
 
-      <div className="mx-auto flex w-full max-w-[1140px] justify-center gap-7 px-4 pb-40 pt-5 sm:pt-6">
+      <div className="mx-auto flex w-full max-w-[1180px] justify-center gap-7 px-4 pb-40 pt-5 sm:pt-6">
         {/* turns — one chat flow; date separators mark day boundaries.
-            50% cap (v2.7): the chat window takes half the available width on
-            desktop — a centered reading column, never edge-to-edge. The 340px
-            floor keeps phones usable (50% of a phone screen is not a column). */}
-        <div className="mx-auto w-full max-w-[max(min(768px,50%),340px)] space-y-8">
+            v3.1: widened to 812px / 88% (was 768/50% — the column read
+            cramped at 570px on desktop). 812 = 1140 container minus the
+            300px evidence rail and its gap, so at xl the conversation fills
+            the space beside the rail exactly. 420px floor keeps phones full. */}
+        <div className="mx-auto w-full max-w-[max(min(812px,88%),420px)] space-y-8">
           {turns.map((t, i) => {
             const day = t.job?.createdAt ? dayKey(t.job.createdAt) : null;
             const prevDay = i > 0 && turns[i - 1].job?.createdAt ? dayKey(turns[i - 1].job!.createdAt!) : null;
@@ -733,13 +748,19 @@ export default function ThreadPage() {
       </div>
 
       {/* follow-up input (pinned bottom dock) — or the read-only CTA on shared
-          snapshots. The jump icons hang inside the dock's relative wrapper so
-          they sit exactly above the composer, centered on the chat column —
-          not the viewport (at xl the column sits left of center, beside the
-          evidence rail, and a viewport-centered button missed it). Icon-only
-          by design: ↓ latest (live dot while a run is active), ↑ first message. */}
+          snapshots. v3.1 AXIS MIRROR: the dock reproduces the chat area's
+          exact geometry — 1140 container, center flex, 28px gap, 300px
+          rail-sized spacer at xl — so the composer sits flush on the
+          conversation column at EVERY breakpoint. (Before, the dock was
+          viewport-centered while the column sat left of center beside the
+          evidence rail — a 164px axis mismatch at xl.) The composer now also
+          spans the column edge-to-edge: its sides align with the messages
+          above it. Jump icons hang above the composer, icon-only by design:
+          ↓ latest (live dot while a run is active), ↑ first message. */}
       <div className="glass-dock sticky bottom-0 z-20">
-        <div className="relative mx-auto w-full max-w-[max(min(768px,50%),340px)]">
+        <div className="mx-auto w-full max-w-[1180px] px-4">
+          <div className="relative mx-auto flex w-full justify-center gap-7">
+            <div className="relative w-full max-w-[max(min(812px,88%),420px)]">
           {(showJump || showTop) && (
             <div className="absolute -top-[58px] left-1/2 z-30 flex -translate-x-1/2 items-center gap-2">
               {showTop && (
@@ -783,7 +804,9 @@ export default function ThreadPage() {
               </Button>
             </div>
           ) : (
-            <div className="px-4 py-3">
+            /* py only — the composer spans the conversation column edge-to-edge,
+               its sides flush with the messages above (v3.1 alignment). */
+            <div className="py-3">
               <AskBox
                 value={followQuery}
                 onChange={setFollowQuery}
@@ -812,7 +835,7 @@ export default function ThreadPage() {
                 stopping={stoppingAll}
                 inputId="follow-input"
               />
-              <p className="kbd-hints mt-2 flex items-center justify-center gap-x-3 gap-y-1 px-4 text-[11px] text-muted-foreground">
+              <p className="kbd-hints mt-2 flex items-center justify-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
                 <span className="inline-flex items-center gap-1"><kbd>/</kbd> focus</span>
                 <span className="inline-flex items-center gap-1"><kbd>⌘K</kbd> commands</span>
                 <span className="inline-flex items-center gap-1"><kbd>J</kbd>/<kbd>K</kbd> claim evidence</span>
@@ -820,6 +843,10 @@ export default function ThreadPage() {
               </p>
             </div>
           )}
+            </div>
+            {/* rail-sized ghost — keeps the composer on the conversation axis at xl */}
+            <div aria-hidden className="hidden w-[300px] shrink-0 xl:block" />
+          </div>
         </div>
       </div>
       {/* claim evidence bottom sheet — phones and tablets (below xl rail). Closing returns focus to the claim chip. */}
