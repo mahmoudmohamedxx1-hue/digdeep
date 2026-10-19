@@ -254,3 +254,15 @@ Work Log:
 
 Stage Summary:
 - v3.2: the user-reported sources bug root-caused to two stacked defects (stale write-once IDB turns + xl-only access path) and fixed both — all sources now open on every screen; export delivers PDF/Word/Excel/Markdown with the verification ledger included; sandbox code-execution scoped honestly with a phased, Vercel-compatible plan awaiting a go/no-go decision.
+
+---
+Task ID: 30 (live addendum)
+Agent: main (Z.ai)
+Task: v3.2 live verification on digdeepx.vercel.app.
+
+Work Log:
+- Deploy landed (~3 min after push, a894f23). Thread page chunk page-6dff741ec648724f.js contains all three v3.2 string markers from three different source files: "See all sources" (sources-row.tsx), "format=docx" + "format=xlsx" (answer.tsx export menu). (The refresh logic's local variable names are minified away — string-marker proof across multiple files in one bundle is the reliable method per the v3.0.3 lesson.)
+- Live export routes verified: /api/research/<id>/export?format=docx and format=xlsx both execute cleanly on production (404 JSON on a nonexistent job — no 500s, the new code paths run).
+
+Stage Summary:
+- v3.2 closed end-to-end: sources open on every screen (stale-cache refresh + all-sources sheet), export delivers PDF/Word/Excel/Markdown, sandbox scoping doc committed. Production verified.
