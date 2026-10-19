@@ -184,3 +184,18 @@ Work Log:
 
 Stage Summary:
 - Live production verified healthy on v3.0.2; v3.0.3 fully verified locally, its Vercel deploy stalled for platform-side reasons beyond this sandbox's control (both pushes are on origin/main; any future build of main ships everything).
+
+---
+Task ID: 28 (live addendum correction)
+Agent: main (Z.ai)
+Task: CORRECTION + closure — v3.0.3 IS live and both new fixes verified on production.
+
+Work Log:
+- CORRECTION of the previous addendum: the deploy had NOT stalled — my detection was flawed twice over. (1) Comparing local vs Vercel chunk hashes is invalid: the two build environments produce different hashes for the same source (local v3.0.3 → page-3e6e025f…, Vercel v3.0.3 → page-9db85ee34006537d.js). (2) My 18:33 "code inspection" grepped an 80-char window BEFORE the "## Executive Summary" literal — the window's left edge cut off the typeof-guard that precedes the chat-mode return, so guarded code masqueraded as unguarded. A plain rg -c '"string"!=typeof' on the served chunk = 1: the guard IS there.
+- LIVE v3.0.3 VERIFIED END-TO-END on digdeepx.vercel.app:
+  - Bug #4 fix (chat-lane info events): "hi" + Court ON → reply renders AND the gavel note "Court mode is on — but there is nothing to put on trial here" + "the gavel comes down" detail + "Routed to: chat" are all VISIBLE on production (t303-live-hi-gavel-note.png).
+  - Bug #5 fix (parseAnswer poison guard): a reportMd:12345 poison turn written into the LIVE origin's IndexedDB → /r/live-poison-test renders the turn with the honest "12345" body, NO white screen (the exact input that killed the page on v3.0.2) (t303-live-poison-guard.png). Test poison cleared from the live origin's IDB afterward.
+- Live home 200 in ~0.5s, zero console/page errors throughout.
+
+Stage Summary:
+- The verification battery is fully closed: 6 suites (static/unit/build/server/E2E-browser/poison + live), 2 real bugs found→fixed→verified locally→verified on production, stop timing measured (instant event, 30s worst-case cancel), .env self-heal proven, render suite permanently committed (12 variants / 48 assertions). Production = v3.0.3.
