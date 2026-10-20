@@ -325,3 +325,23 @@ Work Log:
 
 Stage Summary:
 - v3.3 is code-complete and verified locally end-to-end; the one provable deploy blocker (idempotent migration) is fixed and multi-state tested. The remaining step — the actual Vercel deployment — requires checking the Vercel dashboard for commits 56b8a33/e6b0d36 (build log or a dead Git integration; if the integration shows no builds at all, reconnect the repo or click Redeploy on the latest commit). Everything on the repo side is pushed and green.
+
+---
+Task ID: 33
+Agent: main (Z.ai)
+Task: v3.3 production deploy verification (with a user-provided Vercel token) — close the loop the sandbox couldn't.
+
+Work Log:
+- TOKEN: user supplied a Vercel API token → full deployment visibility for the first time. Project digdeep (prj_EHEjYh69IcxSFLPyuaf9K2XSqeL5, team mahmoud-mohameds-projects-4930b481, Hobby/1-concurrent-build).
+- DIAGNOSIS via build logs: ALL THREE v3.3 builds (56b8a33, e6b0d36, d0af672) failed at postinstall — P3009 "migrate found failed migrations". The REAL root cause was one level deeper than e6b0d36's fix: the first broken deploy left a FAILED record in prod _prisma_migrations, and `prisma migrate deploy` REFUSES to run at all when one exists — so the idempotent-migration fix could never even be attempted. One bad deploy wedged every future deploy.
+- FIX 1 (deploy pipeline): db-migrate-deploy.sh now self-heals P3009 — parses the failed-migration names from deploy stderr, marks each rolled-back (`migrate resolve --rolled-back`), retries deploy once. Safe because every migration is idempotent. Non-P3009 failures (unreachable DB etc.) still fail loudly, no retry.
+- TEST: test-migration.sh State D reproduces the exact incident locally (evolved schema → the ORIGINAL broken 56b8a33 migration from git history → failed record → naive deploy P3009-blocked) and asserts the patched pipeline self-heals to zero failed records + zero drift: 18/18 GREEN.
+- DEPLOY 649735e → READY. Build log proves the self-heal fired in production: "P3009 — failed migration record(s) blocking deploy: 20261020_v33_accounts_workspaces_api_domain → self-heal complete — failed record cleared, migrations applied."
+- PROD VERIFICATION (digdeepx.vercel.app): all v3.3 surfaces live (/, /gallery, /benchmark, /api-docs, /account, /offline/, /manifest.webmanifest, /sw.js, /api/og-card all 200; /s/<bogus> clean 404). Register→session→API-key flow works on the migrated schema. v1 boundary: no key → 401, bogus key → 401. v1 quick run started → researching → synthesizing → completed 100% with 6985B report, 8 claimChecks, citationIntegrity 100, 3 sources, 4-format exportUrls; PDF export 200 with real %PDF magic, MD 200.
+- FIX 2 (P1, found live on prod): the wingspan run stalled at 96% for ~20 min — serverless killed the after() slice at a checkpoint, and NOTHING resumed it: the UI's internal status endpoint re-triggers the engine, but the v1 public detail endpoint was pure read-only, so API-only users' runs could stall forever (the entire point of the public API). Fixed: v1 GET now carries the same continuation trigger (owner's poll + no live engine → after(runJob(id)); lease/heartbeat guards make it a no-op while an engine runs) + maxDuration 300. Resumed the stalled run via the internal endpoint → completed.
+- TEST: standalone test new step 6b gates the regression class — the v1 run must leave 'queued' (engine actually runs from the public API): 38/38 GREEN. Full battery re-run: tsc clean, eslint clean, 6 unit suites green (routing/jury/pin/relevance/render 48/compute 40).
+- DEPLOY b8f608e → READY. Final proof of Fix 2 on prod: fresh v1 run polled ONLY via the v1 endpoint completed in ~100s (researching 15→80→completed 100). The thin single-section report on the second run is the DESIGNED quick lane (intent classifier routes simple factual questions to one-pass quick answers — no audit ledger by design), not a regression.
+- Test residue on prod: account ci-deploybot-3207017254@test.local (password ci-password-123) with 5 ci-* API keys + 2 completed quick runs. Harmless; delete from the account UI if undesired.
+
+Stage Summary:
+- v3.3 IS LIVE AND VERIFIED ON PRODUCTION. Two deploy blockers found and fixed in one session: (1) P3009 failed-migration wedge — pipeline now self-heals, permanently covered by migration State D; (2) v1 API runs stalling at serverless checkpoints — v1 detail endpoint now resumes engines, covered by standalone 6b. Deploys 649735e + b8f608e both READY. Everything green: 38/38 standalone, 18/18 migration states, 6 unit suites, tsc, lint.
