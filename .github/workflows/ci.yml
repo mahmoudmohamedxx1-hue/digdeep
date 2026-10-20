@@ -76,5 +76,8 @@ jobs:
       - name: Prisma schema push
         run: npx prisma db push --skip-generate
 
+      - name: Migration state test (prod-like / clean / zero / P3009 wedge)
+        run: bash scripts/test-migration.sh
+
       - name: Standalone artifact integration test (all 4 exports + surfaces)
         run: bash scripts/test-standalone.sh

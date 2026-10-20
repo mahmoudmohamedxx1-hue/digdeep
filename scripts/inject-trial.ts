@@ -3,20 +3,31 @@
  *  LLM quota. Recreated v3.0.2 (the original was lost uncommitted in a
  *  sandbox reset; see worklog Task 27).
  *
- *  Usage: bun scripts/inject-trial.ts <threadId> [variant]
+ *  Usage: bun scripts/inject-trial.ts <threadId> [variant] [--user <userId>] [--notify]
  *    variant ∈ crasher | hung | partial | legacy   (default: hung)
+ *    --user   attribute the job to an account (tests webhooks/scope flows)
+ *    --notify fire the v3.4 completion hook (webhooks + watch advancement)
  *
  *  Prints the job id. The record is a completed court run: mode=research,
  *  court=true, stats.court per variant, honest reportMd, a few events.
  */
 import { PrismaClient } from "@prisma/client";
+import { notifyRunFinished } from "../src/lib/platform/webhooks";
 
 const prisma = new PrismaClient();
-const threadId = process.argv[2];
-const variant = process.argv[3] ?? "hung";
+const ARGS = process.argv.slice(2);
+const FLAG = (name: string): string | null => {
+  const i = ARGS.indexOf(`--${name}`);
+  return i >= 0 ? (ARGS[i + 1] ?? "") : null;
+};
+const positional = ARGS.filter((a, i) => !a.startsWith("--") && !(i > 0 && ARGS[i - 1].startsWith("--")));
+const threadId = positional[0];
+const variant = positional[1] ?? "hung";
+const userId = FLAG("user");
+const notify = ARGS.includes("--notify");
 
 if (!threadId) {
-  console.error("usage: bun scripts/inject-trial.ts <threadId> [crasher|hung|partial|legacy]");
+  console.error("usage: bun scripts/inject-trial.ts <threadId> [crasher|hung|partial|legacy] [--user <userId>] [--notify]");
   process.exit(1);
 }
 
@@ -99,6 +110,7 @@ const job = await prisma.researchJob.create({
   data: {
     query: String(court.charge),
     threadId,
+    ...(userId ? { userId } : {}),
     status: "completed",
     stage: "Done",
     progress: 100,
@@ -133,4 +145,8 @@ const job = await prisma.researchJob.create({
 });
 
 console.log(`injected [${variant}] job ${job.id} on thread ${threadId}`);
+if (notify) {
+  await notifyRunFinished(job.id); // v3.4: fires webhooks + advances watches (CI step 10)
+  console.log("notified (webhooks + watches)");
+}
 await prisma.$disconnect();

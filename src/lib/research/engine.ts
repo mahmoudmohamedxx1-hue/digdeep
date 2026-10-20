@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { notifyRunFinished } from "@/lib/platform/webhooks";
 import { llmComplete, llmStreamComplete, pinnedBackendId, routeInfoFor, type ChatMsg, type LlmResult, type ModelPref, type StreamDelta } from "./llm";
 import { pinChoiceOf } from "@/lib/model-choices";
 import { capabilityQuestion, courtMetaQuestion, courtTrialWorthiness, followUpishHeuristic, heuristicChatIntent, selfKnowledgeTopic, type SelfTopic } from "./intent-heuristics";
@@ -881,6 +882,7 @@ async function runChatLane(
     status: "completed", stage: "Completed", progress: 100, reportMd: reply,
     stats: JSON.stringify(stats), completedAt: new Date(),
   });
+  await notifyRunFinished(ctx.jobId); // v3.4: webhooks + watch advancement (never throws)
   await ctx.emit("done", "Replied", `Conversational answer in ${Math.round(durationMs / 1000)}s — no sources fetched, no research run${courtRecall ? " — recalled from the court record of this thread's trial" : ""}${fallback ? " (built-in script — models were throttled)" : ""}${pinNote ? ` (${pinNote})` : ""}`, replyModel, stats);
 }
 
@@ -1014,6 +1016,7 @@ async function runQuickLane(
     status: "completed", stage: "Completed", progress: 100, reportMd,
     stats: JSON.stringify(stats), completedAt: new Date(),
   });
+  await notifyRunFinished(ctx.jobId); // v3.4: webhooks + watch advancement (never throws)
   await ctx.emit("done", "Quick answer ready", `Answered in ${Math.round(durationMs / 1000)}s · ${sourcesUsed.length} sources · ${ctx.llmCalls} LLM calls — ask a follow-up or say “go deeper” for the full pipeline`, undefined, stats);
 }
 
@@ -2887,6 +2890,7 @@ export async function runJob(jobId: string) {
         finishedAt: new Date().toISOString(),
       };
       await updateJob(jobId, { status: "completed", stage: "Completed (no sources)", progress: 100, reportMd: abstain, stats: JSON.stringify(statsAbstain), completedAt: new Date() });
+      await notifyRunFinished(jobId); // v3.4: webhooks + watch advancement (never throws)
       await ctx.emit("done", "Abstained honestly — no sources retrieved", `0 sources after ${fmtMin(Date.now() - t0)} — nothing verified, so nothing claimed. Try again shortly.`, undefined, statsAbstain);
       return;
     }
@@ -4116,6 +4120,7 @@ ${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
       undefined,
       stats
     );
+    await notifyRunFinished(jobId); // v3.4: webhooks + watch advancement (never throws)
   } catch (err) {
     // v3.0.2: LlmStoppedError (thrown by the stop hooks inside the LLM ride) is a
     // cancellation, not a failure — same clean path as the engine's own Cancelled.
@@ -4126,6 +4131,7 @@ ${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
       const msg = err instanceof Error ? err.message : String(err);
       await updateJob(jobId, { status: "failed", stage: "Failed", error: msg, completedAt: new Date() }).catch(() => {});
       await db.activityEvent.create({ data: { jobId, type: "error", title: "Research failed", detail: msg, seq: 9_999_999 } }).catch(() => {});
+      await notifyRunFinished(jobId).catch(() => {}); // v3.4: run.failed webhooks
     }
   } finally {
     if (heart) clearInterval(heart);
@@ -4192,9 +4198,11 @@ export async function markStaleJobs() {
         data: { status: "completed", stage: "Completed (tail interrupted — summary/score may be missing)", progress: 100, completedAt: new Date() },
       });
       await db.activityEvent.create({ data: { jobId: j.id, type: "done", title: "Completed with the tail interrupted", detail: "The report body and references were finished, but the function clock ran out during the final polish (summary/citation audit/self-score). The full report is below.", seq: 9_999_997 } }).catch(() => {});
+      await notifyRunFinished(j.id).catch(() => {}); // v3.4: webhooks + watch advancement
       continue;
     }
     await db.researchJob.update({ where: { id: j.id }, data: { status: "failed", stage: "Interrupted", error: "Job stalled or was interrupted (e.g. a redeploy or server restart). Start a new research run or tap Retry.", completedAt: new Date() } });
     await db.activityEvent.create({ data: { jobId: j.id, type: "error", title: "Job interrupted", detail: "The research process was interrupted. Please start a new run or tap Retry.", seq: 9_999_998 } }).catch(() => {});
+    await notifyRunFinished(j.id).catch(() => {}); // v3.4: run.failed webhooks
   }
 }

@@ -3,7 +3,8 @@ import Link from "next/link";
 import { readFileSync, existsSync, readdirSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
-import { ArrowRight, FlaskConical, Eye, ShieldCheck, AlertTriangle } from "lucide-react";
+import { ArrowRight, FlaskConical, Eye, ShieldCheck, AlertTriangle, Activity } from "lucide-react";
+import { getPublicStats } from "@/lib/platform/public-stats";
 
 export const dynamic = "force-dynamic";
 
@@ -60,10 +61,11 @@ function latestRun(): BenchRun | null {
   }
 }
 
-export default function BenchmarkPage() {
+export default async function BenchmarkPage() {
   const run = latestRun();
   const rows = run?.results ?? [];
   const failures = rows.filter((r) => (r.coverage ?? 0) < 60 || r.error);
+  const stats = await getPublicStats();
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-10 md:py-14">
@@ -104,7 +106,72 @@ export default function BenchmarkPage() {
         </div>
       </section>
 
-      {/* Methodology */}
+      {/* v3.4 — LIVE TRACK RECORD (production truth, not harness numbers) */}
+      <section className="mt-12">
+        <h2 className="flex items-center gap-2 text-xl font-semibold">
+          <Activity className="h-4.5 w-4.5 text-primary" /> Live track record — what the system has actually done
+        </h2>
+        <p className="mt-2 max-w-2xl text-[15px] leading-relaxed text-muted-foreground">
+          The numbers above measure the method on a fixed question set. These measure the machine in production,
+          computed live from real runs — no curation, no snapshot, refresh every minute (JSON at{" "}
+          <Link href="/api/stats" className="text-primary hover:underline">/api/stats</Link>). Quality figures cover
+          the {stats.window.label}; totals are all-time.
+        </p>
+        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="rounded-xl border bg-card p-4">
+            <div className="text-[11px] font-medium text-muted-foreground">COMPLETED RUNS</div>
+            <div className="mt-1 text-2xl font-semibold">{stats.totals.completedRuns.toLocaleString()}</div>
+            <div className="text-[11px] text-muted-foreground">+{stats.last7d.completedRuns} in the last 7 days</div>
+          </div>
+          <div className="rounded-xl border bg-card p-4">
+            <div className="text-[11px] font-medium text-muted-foreground">CITATION INTEGRITY</div>
+            <div className="mt-1 text-2xl font-semibold">{stats.quality.avgCitationIntegrity != null ? `${stats.quality.avgCitationIntegrity}%` : "—"}</div>
+            <div className="text-[11px] text-muted-foreground">avg, {stats.window.label}</div>
+          </div>
+          <div className="rounded-xl border bg-card p-4">
+            <div className="text-[11px] font-medium text-muted-foreground">CLAIMS CHECKED</div>
+            <div className="mt-1 text-2xl font-semibold">{stats.quality.claimChecks.toLocaleString()}</div>
+            <div className="text-[11px] text-muted-foreground">individual claims audited against citations</div>
+          </div>
+          <div className="rounded-xl border bg-card p-4">
+            <div className="text-[11px] font-medium text-muted-foreground">SOURCES CONSULTED</div>
+            <div className="mt-1 text-2xl font-semibold">{stats.totals.sourcesConsulted.toLocaleString()}</div>
+            <div className="text-[11px] text-muted-foreground">pages fetched and read, all-time</div>
+          </div>
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="rounded-xl border bg-card p-4">
+            <div className="text-[11px] font-medium text-muted-foreground">COURT VERDICTS</div>
+            <div className="mt-1 text-2xl font-semibold">{stats.quality.courtRuns ? `${stats.quality.guilty}G · ${stats.quality.notGuilty}NG · ${stats.quality.hung}HUNG` : "—"}</div>
+            <div className="text-[11px] text-muted-foreground">guilty · not guilty · hung jury, {stats.window.label}</div>
+          </div>
+          <div className="rounded-xl border bg-card p-4">
+            <div className="text-[11px] font-medium text-muted-foreground">MEDIAN RUN TIME</div>
+            <div className="mt-1 text-2xl font-semibold">{stats.duration.p50Sec != null ? `${Math.round(stats.duration.p50Sec)}s` : "—"}</div>
+            <div className="text-[11px] text-muted-foreground">p90: {stats.duration.p90Sec != null ? `${Math.round(stats.duration.p90Sec)}s` : "—"}</div>
+          </div>
+          <div className="rounded-xl border bg-card p-4">
+            <div className="text-[11px] font-medium text-muted-foreground">SHARED REPORTS</div>
+            <div className="mt-1 text-2xl font-semibold">{stats.totals.sharedReports.toLocaleString()}</div>
+            <div className="text-[11px] text-muted-foreground">public read-only report links</div>
+          </div>
+          <div className="rounded-xl border bg-card p-4">
+            <div className="text-[11px] font-medium text-muted-foreground">HONEST FAILURE RATE</div>
+            <div className="mt-1 text-2xl font-semibold">
+              {stats.totals.completedRuns + stats.totals.failedRuns > 0
+                ? `${Math.round((stats.totals.failedRuns / (stats.totals.completedRuns + stats.totals.failedRuns)) * 100)}%`
+                : "—"}
+            </div>
+            <div className="text-[11px] text-muted-foreground">failed runs reported honestly, all-time</div>
+          </div>
+        </div>
+        {stats.totals.activeWatches > 0 && (
+          <p className="mt-3 text-[12px] text-muted-foreground">
+            {stats.totals.activeWatches} active scheduled watch{stats.totals.activeWatches === 1 ? "" : "es"} re-verifying
+            questions on cadence right now.
+          </p>
+        )}
+      </section>
       <section className="mt-12 space-y-8 text-[15px] leading-relaxed">
         <div>
           <h2 className="text-xl font-semibold">1 · The question set</h2>

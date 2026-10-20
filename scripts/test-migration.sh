@@ -22,7 +22,13 @@ PGPORT=5433
 export PGUSER PGPASSWORD PGHOST PGPORT
 BASE_URL="postgresql://postgres:postgres@localhost:5433"
 V33="prisma/migrations/20261020_v33_accounts_workspaces_api_domain"
+V34="prisma/migrations/20261021_v34_platform_scopes_webhooks_watches"
 STASH="$(mktemp -d)"
+
+# stash/restore BOTH post-init migration dirs — base states (A/B/D) must start
+# from init+shared only, with v33+v34 applied on top (v3.4 added a second dir).
+stash_post() { mv "$V33" "$STASH/"; mv "$V34" "$STASH/"; }
+restore_post() { mv "$STASH/20261020_v33_accounts_workspaces_api_domain" prisma/migrations/; mv "$STASH/20261021_v34_platform_scopes_webhooks_watches" prisma/migrations/; }
 
 pass() { echo "  ✅ $1"; }
 fail() { echo "  ❌ $1"; FAILED=1; }
@@ -60,17 +66,17 @@ pg_scalar() {
 }
 
 echo "── State A: prod-like (init+shared applied, schema evolved by db push) ──"
-mv "$V33" "$STASH/"
+stash_post
 DATABASE_URL="$BASE_URL/mig_a" npx prisma migrate deploy >/dev/null 2>&1 && pass "init + shared_reports applied" || fail "base migrations failed on mig_a"
 DATABASE_URL="$BASE_URL/mig_a" npx prisma db push --skip-generate --accept-data-loss >/dev/null 2>&1 && pass "db push evolution (prod simulation)" || fail "db push failed on mig_a"
-mv "$STASH/20261020_v33_accounts_workspaces_api_domain" prisma/migrations/
-DATABASE_URL="$BASE_URL/mig_a" npx prisma migrate deploy >/dev/null 2>&1 && pass "v3.3 migration applied over evolved schema (idempotent)" || fail "v3.3 migration FAILED on evolved schema — this is the deploy killer"
+restore_post
+DATABASE_URL="$BASE_URL/mig_a" npx prisma migrate deploy >/dev/null 2>&1 && pass "v3.3+v3.4 migrations applied over evolved schema (idempotent)" || fail "post-init migrations FAILED on evolved schema — this is the deploy killer"
 
-echo "── State B: clean history (init+shared only, v3.3 adds everything) ──"
-mv "$V33" "$STASH/"
+echo "── State B: clean history (init+shared only, v3.3+v3.4 add everything) ──"
+stash_post
 DATABASE_URL="$BASE_URL/mig_b" npx prisma migrate deploy >/dev/null 2>&1 && pass "init + shared_reports applied" || fail "base migrations failed on mig_b"
-mv "$STASH/20261020_v33_accounts_workspaces_api_domain" prisma/migrations/
-DATABASE_URL="$BASE_URL/mig_b" npx prisma migrate deploy >/dev/null 2>&1 && pass "v3.3 migration applied on clean history" || fail "v3.3 migration FAILED on clean history"
+restore_post
+DATABASE_URL="$BASE_URL/mig_b" npx prisma migrate deploy >/dev/null 2>&1 && pass "v3.3+v3.4 applied on clean history" || fail "post-init migrations FAILED on clean history"
 
 echo "── State C: empty database (full history from zero) ──"
 DATABASE_URL="$BASE_URL/mig_c" npx prisma migrate deploy >/dev/null 2>&1 && pass "full history applied from zero" || fail "full deploy FAILED from zero"
@@ -82,7 +88,7 @@ echo "── State D: P3009 wedge (the actual v3.3 production incident) ──"
 #      fails mid-deploy → leaves a FAILED record in _prisma_migrations
 #   3. every naive `migrate deploy` is now P3009-blocked (deploy outage)
 #   4. the PATCHED db-migrate-deploy.sh must clear the wedge and finish green
-mv "$V33" "$STASH/"
+stash_post
 DATABASE_URL="$BASE_URL/mig_d" npx prisma migrate deploy >/dev/null 2>&1 && pass "init + shared_reports applied (mig_d)" || fail "base migrations failed on mig_d"
 DATABASE_URL="$BASE_URL/mig_d" npx prisma db push --skip-generate --accept-data-loss >/dev/null 2>&1 && pass "db push evolution (wedge substrate)" || fail "db push failed on mig_d"
 mkdir -p "$V33"
@@ -100,12 +106,14 @@ else
   pass "naive re-deploy blocked by P3009 (the deploy outage, reproduced)"
 fi
 rm -rf "$V33"
-mv "$STASH/20261020_v33_accounts_workspaces_api_domain" prisma/migrations/
+restore_post
 HEAL_LOG=/tmp/mig-d-heal.log
 if DATABASE_URL="$BASE_URL/mig_d" bash scripts/db-migrate-deploy.sh > "$HEAL_LOG" 2>&1; then :; fi  # exit code is lenient off-Vercel; assert on state below
-grep -q "self-heal complete" "$HEAL_LOG" && pass "db-migrate-deploy.sh self-healed the wedge" || { fail "self-heal did not trigger"; sed -n '1,25p' "$HEAL_LOG"; }
+grep -q "self-heal complete" "$HEAL_LOG" && pass "db-migrate-deploy.sh self-healed the wedge (v3.3+v3.4 applied)" || { fail "self-heal did not trigger"; sed -n '1,25p' "$HEAL_LOG"; }
 V33DONE=$(pg_scalar mig_d "SELECT count(*)::int AS n FROM _prisma_migrations WHERE migration_name = \$1 AND finished_at IS NOT NULL" 20261020_v33_accounts_workspaces_api_domain)
 [[ "$V33DONE" == "1" ]] && pass "v3.3 migration now recorded as cleanly applied" || fail "v3.3 migration not applied after self-heal ($V33DONE)"
+V34DONE=$(pg_scalar mig_d "SELECT count(*)::int AS n FROM _prisma_migrations WHERE migration_name = \$1 AND finished_at IS NOT NULL" 20261021_v34_platform_scopes_webhooks_watches)
+[[ "$V34DONE" == "1" ]] && pass "v3.4 migration recorded as cleanly applied" || fail "v3.4 migration not applied after self-heal ($V34DONE)"
 LEFT=$(pg_scalar mig_d "SELECT count(*)::int AS n FROM _prisma_migrations WHERE finished_at IS NULL AND rolled_back_at IS NULL")
 [[ "$LEFT" == "0" ]] && pass "no failed records remain" || fail "$LEFT failed record(s) remain after self-heal"
 

@@ -44,6 +44,12 @@ export interface SessionUser {
   name: string | null;
 }
 
+// v3.4: API callers carry their key's authorization + quota metadata.
+export type ApiCaller = SessionUser & { key: { id: string; scopes: string[]; monthlyLimit: number | null } };
+
+export const KEY_SCOPES = ["research:read", "research:write", "webhooks", "watches"] as const;
+export type KeyScope = (typeof KEY_SCOPES)[number];
+
 /** Read the current session from the cookie. Returns null when signed out. */
 export async function getSessionUser(): Promise<SessionUser | null> {
   try {
@@ -94,7 +100,7 @@ export async function getApiCaller(): Promise<SessionUser | null> {
   return null;
 }
 
-export async function userFromApiKey(authHeader: string | null): Promise<SessionUser | null> {
+export async function userFromApiKey(authHeader: string | null): Promise<ApiCaller | null> {
   if (!authHeader?.startsWith("Bearer ddk_")) return null;
   const key = authHeader.slice("Bearer ".length).trim();
   if (key.length < 20) return null;
@@ -104,7 +110,16 @@ export async function userFromApiKey(authHeader: string | null): Promise<Session
   });
   if (!record) return null;
   await db.apiKey.update({ where: { id: record.id }, data: { lastUsedAt: new Date() } }).catch(() => {});
-  return { id: record.user.id, email: record.user.email, name: record.user.name };
+  return {
+    id: record.user.id,
+    email: record.user.email,
+    name: record.user.name,
+    key: { id: record.id, scopes: record.scopes?.length ? record.scopes : [...KEY_SCOPES], monthlyLimit: record.monthlyLimit ?? null },
+  };
+}
+
+export function hasScope(caller: ApiCaller, scope: KeyScope): boolean {
+  return caller.key.scopes.includes(scope);
 }
 
 // --- tiny in-memory rate limiter (abuse telemetry baseline, P0 hardening) ---

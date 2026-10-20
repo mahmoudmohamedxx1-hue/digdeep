@@ -8,62 +8,71 @@ datasource db {
 }
 
 model ResearchJob {
-  id             String       @id @default(cuid())
-  query          String
-  threadId       String? // groups follow-up questions into one Perplexity-style thread
-  status         String       @default("queued") // queued|planning|researching|critiquing|synthesizing|completed|failed|cancelled
-  stage          String       @default("Initializing")
-  progress       Int          @default(0)
-  preset         String       @default("standard") // quick|standard|deep|exhaustive|custom
-  mode           String       @default("research") // chat|quick|research — how the engine answered this turn
-  court          Boolean      @default(false) // put the idea on trial: prosecutor + defense + jury of 12 + judge
-  language       String       @default("English")
-  modelPref      String       @default("auto") // auto|glm|pool
-  domain         String       @default("general") // general|law|finance|medicine — P2-1 domain packs
-  breadth        Int          @default(3)
-  depth          Int          @default(2)
-  maxSources     Int          @default(18)
-  maxMinutes     Int          @default(30)
-  reportMd       String?
-  plan           String? // JSON research plan
-  stats          String? // JSON final stats
-  docs           String? // JSON [{name, text}] — user-attached ground-truth documents (P2-3)
-  error          String?
-  cancelRequested Boolean     @default(false)
+  id              String            @id @default(cuid())
+  query           String
+  threadId        String? // groups follow-up questions into one Perplexity-style thread
+  status          String            @default("queued") // queued|planning|researching|critiquing|synthesizing|completed|failed|cancelled
+  stage           String            @default("Initializing")
+  progress        Int               @default(0)
+  preset          String            @default("standard") // quick|standard|deep|exhaustive|custom
+  mode            String            @default("research") // chat|quick|research — how the engine answered this turn
+  court           Boolean           @default(false) // put the idea on trial: prosecutor + defense + jury of 12 + judge
+  language        String            @default("English")
+  modelPref       String            @default("auto") // auto|glm|pool
+  domain          String            @default("general") // general|law|finance|medicine — P2-1 domain packs
+  breadth         Int               @default(3)
+  depth           Int               @default(2)
+  maxSources      Int               @default(18)
+  maxMinutes      Int               @default(30)
+  reportMd        String?
+  plan            String? // JSON research plan
+  stats           String? // JSON final stats
+  docs            String? // JSON [{name, text}] — user-attached ground-truth documents (P2-3)
+  error           String?
+  cancelRequested Boolean           @default(false)
   // v2.5.0 continuation engine: cross-slice resume state + instance lease
-  checkpoint     String? // JSON EngineCheckpoint — phase cursor + volatile ctx state
-  leaseUntil     DateTime? // single-run guard across serverless instances
-  sliceN         Int      @default(0) // how many 300s slices this run has consumed
+  checkpoint      String? // JSON EngineCheckpoint — phase cursor + volatile ctx state
+  leaseUntil      DateTime? // single-run guard across serverless instances
+  sliceN          Int               @default(0) // how many 300s slices this run has consumed
   // v3.3 accounts & workspaces (P1-1 / P2-2)
-  userId         String? // owning account, null = anonymous
-  workspaceId    String? // owning workspace, null = personal
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-  startedAt      DateTime?
-  completedAt    DateTime?
-  events         ActivityEvent[]
-  sources        Source[]
-  sections       ResearchSection[]
-  owner          User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
-  workspace      Workspace?     @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  userId          String? // owning account, null = anonymous
+  workspaceId     String? // owning workspace, null = personal
+  // v3.4 platform layer
+  apiKeyId        String? // which API key started this run (usage attribution + quota)
+  watchId         String? // set when this run is a scheduled watch refresh
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  startedAt       DateTime?
+  completedAt     DateTime?
+  events          ActivityEvent[]
+  sources         Source[]
+  sections        ResearchSection[]
+  owner           User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  workspace       Workspace?        @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  apiKey          ApiKey?           @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
+  watch           Watch?            @relation(fields: [watchId], references: [id], onDelete: SetNull)
 
   @@index([status, updatedAt])
   @@index([userId, updatedAt])
   @@index([workspaceId, updatedAt])
+  @@index([apiKeyId, createdAt]) // v3.4: monthly-quota counts
+  @@index([watchId])
 }
 
 // v3.3 P1-1 — accounts & sync. Passwords hashed with scrypt (node:crypto, no native deps).
 model User {
-  id           String        @id @default(cuid())
-  email        String        @unique
+  id           String            @id @default(cuid())
+  email        String            @unique
   name         String?
   passwordHash String
-  createdAt    DateTime      @default(now())
+  createdAt    DateTime          @default(now())
   sessions     Session[]
   apiKeys      ApiKey[]
   jobs         ResearchJob[]
-  owned        Workspace[]   @relation("WorkspaceOwner")
+  owned        Workspace[]       @relation("WorkspaceOwner")
   memberships  WorkspaceMember[]
+  webhooks     Webhook[]
+  watches      Watch[]
 
   @@index([createdAt])
 }
@@ -80,97 +89,101 @@ model Session {
 
 // v3.3 P2-2 — team workspaces: shared research library + audit views.
 model Workspace {
-  id        String   @id @default(cuid())
-  name      String
-  ownerId   String
-  owner     User     @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
-  inviteCode String  @unique // share to let teammates join
-  createdAt DateTime @default(now())
-  jobs      ResearchJob[]
-  members   WorkspaceMember[]
+  id         String            @id @default(cuid())
+  name       String
+  ownerId    String
+  owner      User              @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  inviteCode String            @unique // share to let teammates join
+  createdAt  DateTime          @default(now())
+  jobs       ResearchJob[]
+  members    WorkspaceMember[]
 
   @@index([createdAt])
 }
 
 model WorkspaceMember {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   workspaceId String
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  role        String   @default("member") // owner|member
-  createdAt   DateTime @default(now())
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role        String    @default("member") // owner|member
+  createdAt   DateTime  @default(now())
 
   @@unique([workspaceId, userId])
 }
 
 // v3.3 P2-3 — public API keys for the verified-report API.
 model ApiKey {
-  id         String    @id @default(cuid())
-  userId     String
-  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  name       String    @default("default")
-  prefix     String // first chars of the key, shown in UI
-  keyHash    String // sha256 of the full key
-  revoked    Boolean   @default(false)
-  lastUsedAt DateTime?
-  createdAt  DateTime  @default(now())
+  id           String        @id @default(cuid())
+  userId       String
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String        @default("default")
+  prefix       String // first chars of the key, shown in UI
+  keyHash      String // sha256 of the full key
+  revoked      Boolean       @default(false)
+  lastUsedAt   DateTime?
+  createdAt    DateTime      @default(now())
+  // v3.4 platform layer — per-key authorization + usage caps
+  scopes       String[]      @default(["research:read", "research:write", "webhooks", "watches"])
+  monthlyLimit Int? // max research runs per calendar month via this key; null = unlimited
+  researchJobs ResearchJob[]
 
   @@index([userId])
 }
 
 model ActivityEvent {
-  id      String       @id @default(cuid())
-  jobId   String
-  job     ResearchJob  @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  seq     Int
-  ts      DateTime     @default(now())
-  type    String // think|search|read|source|summary|gap|section|draft|critique|error|info|done
-  title   String
-  detail  String?
-  model   String?
-  meta    String? // JSON
-  level   String       @default("normal") // normal|verbose
+  id     String      @id @default(cuid())
+  jobId  String
+  job    ResearchJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  seq    Int
+  ts     DateTime    @default(now())
+  type   String // think|search|read|source|summary|gap|section|draft|critique|error|info|done
+  title  String
+  detail String?
+  model  String?
+  meta   String? // JSON
+  level  String      @default("normal") // normal|verbose
 
   @@unique([jobId, seq])
 }
 
 model Source {
-  id           String       @id @default(cuid())
+  id           String      @id @default(cuid())
   jobId        String
-  job          ResearchJob  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  job          ResearchJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
   url          String
   domain       String
   title        String
   snippet      String?
   engine       String
-  words        Int          @default(0)
-  quality      Int          @default(0)
-  used         Boolean      @default(false)
+  words        Int         @default(0)
+  quality      Int         @default(0)
+  used         Boolean     @default(false)
   sectionTitle String?
-  round        Int          @default(1)
-  createdAt    DateTime     @default(now())
+  round        Int         @default(1)
+  createdAt    DateTime    @default(now())
 
   @@unique([jobId, url])
 }
 
 model ResearchSection {
-  id        String       @id @default(cuid())
+  id        String      @id @default(cuid())
   jobId     String
-  job       ResearchJob  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  job       ResearchJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
   order     Int
   title     String
   question  String
-  status    String       @default("pending") // pending|researching|done
+  status    String      @default("pending") // pending|researching|done
   findings  String?
   draftMd   String?
   queries   String? // JSON string[]
-  rounds    Int          @default(0)
-  createdAt DateTime     @default(now())
+  rounds    Int         @default(0)
+  createdAt DateTime    @default(now())
 }
 
 model Setting {
-  key   String   @id
+  key   String @id
   value String
 }
 
@@ -191,4 +204,60 @@ model SharedReport {
   createdAt DateTime @default(now())
 
   @@index([createdAt])
+}
+
+// v3.4 — WEBHOOKS: signed HTTP callbacks when runs finish.
+// HMAC-SHA256 per-hook secret; delivery attempts logged for the owner.
+model Webhook {
+  id         String            @id @default(cuid())
+  userId     String
+  user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  url        String
+  secret     String // per-hook signing secret (regenerable) — HMAC-SHA256
+  events     String[] // ["run.completed","run.failed","watch.changed"]
+  active     Boolean           @default(true)
+  createdAt  DateTime          @default(now())
+  deliveries WebhookDelivery[]
+
+  @@index([userId])
+}
+
+model WebhookDelivery {
+  id        String   @id @default(cuid())
+  webhookId String
+  webhook   Webhook  @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  jobId     String?
+  event     String
+  ok        Boolean
+  status    Int? // HTTP response code
+  attempts  Int      @default(1)
+  error     String?
+  createdAt DateTime @default(now())
+
+  @@index([webhookId, createdAt])
+}
+
+// v3.4 — WATCHED RESEARCH: re-run a query on a cadence, alert when the
+// verdict/evidence fingerprint changes. Refresh runs carry watchId, so the
+// engine's completion hook can compare signatures and fire watch.changed.
+model Watch {
+  id            String        @id @default(cuid())
+  userId        String
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  query         String
+  preset        String        @default("standard")
+  domain        String        @default("general")
+  language      String        @default("English")
+  court         Boolean       @default(false)
+  cadenceDays   Int           @default(7)
+  active        Boolean       @default(true)
+  lastRunId     String?
+  lastVerdict   String? // human summary of the latest outcome
+  lastSignature String? // sha256 fingerprint of verdict + evidence set
+  lastChangedAt DateTime?
+  nextRunAt     DateTime      @default(now())
+  createdAt     DateTime      @default(now())
+  runs          ResearchJob[]
+
+  @@index([active, nextRunAt])
 }

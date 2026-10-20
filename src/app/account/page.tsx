@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Copy, KeyRound, LogOut, Plus, RefreshCw, Scale, ShieldCheck, Users, Check, X,
+  Copy, KeyRound, LogOut, Plus, RefreshCw, Scale, ShieldCheck, Users, Check, X, Webhook, Eye, Play,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,13 +12,26 @@ import { getThreadTurns } from "@/lib/idb-store";
 import { useSettings } from "@/lib/store";
 
 /**
- * P1-1 / P2-2 / P2-3 — Account: sign in / register (with anonymous-history
- * migration), API keys for the verified-report API, and team workspaces.
+ * P1-1 / P2-2 / P2-3 / v3.4 — Account: sign in / register (with anonymous-history
+ * migration), API keys (scopes + monthly quotas), team workspaces, webhooks,
+ * and scheduled watches.
  */
 
+const ALL_SCOPES = [
+  ["research:read", "read runs & reports"],
+  ["research:write", "start runs"],
+  ["webhooks", "manage webhooks"],
+  ["watches", "manage scheduled watches"],
+] as const;
+
+const ALL_EVENTS = ["run.completed", "run.failed", "watch.changed"] as const;
+
 type SessionUser = { id: string; email: string; name: string | null };
-type ApiKeyRow = { id: string; name: string; prefix: string; revoked: boolean; lastUsedAt: string | null; createdAt: string };
+type ApiKeyRow = { id: string; name: string; prefix: string; revoked: boolean; lastUsedAt: string | null; createdAt: string; scopes: string[]; monthlyLimit: number | null; usage: number | null };
 type WorkspaceRow = { id: string; name: string; role: string; inviteCode: string | null; owner: string; jobs: number; members: number; createdAt: string };
+type DeliveryRow = { id: string; event: string; ok: boolean; status: number | null; error: string | null; createdAt: string };
+type WebhookRow = { id: string; url: string; events: string[]; active: boolean; secret: string; createdAt: string; recentDeliveries: DeliveryRow[] };
+type WatchRow = { id: string; query: string; preset: string; court: boolean; cadenceDays: number; active: boolean; lastRunId: string | null; lastVerdict: string | null; lastChangedAt: string | null; nextRunAt: string; createdAt: string };
 
 export default function AccountPage() {
   const router = useRouter();
@@ -34,6 +47,17 @@ export default function AccountPage() {
   const [keys, setKeys] = useState<ApiKeyRow[]>([]);
   const [freshKey, setFreshKey] = useState<string | null>(null);
   const [keyName, setKeyName] = useState("");
+  const [keyScopes, setKeyScopes] = useState<string[]>(ALL_SCOPES.map(([s]) => s));
+  const [keyLimit, setKeyLimit] = useState("");
+  // webhooks
+  const [hooks, setHooks] = useState<WebhookRow[]>([]);
+  const [hookUrl, setHookUrl] = useState("");
+  const [hookEvents, setHookEvents] = useState<string[]>(["run.completed"]);
+  // watches
+  const [watches, setWatches] = useState<WatchRow[]>([]);
+  const [watchQuery, setWatchQuery] = useState("");
+  const [watchCadence, setWatchCadence] = useState("7");
+  const [watchCourt, setWatchCourt] = useState(false);
   // workspaces
   const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([]);
   const [wsName, setWsName] = useState("");
@@ -47,12 +71,16 @@ export default function AccountPage() {
       const u = (res.user ?? null) as SessionUser | null;
       setUser(u);
       if (u) {
-        const [k, w] = await Promise.all([
+        const [k, w, h, wt] = await Promise.all([
           fetch("/api/keys").then((r) => r.json()),
           fetch("/api/workspaces").then((r) => r.json()),
+          fetch("/api/webhooks").then((r) => r.json()),
+          fetch("/api/watches").then((r) => r.json()),
         ]);
         setKeys(k.keys ?? []);
         setWorkspaces(w.workspaces ?? []);
+        setHooks(h.webhooks ?? []);
+        setWatches(wt.watches ?? []);
       }
     } catch {
       /* offline — the page still renders the sign-in form */
@@ -117,6 +145,8 @@ export default function AccountPage() {
     setUser(null);
     setKeys([]);
     setWorkspaces([]);
+    setHooks([]);
+    setWatches([]);
     toast({ title: "Signed out. Your local history stays in this browser." });
   }
 
@@ -124,7 +154,12 @@ export default function AccountPage() {
     const res = await fetch("/api/keys", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "create", name: keyName || "default" }),
+      body: JSON.stringify({
+        action: "create",
+        name: keyName || "default",
+        scopes: keyScopes,
+        monthlyLimit: keyLimit === "" ? undefined : Number(keyLimit),
+      }),
     }).then((r) => r.json());
     if (res.error) {
       toast({ title: res.error });
@@ -132,6 +167,7 @@ export default function AccountPage() {
     }
     setFreshKey(res.key);
     setKeyName("");
+    setKeyLimit("");
     await loadAll();
   }
 
@@ -158,7 +194,6 @@ export default function AccountPage() {
     toast({ title: `Workspace “${res.workspace.name}” created.` });
     await loadAll();
   }
-
   async function joinWorkspace() {
     const res = await fetch("/api/workspaces", {
       method: "POST",
@@ -172,6 +207,55 @@ export default function AccountPage() {
     setJoinCode("");
     toast({ title: `Joined “${res.workspace.name}”.` });
     await loadAll();
+  }
+
+  async function hookAction(body: Record<string, unknown>) {
+    const res = await fetch("/api/webhooks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then((r) => r.json());
+    if (res.error) {
+      toast({ title: res.error });
+      return null;
+    }
+    await loadAll();
+    return res;
+  }
+
+  async function createWebhook() {
+    const res = await hookAction({ action: "create", url: hookUrl, events: hookEvents });
+    if (res) {
+      setHookUrl("");
+      toast({ title: "Webhook registered — keep the signing secret for verification." });
+    }
+  }
+
+  async function watchAction(body: Record<string, unknown>) {
+    const res = await fetch("/api/watches", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then((r) => r.json());
+    if (res.error) {
+      toast({ title: res.error });
+      return null;
+    }
+    await loadAll();
+    return res;
+  }
+
+  async function createWatch() {
+    const res = await watchAction({
+      action: "create",
+      query: watchQuery,
+      cadenceDays: Number(watchCadence) || 7,
+      court: watchCourt,
+    });
+    if (res) {
+      setWatchQuery("");
+      toast({ title: "Watch scheduled — first run at the next scheduler tick." });
+    }
   }
 
   if (loading) {
@@ -257,11 +341,32 @@ export default function AccountPage() {
           </div>
         )}
 
-        <div className="mt-4 flex gap-2">
-          <Input placeholder="Key name (e.g. production)" value={keyName} onChange={(e) => setKeyName(e.target.value)} maxLength={60} />
-          <Button onClick={createKey} className="shrink-0">
-            <Plus className="mr-1 h-4 w-4" /> Create key
-          </Button>
+        <div className="mt-4 rounded-xl border p-4">
+          <div className="flex flex-wrap gap-2">
+            <Input placeholder="Key name (e.g. production)" value={keyName} onChange={(e) => setKeyName(e.target.value)} maxLength={60} className="max-w-xs" />
+            <Input
+              type="number" min={1} placeholder="Monthly run cap (optional)"
+              value={keyLimit} onChange={(e) => setKeyLimit(e.target.value)} className="max-w-[200px]"
+            />
+            <Button onClick={createKey} className="shrink-0">
+              <Plus className="mr-1 h-4 w-4" /> Create key
+            </Button>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2">
+            {ALL_SCOPES.map(([scope, label]) => (
+              <label key={scope} className="flex cursor-pointer items-center gap-1.5 text-[12px] text-muted-foreground">
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5 accent-[var(--primary)]"
+                  checked={keyScopes.includes(scope)}
+                  onChange={(e) =>
+                    setKeyScopes((prev) => (e.target.checked ? [...prev, scope] : prev.filter((s) => s !== scope)))
+                  }
+                />
+                <code className="font-mono">{scope}</code> · {label}
+              </label>
+            ))}
+          </div>
         </div>
 
         {keys.length > 0 && (
@@ -269,14 +374,19 @@ export default function AccountPage() {
             {keys.map((k) => (
               <div key={k.id} className={`flex items-center justify-between gap-3 rounded-xl border p-3 ${k.revoked ? "opacity-60" : ""}`}>
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2 text-sm font-medium">
+                  <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
                     {k.revoked ? <X className="h-3.5 w-3.5 text-destructive" /> : <Check className="h-3.5 w-3.5 text-emerald-600" />}
                     {k.name}
                     <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">{k.prefix}</code>
+                    {(k.scopes ?? []).filter((s) => s !== "research:read").map((s) => (
+                      <span key={s} className="rounded-full border border-primary/25 bg-primary/5 px-1.5 py-0.5 font-mono text-[10px] text-primary">{s}</span>
+                    ))}
                   </div>
                   <p className="mt-0.5 text-[11px] text-muted-foreground">
                     created {new Date(k.createdAt).toLocaleDateString()}
                     {k.lastUsedAt ? ` · last used ${new Date(k.lastUsedAt).toLocaleDateString()}` : " · never used"}
+                    {k.monthlyLimit != null && k.usage != null && ` · ${k.usage}/${k.monthlyLimit} runs this month`}
+                    {k.monthlyLimit != null && k.usage == null && ` · capped at ${k.monthlyLimit} runs/month`}
                   </p>
                 </div>
                 {!k.revoked && (
@@ -329,6 +439,152 @@ export default function AccountPage() {
                   <p className="mt-1.5 font-mono text-[11px] text-muted-foreground">invite: {w.inviteCode}</p>
                 )}
               </button>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* WEBHOOKS (v3.4) */}
+      <section>
+        <h2 className="flex items-center gap-2 text-lg font-semibold">
+          <Webhook className="h-4.5 w-4.5 text-primary" /> Webhooks
+        </h2>
+        <p className="mt-1.5 text-sm text-muted-foreground">
+          DigDeep POSTs to your endpoints when runs finish or watched verdicts change — signed with{" "}
+          <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">X-DigDeep-Signature: sha256=HMAC(secret, timestamp.body)</code>.{" "}
+          <a href="/api-docs" className="text-primary hover:underline">Verification examples →</a>
+        </p>
+        <div className="mt-4 rounded-xl border p-4">
+          <div className="flex flex-wrap gap-2">
+            <Input
+              type="url" placeholder="https://your-app.example.com/hook"
+              value={hookUrl} onChange={(e) => setHookUrl(e.target.value)} className="min-w-[240px] flex-1"
+            />
+            <Button onClick={createWebhook} className="shrink-0" disabled={!hookUrl.trim()}>
+              <Plus className="mr-1 h-4 w-4" /> Add webhook
+            </Button>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2">
+            {ALL_EVENTS.map((ev) => (
+              <label key={ev} className="flex cursor-pointer items-center gap-1.5 text-[12px] text-muted-foreground">
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5 accent-[var(--primary)]"
+                  checked={hookEvents.includes(ev)}
+                  onChange={(e) =>
+                    setHookEvents((prev) => (e.target.checked ? [...new Set([...prev, ev])] : prev.filter((x) => x !== ev)))
+                  }
+                />
+                <code className="font-mono">{ev}</code>
+              </label>
+            ))}
+          </div>
+        </div>
+        {hooks.length > 0 && (
+          <div className="mt-4 space-y-2">
+            {hooks.map((h) => (
+              <div key={h.id} className={`rounded-xl border p-3 ${h.active ? "" : "opacity-60"}`}>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                      {h.active ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <X className="h-3.5 w-3.5 text-muted-foreground" />}
+                      <span className="truncate font-mono text-[12px]">{h.url}</span>
+                      {h.events.map((ev) => (
+                        <span key={ev} className="rounded-full border border-primary/25 bg-primary/5 px-1.5 py-0.5 font-mono text-[10px] text-primary">{ev}</span>
+                      ))}
+                    </div>
+                    <p className="mt-1 truncate font-mono text-[10px] text-muted-foreground" title={`secret: ${h.secret}`}>
+                      secret: {h.secret.slice(0, 10)}…
+                    </p>
+                    {h.recentDeliveries.length > 0 && (
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        last delivery: {h.recentDeliveries[0].ok ? "✓" : "✗"} {h.recentDeliveries[0].event}
+                        {h.recentDeliveries[0].status ? ` · HTTP ${h.recentDeliveries[0].status}` : ""}
+                        {h.recentDeliveries[0].error ? ` · ${h.recentDeliveries[0].error.slice(0, 60)}` : ""}
+                        {" · "}{new Date(h.recentDeliveries[0].createdAt).toLocaleString()}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 gap-1">
+                    <Button size="sm" variant="ghost" onClick={() => hookAction({ action: "update", id: h.id, active: !h.active })}>
+                      {h.active ? "Pause" : "Resume"}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => hookAction({ action: "rotate-secret", id: h.id })}>
+                      Rotate
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => hookAction({ action: "delete", id: h.id })}>
+                      Delete
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* WATCHED RESEARCH (v3.4) */}
+      <section>
+        <h2 className="flex items-center gap-2 text-lg font-semibold">
+          <Eye className="h-4.5 w-4.5 text-primary" /> Watched research
+        </h2>
+        <p className="mt-1.5 text-sm text-muted-foreground">
+          Schedule a question and DigDeep re-verifies it on a cadence — when the verdict or the evidence set changes,
+          you get a <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">watch.changed</code> webhook with
+          the previous and current verdicts.
+        </p>
+        <div className="mt-4 rounded-xl border p-4">
+          <div className="flex flex-wrap gap-2">
+            <Input
+              placeholder="A question worth re-checking (e.g. current EV market-share leader?)"
+              value={watchQuery} onChange={(e) => setWatchQuery(e.target.value)} maxLength={600}
+              className="min-w-[240px] flex-1"
+            />
+            <Input
+              type="number" min={1} max={90} title="cadence in days"
+              value={watchCadence} onChange={(e) => setWatchCadence(e.target.value)} className="w-24"
+            />
+            <Button onClick={createWatch} className="shrink-0" disabled={!watchQuery.trim()}>
+              <Plus className="mr-1 h-4 w-4" /> Watch
+            </Button>
+          </div>
+          <label className="mt-3 flex w-fit cursor-pointer items-center gap-2 text-[12px] text-muted-foreground">
+            <input
+              type="checkbox" className="h-3.5 w-3.5 accent-[var(--primary)]"
+              checked={watchCourt} onChange={(e) => setWatchCourt(e.target.checked)}
+            />
+            put each refresh on trial (court verdict tracking)
+          </label>
+        </div>
+        {watches.length > 0 && (
+          <div className="mt-4 space-y-2">
+            {watches.map((w) => (
+              <div key={w.id} className={`flex flex-wrap items-center justify-between gap-3 rounded-xl border p-3 ${w.active ? "" : "opacity-60"}`}>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                    {w.active ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <X className="h-3.5 w-3.5 text-muted-foreground" />}
+                    <span className="truncate">{w.query}</span>
+                    {w.court && (
+                      <span className="rounded-full border border-primary/25 bg-primary/5 px-1.5 py-0.5 text-[10px] text-primary">court</span>
+                    )}
+                  </div>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    every {w.cadenceDays}d · last: {w.lastVerdict ?? "not yet run"} · next: {new Date(w.nextRunAt).toLocaleString()}
+                    {w.lastChangedAt && ` · verdict changed ${new Date(w.lastChangedAt).toLocaleDateString()}`}
+                  </p>
+                </div>
+                <div className="flex shrink-0 gap-1">
+                  <Button size="sm" variant="ghost" onClick={() => watchAction({ action: "run-now", id: w.id })}>
+                    <Play className="mr-1 h-3 w-3" /> Run now
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => watchAction({ action: "update", id: w.id, active: !w.active })}>
+                    {w.active ? "Pause" : "Resume"}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => watchAction({ action: "delete", id: w.id })}>
+                    Delete
+                  </Button>
+                </div>
+              </div>
             ))}
           </div>
         )}

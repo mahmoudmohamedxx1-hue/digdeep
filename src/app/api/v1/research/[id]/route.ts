@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { after } from "next/server";
 import { db } from "@/lib/db";
 import { runJob, engineAlive } from "@/lib/research/engine";
-import { userFromApiKey } from "@/lib/auth";
+import { userFromApiKey, hasScope } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 // continuation polls extend this function past the response — same 300s
@@ -21,6 +21,9 @@ const ACTIVE = ["queued", "planning", "researching", "critiquing", "synthesizing
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const caller = await userFromApiKey(req.headers.get("authorization"));
   if (!caller) return NextResponse.json({ error: "Missing or invalid API key." }, { status: 401 });
+  if (!hasScope(caller, "research:read")) {
+    return NextResponse.json({ error: "This API key lacks the 'research:read' scope." }, { status: 403 });
+  }
   const { id } = await params;
   const job = await db.researchJob.findUnique({
     where: { id },
