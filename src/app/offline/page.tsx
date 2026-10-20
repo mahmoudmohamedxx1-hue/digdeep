@@ -1,5 +1,6 @@
-import { WifiOff, RefreshCw, BookOpen } from "lucide-react";
+import { WifiOff, BookOpen } from "lucide-react";
 import Link from "next/link";
+import { RetryButton } from "./retry-button";
 
 export const metadata = {
   title: "Offline — but your research is safe",
@@ -25,12 +26,7 @@ export default function OfflinePage() {
         >
           <BookOpen className="h-4 w-4" /> Open my library
         </Link>
-        <button
-          onClick={() => window.location.reload()}
-          className="inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium hover:bg-accent"
-        >
-          <RefreshCw className="h-4 w-4" /> Try again
-        </button>
+        <RetryButton />
       </div>
     </div>
   );
