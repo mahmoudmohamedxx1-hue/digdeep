@@ -215,7 +215,8 @@ export function planPrompt(
   threadContext?: string,
   initialSnippets?: string,
   comprehension?: string,
-  court?: boolean
+  court?: boolean,
+  domainGuidance?: string,
 ): string {
   const breadthRule =
     breadth > 0
@@ -233,10 +234,11 @@ export function planPrompt(
   const courtBlock = court
     ? `\nTHIS IS A COURT RUN: the proposition above goes ON TRIAL after the evidence is gathered. The plan must gather evidence BOTH WAYS — evidence that supports the proposition AND evidence against it. Cover: has anything like this worked before (track record, base rates, named examples); who tried it and failed, and why; what it costs, who pays, and when cash runs out; who competes and how they respond; the specific assumptions the proposition rests on and whether the record confirms or breaks each one; regulatory/legal/safety exposure; and honest success/failure statistics for plans of this kind. The briefs a prosecutor and a defender write from your findings must never be able to complain the record is one-sided.\n`
     : "";
+  const domainBlock = domainGuidance ? `\n${domainGuidance}\n` : "";
   return `A user wants an exhaustive, well-cited research report on:
 
 "${query}"
-${comp}${context}${scout}${courtBlock}
+${comp}${context}${scout}${courtBlock}${domainBlock}
 Design a research plan. THINK FROM KNOWLEDGE FIRST: state what you already confidently know about this topic, then aim the research at what is genuinely uncertain, fast-changing, or contested.
 
 COVERAGE RULE (this is graded): every success criterion from the comprehension pass MUST be covered by at least one aspect — a report that leaves a criterion unanswered scores poorly on coverage no matter how good the writing is. If the criteria span more dimensions than the aspect count allows, choose aspects that each cover a DISTINCT criterion cluster, and say in each aspect's goal which criteria it delivers.

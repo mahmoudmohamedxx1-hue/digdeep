@@ -19,6 +19,7 @@ model ResearchJob {
   court          Boolean      @default(false) // put the idea on trial: prosecutor + defense + jury of 12 + judge
   language       String       @default("English")
   modelPref      String       @default("auto") // auto|glm|pool
+  domain         String       @default("general") // general|law|finance|medicine — P2-1 domain packs
   breadth        Int          @default(3)
   depth          Int          @default(2)
   maxSources     Int          @default(18)
@@ -33,6 +34,9 @@ model ResearchJob {
   checkpoint     String? // JSON EngineCheckpoint — phase cursor + volatile ctx state
   leaseUntil     DateTime? // single-run guard across serverless instances
   sliceN         Int      @default(0) // how many 300s slices this run has consumed
+  // v3.3 accounts & workspaces (P1-1 / P2-2)
+  userId         String? // owning account, null = anonymous
+  workspaceId    String? // owning workspace, null = personal
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   startedAt      DateTime?
@@ -40,8 +44,79 @@ model ResearchJob {
   events         ActivityEvent[]
   sources        Source[]
   sections       ResearchSection[]
+  owner          User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  workspace      Workspace?     @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
 
   @@index([status, updatedAt])
+  @@index([userId, updatedAt])
+  @@index([workspaceId, updatedAt])
+}
+
+// v3.3 P1-1 — accounts & sync. Passwords hashed with scrypt (node:crypto, no native deps).
+model User {
+  id           String        @id @default(cuid())
+  email        String        @unique
+  name         String?
+  passwordHash String
+  createdAt    DateTime      @default(now())
+  sessions     Session[]
+  apiKeys      ApiKey[]
+  jobs         ResearchJob[]
+  owned        Workspace[]   @relation("WorkspaceOwner")
+  memberships  WorkspaceMember[]
+
+  @@index([createdAt])
+}
+
+model Session {
+  id        String   @id @default(cuid()) // token stored in httpOnly cookie
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// v3.3 P2-2 — team workspaces: shared research library + audit views.
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  ownerId   String
+  owner     User     @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  inviteCode String  @unique // share to let teammates join
+  createdAt DateTime @default(now())
+  jobs      ResearchJob[]
+  members   WorkspaceMember[]
+
+  @@index([createdAt])
+}
+
+model WorkspaceMember {
+  id          String   @id @default(cuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role        String   @default("member") // owner|member
+  createdAt   DateTime @default(now())
+
+  @@unique([workspaceId, userId])
+}
+
+// v3.3 P2-3 — public API keys for the verified-report API.
+model ApiKey {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name       String    @default("default")
+  prefix     String // first chars of the key, shown in UI
+  keyHash    String // sha256 of the full key
+  revoked    Boolean   @default(false)
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
 }
 
 model ActivityEvent {

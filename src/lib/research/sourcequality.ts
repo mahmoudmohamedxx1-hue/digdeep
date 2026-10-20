@@ -169,10 +169,16 @@ export function qualityScore(r: QualityCandidate): number {
 export function applySourceQualityGate<T extends QualityCandidate>(
   results: T[],
   query = "",
-  opts: { boostNews?: boolean } = {},
+  opts: { boostNews?: boolean; authorityDomains?: string[] } = {},
 ): { kept: T[]; dropped: { title: string; domain: string; reason: string }[] } {
   const dropped: { title: string; domain: string; reason: string }[] = [];
   const kept: T[] = [];
+  const auth = (opts.authorityDomains ?? []).map((d) => d.trim().toLowerCase()).filter(Boolean);
+  const isAuthority = (r: T) =>
+    auth.length > 0 &&
+    auth.some(
+      (a) => r.domain === a || r.domain.endsWith(`.${a}`) || (r.domain || "").toLowerCase().includes(a),
+    );
   for (const r of results) {
     const reason = junkReason(r, query);
     if (reason) {
@@ -182,7 +188,9 @@ export function applySourceQualityGate<T extends QualityCandidate>(
     kept.push(r);
   }
   // stable sort: quality desc; within ±1.5 quality, original order stands
-  const scored = kept.map((r, i) => ({ r, i, q: qualityScore(r) }));
+  // P2-1 domain packs: whitelisted authorities (statutes, filings, journals) get
+  // a decisive +18 boost — primary sources outrank commentary in domain runs.
+  const scored = kept.map((r, i) => ({ r, i, q: qualityScore(r) + (isAuthority(r) ? 18 : 0) }));
   scored.sort((a, b) => {
     const dq = b.q - a.q;
     if (dq > 1.5) return 1; // b clearly better
