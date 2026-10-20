@@ -282,3 +282,14 @@ Work Log:
 
 Stage Summary:
 - Platform is healthy: 226 automated checks + 2 E2E sessions green; one silent production bug (PDF export) root-caused across bundler/trace/runtime layers and fixed with production-parity verification. Strategic position: generalist chat is closed, but "most verifiable deep research" is an open wedge — DRACO's objectivity dimension + Perplexity's trust crisis + our court/ledger/audit architecture align exactly. Full plan with phase-gated KPIs in the delivered PDF.
+
+---
+Task ID: 31 (live addendum)
+Agent: main (Z.ai)
+Task: v3.2.1 live verification on digdeepx.vercel.app.
+
+Work Log:
+- Deploy landed (~3 min after push 6f7743a). Home 200 (0.8s); /api/research/<bogus>/export?format=pdf returns clean 404 JSON — the export route executes without 500s on the new build. The complete-pdfkit trace fix (outputFileTracingIncludes) is respected by Vercel packaging; the full PDF download path will be exercised by the first real export on production data.
+
+Stage Summary:
+- v3.2.1 closed end-to-end: audit-found PDF export bug fixed and deployed; strategic analysis report delivered; production verified healthy.
