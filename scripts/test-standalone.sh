@@ -89,7 +89,11 @@ echo "$REG" | grep -q '"user"' && pass "register → user session" || fail "regi
 ME=$(curl -s -b "$JAR" "$BASE/api/auth")
 echo "$ME" | grep -q "ci-$RND@test.local" && pass "session cookie works (GET /api/auth)" || fail "session lost: $ME"
 KEY=$(curl -s -b "$JAR" -X POST "$BASE/api/keys" -H "Content-Type: application/json" -d '{"action":"create","name":"ci"}')
-DDK=$(echo "$KEY" | grep -o 'ddk_[A-Za-z0-9_-]*' || true)
+# extract the FULL key from the "key" field only — the "prefix" field is
+# truncated with an ellipsis, and a loose ddk_* grep matches BOTH lines; the
+# embedded newline then corrupts the Authorization header and Node rejects
+# the request with a bare 400 before it ever reaches the app.
+DDK=$(echo "$KEY" | grep -o '"key":"ddk_[^"]*"' | head -1 | cut -d'"' -f4 || true)
 [[ -n "$DDK" ]] && pass "API key created (ddk_…${DDK: -4})" || fail "key creation failed: $KEY"
 KEYS=$(curl -s -b "$JAR" "$BASE/api/keys")
 echo "$KEYS" | grep -q '"prefix"' && pass "keys listable" || fail "keys not listable: $KEYS"
@@ -111,14 +115,18 @@ fi
 [[ -n "$EXPORT_JOB" ]] && pass "deterministic completed run injected ($EXPORT_JOB)" || fail "inject-trial failed — cannot test exports"
 for fmt in pdf docx xlsx md; do
   OUT="/tmp/ci-export.$fmt"
+  # per-format floor: the injected trial job is deliberately small — its md
+  # export is legitimately ~350B; 500B would false-fail the format.
+  FLOOR=500; [[ "$fmt" == "md" ]] && FLOOR=100
   CODE=$(curl -s -o "$OUT" -w "%{http_code}" "$BASE/api/research/$EXPORT_JOB/export?format=$fmt")
   SZ=$(stat -c%s "$OUT" 2>/dev/null || echo 0)
-  if [[ "$CODE" == "200" && "$SZ" -gt 500 ]]; then
+  if [[ "$CODE" == "200" && "$SZ" -gt "$FLOOR" ]]; then
     # content sniff: the exact v3.2.1 bug was a 500 on pdf — verify real file magic
+    # (od, not xxd — xxd is not guaranteed present on CI runners)
     case $fmt in
       pdf) head -c4 "$OUT" | grep -q "%PDF" && pass "export pdf → 200, %PDF magic, ${SZ}B" || fail "export pdf → 200 but not a PDF";;
-      docx) head -c2 "$OUT" | xxd -p | grep -qi "504b" && pass "export docx → 200, zip magic, ${SZ}B" || fail "export docx → 200 but not a zip";;
-      xlsx) head -c2 "$OUT" | xxd -p | grep -qi "504b" && pass "export xlsx → 200, zip magic, ${SZ}B" || fail "export xlsx → 200 but not a zip";;
+      docx) od -An -tx1 -N2 "$OUT" | grep -qi "50 4b" && pass "export docx → 200, zip magic, ${SZ}B" || fail "export docx → 200 but not a zip";;
+      xlsx) od -An -tx1 -N2 "$OUT" | grep -qi "50 4b" && pass "export xlsx → 200, zip magic, ${SZ}B" || fail "export xlsx → 200 but not a zip";;
       md) head -c1 "$OUT" | grep -q "#" && pass "export md → 200, ${SZ}B" || fail "export md → 200 but empty/odd";;
     esac
   else
