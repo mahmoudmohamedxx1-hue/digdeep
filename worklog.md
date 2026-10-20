@@ -311,3 +311,17 @@ Work Log:
 
 Stage Summary:
 - v3.3 is complete and green: 37-check standalone integration (now permanently in CI via .github/workflows + test-standalone.sh), 6 unit suites, browser E2E, PWA, accounts/workspaces/API-keys, public API v1 with ownership isolation, 4-format exports, share SEO with PNG og cards + Arabic-safe degradation. Two real bugs fixed (SVG og:image; Arabic renderer crash). Ready to push to production.
+
+---
+Task ID: 32 (deploy addendum)
+Agent: main (Z.ai)
+Task: v3.3 production deploy.
+
+Work Log:
+- Push 56b8a33 (10:57) produced NO deployment: every new route 404 for 15+ min while home served the old build. Root-caused the deploy killer WITHOUT dashboard access: the v3.3 migration.sql re-added ResearchJob columns production already has (court/checkpoint/leaseUntil/sliceN evolved prod via db push during v3.0-v3.2, never via migration files) → 'prisma migrate deploy' inside the Vercel build fails 'column already exists' → build dies → nothing deploys. The migration file had NEVER been executed anywhere (local dev uses db push, which bypasses migration files) — untested SQL is broken SQL.
+- FIX: migration rewritten fully idempotent (ADD COLUMN IF NOT EXISTS / CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS / pg_constraint-guarded DO-blocks for FKs). NEW scripts/test-migration.sh applies the folder against THREE plausible DB states — prod-like (init+shared then db push evolution), clean history, empty — and asserts zero drift vs schema.prisma: 9/9 GREEN. (Script also had to learn: embedded postgres ships no psql — admin SQL goes through node-postgres; prisma migrate deploy takes DATABASE_URL env, not --url.)
+- Push e6b0d36 (11:12, migration fix). Polled ~55 min total (past a hypothetical 45-min hung-build timeout + queue drain): digdeepx.vercel.app still serves the pre-v3.3 build on every new route. No Vercel credentials exist in this environment (no vercel CLI auth, no VERCEL_TOKEN, private repo so no Actions API) — the deployment queue/build logs are not observable from here.
+- Local state is FULLY green and deploy-ready: tsc, 6 unit suites (routing/jury/pin/relevance/render 48/compute 40), eslint, production build, 37-check standalone integration on the traced artifact (incl. og PNG + Arabic degradation + all 4 exports + API v1 isolation), 9-check migration state test, browser E2E (accounts/keys/workspaces/gallery/benchmark/api-docs/offline/PWA SW+manifest), VLM visual passes (og cards EN/CJK/Arabic, share page).
+
+Stage Summary:
+- v3.3 is code-complete and verified locally end-to-end; the one provable deploy blocker (idempotent migration) is fixed and multi-state tested. The remaining step — the actual Vercel deployment — requires checking the Vercel dashboard for commits 56b8a33/e6b0d36 (build log or a dead Git integration; if the integration shows no builds at all, reconnect the repo or click Redeploy on the latest commit). Everything on the repo side is pushed and green.
