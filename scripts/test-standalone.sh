@@ -80,6 +80,39 @@ done
 CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/s/nonexistent0000")
 [[ "$CODE" == "404" ]] && pass "GET /s/<bogus> → 404 (clean)" || fail "GET /s/<bogus> → $CODE (want 404)"
 
+echo "── 4b · OG card renderer (PNG, not SVG) + script degradation ──"
+# seed two shared reports: Latin-script and Arabic-script (the shaper-killer)
+if command -v bun >/dev/null 2>&1; then
+  DATABASE_URL="${DATABASE_URL:-postgresql://postgres:postgres@localhost:5433/digdeep}" bun -e '
+import { PrismaClient } from "@prisma/client";
+const p = new PrismaClient({ datasources: { db: { url: process.env.DATABASE_URL } } });
+const base = { reportMd: "# t", stats: JSON.stringify({ citationIntegrity: 88, court: { verdict: "GUILTY" } }), sources: JSON.stringify([{ url: "https://a.com", domain: "a.com", title: "A", sectionTitle: "X" }, { url: "https://b.com", domain: "b.com", title: "B", sectionTitle: "Y" }]) };
+await p.sharedReport.upsert({ where: { id: "s-citestand" }, update: {}, create: { id: "s-citestand", jobId: "ci-og-latin", query: "Is the wandering albatross the longest-winged living bird?", ...base } });
+await p.sharedReport.upsert({ where: { id: "s-cistarab" }, update: {}, create: { id: "s-cistarab", jobId: "ci-og-arabic", query: "\u0647\u0644 \u0627\u0644\u0628\u062d\u062b \u0627\u0644\u0639\u0645\u064a\u0642 \u0645\u062c\u0627\u0646\u064a\u061f", ...base } });
+await p.$disconnect();' 2>/dev/null && pass "share rows seeded (latin + arabic)" || fail "share seeding failed"
+fi
+CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/og/nonexistent0000")
+[[ "$CODE" == "404" ]] && pass "og card of bogus share → 404" || fail "og bogus → $CODE (want 404)"
+for sid in s-citestand s-cistarab; do
+  OUT="/tmp/ci-og-$sid.png"
+  CODE=$(curl -s -o "$OUT" -w "%{http_code}" "$BASE/api/og/$sid")
+  SZ=$(stat -c%s "$OUT" 2>/dev/null || echo 0)
+  if [[ "$CODE" == "200" && "$SZ" -gt 5000 ]]; then
+    # PNG magic: 89 50 4E 47 — X/Meta/LinkedIn only fetch raster og:images, SVG renders imageless
+    if od -An -tx1 -N4 "$OUT" | grep -q "89 50 4e 47"; then
+      pass "og card $sid → 200 PNG magic, ${SZ}B"
+    else
+      CT=$(curl -s -o /dev/null -w "%{content_type}" "$BASE/api/og/$sid")
+      fail "og card $sid → 200 but content-type $CT (want image/png)"
+    fi
+  else
+    fail "og card $sid → HTTP $CODE (${SZ}B) — Arabic must NOT crash the renderer"
+  fi
+done
+OGHTML=$(curl -s "$BASE/s/s-citestand")
+echo "$OGHTML" | grep -q 'property="og:image"' && pass "/s/ page emits og:image meta" || fail "/s/ page missing og:image"
+echo "$OGHTML" | grep -q 'name="twitter:card" content="summary_large_image"' && pass "/s/ page emits twitter:card meta" || fail "/s/ page missing twitter:card"
+
 echo "── 5 · Auth + accounts flow (register → session → keys) ──"
 JAR=$(mktemp)
 RND=$RANDOM$RANDOM
