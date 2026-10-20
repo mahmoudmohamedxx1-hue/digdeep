@@ -871,6 +871,8 @@ export default function ThreadPage() {
                 onShowThinking={settings.setShowThinking}
                 court={settings.court}
                 onCourt={settings.setCourt}
+                domain={settings.domain}
+                onDomain={settings.setDomain}
                 onManagePool={() => window.dispatchEvent(new CustomEvent("digdeep:open-settings"))}
                 docs={followDocs}
                 onDocs={setFollowDocs}

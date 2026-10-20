@@ -24,6 +24,7 @@ interface SettingsState {
   advTouched: boolean;
   showThinking: boolean;
   court: boolean;
+  domain: string;
   sidebarOpen: boolean;
 
   applyMode: (m: string) => void;
@@ -33,6 +34,7 @@ interface SettingsState {
   setModelPref: (m: ModelPrefValue) => void;
   setShowThinking: (b: boolean) => void;
   setCourt: (b: boolean) => void;
+  setDomain: (d: string) => void;
   setSidebarOpen: (b: boolean) => void;
   toggleSidebar: () => void;
 }
@@ -47,6 +49,7 @@ export const useSettings = create<SettingsState>()(
       advTouched: false,
       showThinking: true,
       court: false,
+      domain: "general",
       sidebarOpen: true,
 
       applyMode: (m) =>
@@ -57,12 +60,13 @@ export const useSettings = create<SettingsState>()(
       setModelPref: (m) => set({ modelPref: m }),
       setShowThinking: (b) => set({ showThinking: b }),
       setCourt: (b) => set({ court: b }),
+      setDomain: (d) => set({ domain: d }),
       setSidebarOpen: (b) => set({ sidebarOpen: b }),
       toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
     }),
     {
       name: "digdeep-settings",
-      version: 2,
+      version: 3,
       /** v0/v1 (unversioned) → v2: backfill any missing adv keys so older
        *  localStorage never breaks a newer UI. Nothing is discarded. */
       migrate: (persisted, _version) => {
@@ -75,6 +79,8 @@ export const useSettings = create<SettingsState>()(
           adv,
           advTouched: p.advTouched ?? false,
           showThinking: p.showThinking ?? true,
+          court: p.court ?? false,
+          domain: p.domain ?? "general",
           sidebarOpen: p.sidebarOpen ?? true,
         } as SettingsState;
       },
@@ -86,6 +92,7 @@ export const useSettings = create<SettingsState>()(
         advTouched: s.advTouched,
         showThinking: s.showThinking,
         court: s.court,
+        domain: s.domain,
       }),
     }
   )

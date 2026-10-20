@@ -122,6 +122,13 @@ export interface JobItem {
       criteria: { criterion: string; met: boolean; why: string }[];
       biggestWeakness: string;
     };
+    // P1-2 pre-ship score — deterministic gate, scored before delivery
+    reportScore?: {
+      overall: number;
+      dims: { coverage: number; integrity: number; evidence: number; consistency: number; compute: number };
+      flags: string[];
+      passed: boolean;
+    };
     rerunDiff?: boolean;
   } | null;
   error?: string | null;

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Brain, Search, BookOpen, FileSearch, ShieldCheck, PenLine, Layers,
-  AlertCircle, Info, CheckCircle2, ChevronDown, Sparkles, Globe, CircleDot,
+  AlertCircle, Info, CheckCircle2, ChevronDown, Sparkles, Globe, CircleDot, Calculator,
 } from "lucide-react";
 import type { EventItem } from "./types";
 import { Markdown } from "./markdown";
@@ -18,6 +18,7 @@ const ICONS: Record<string, { icon: React.ElementType; cls: string }> = {
   section: { icon: Layers, cls: "bg-violet-500/10 text-violet-600 dark:text-violet-300" },
   draft: { icon: PenLine, cls: "bg-primary/10 text-primary" },
   critique: { icon: ShieldCheck, cls: "bg-rose-500/10 text-rose-600 dark:text-rose-400" },
+  compute: { icon: Calculator, cls: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-300" },
   error: { icon: AlertCircle, cls: "bg-destructive/10 text-destructive" },
   info: { icon: Info, cls: "bg-muted text-muted-foreground" },
   done: { icon: CheckCircle2, cls: "bg-primary/10 text-primary" },

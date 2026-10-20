@@ -220,7 +220,7 @@ export function processComputes(
       computes.push({ expr, result: r.error || "error", ok: false });
       return `(compute error: ${r.error})`;
     }
-    const result = fmtCompute(r.value);
+    const result = fmtCompute(r.value ?? 0);
     computes.push({ expr, result, ok: true });
     return `**${result}**`;
   });

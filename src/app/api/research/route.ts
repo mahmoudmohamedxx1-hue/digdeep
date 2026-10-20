@@ -3,6 +3,8 @@ import { after } from "next/server";
 import { db } from "@/lib/db";
 import { runJob } from "@/lib/research/engine";
 import { isValidModelPref } from "@/lib/model-choices";
+import { isValidDomain } from "@/lib/research/domain-packs";
+import { getSessionUser, rateLimit, clientIp } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 // Vercel: the engine must finish inside one invocation (the function is frozen
@@ -20,11 +22,21 @@ const PRESETS: Record<string, { breadth: number; depth: number; maxSources: numb
 
 export async function POST(req: NextRequest) {
   try {
+    // P0 hardening: light per-IP rate limit — the free tier must stay free
+    // without inviting scripted abuse.
+    if (!rateLimit(`run:${clientIp(req)}`, 30, 60_000)) {
+      return NextResponse.json({ error: "Too many runs from this address in the last minute — try again shortly." }, { status: 429 });
+    }
     const body = await req.json();
     const query = String(body.query ?? "").trim();
     if (!query) {
       return NextResponse.json({ error: "Please type a message first." }, { status: 400 });
     }
+    // P1-1: authenticated runs are attributed to the account (workspace routing
+    // stays opt-in per call — most signed-in users still run personal).
+    const user = await getSessionUser();
+    const workspaceId =
+      typeof body.workspaceId === "string" && body.workspaceId.length > 0 && body.workspaceId.length < 64 ? body.workspaceId : null;
     const preset = PRESETS[body.preset] ? body.preset : "standard";
     const p = PRESETS[preset];
     // -1 = unlimited (no cap); otherwise clamp to sane range
@@ -49,6 +61,11 @@ export async function POST(req: NextRequest) {
         language: ["English", "Arabic", "Chinese", "Spanish", "French", "German", "Auto-match topic"].includes(body.language) ? body.language : "English",
         // route family (auto/llm7/glm/pool) or a pinned specific LLM7 model (llm7pin:minimax-m2.7 …)
         modelPref: isValidModelPref(body.modelPref) ? body.modelPref : "auto",
+        // P2-1 domain packs
+        domain: isValidDomain(body.domain) ? body.domain : "general",
+        // v3.3 accounts: attribute to the signed-in user (workspace only if explicitly chosen + owned)
+        userId: user?.id ?? null,
+        ...(workspaceId && user ? { workspaceId } : {}),
         breadth: body.breadth != null ? clamp(body.breadth, 1, 50, p.breadth) : p.breadth,
         depth: body.depth != null ? clamp(body.depth, 1, 20, p.depth) : p.depth,
         maxSources: body.maxSources != null ? clamp(body.maxSources, 4, 1000, p.maxSources) : p.maxSources,
@@ -74,7 +91,7 @@ export async function GET(req: NextRequest) {
       const jobs = await db.researchJob.findMany({
         where: { threadId },
         orderBy: { createdAt: "asc" },
-        select: { id: true, query: true, status: true, stage: true, progress: true, preset: true, mode: true, court: true, createdAt: true, completedAt: true, modelPref: true, language: true },
+        select: { id: true, query: true, status: true, stage: true, progress: true, preset: true, mode: true, court: true, domain: true, createdAt: true, completedAt: true, modelPref: true, language: true },
       });
       return NextResponse.json({ jobs, threadId });
     }

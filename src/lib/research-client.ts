@@ -37,6 +37,7 @@ export async function startResearchRun(opts: {
         modelPref: s.modelPref,
         threadId: useTid,
         court: s.court,
+        domain: s.domain,
         ...(useDocs.length > 0 ? { docs: useDocs } : {}),
         ...s.adv,
       }),

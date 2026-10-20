@@ -91,13 +91,17 @@ export default function HomePage() {
       <div className="relative z-10 flex w-full max-w-[max(min(812px,88%),420px)] flex-col items-center text-center">
         <span className="badge-aurora rise-in h-8 items-center gap-1.5 rounded-full px-3.5 text-[11.5px] font-medium text-foreground/85">
           <Sparkles className="h-3 w-3 shrink-0 text-primary" />
-          Free &amp; open-source deep research
+          The research tool that puts its own answer on trial
         </span>
         <h1 className="rise-in mt-4 text-balance text-[30px] font-semibold leading-[1.15] tracking-[-0.032em] text-foreground [animation-delay:120ms] sm:text-[31px]">
           {greeting()}
         </h1>
         <p className="rise-in mt-2 font-serif text-[19.5px] leading-snug text-muted-foreground [animation-delay:220ms]">
           What should we dig into?
+        </p>
+        <p className="rise-in mt-2.5 max-w-lg text-[13px] leading-relaxed text-muted-foreground/90 [animation-delay:280ms]">
+          A prosecutor, a defense, and 12 jurors cross-examine every answer · every claim checked against its source ·{" "}
+          <a href="/benchmark" className="text-primary hover:underline">we publish our benchmark scores and failures</a>
         </p>
       </div>
 
@@ -124,6 +128,8 @@ export default function HomePage() {
           onShowThinking={settings.setShowThinking}
           court={settings.court}
           onCourt={settings.setCourt}
+          domain={settings.domain}
+          onDomain={settings.setDomain}
           onManagePool={() => window.dispatchEvent(new CustomEvent("digdeep:open-settings"))}
           docs={docs}
           onDocs={setDocs}
@@ -131,7 +137,12 @@ export default function HomePage() {
           placeholderStream={EXAMPLE_STREAM}
         />
         <p className="rise-in relative z-10 mt-3.5 text-center text-[12.5px] font-medium leading-relaxed text-muted-foreground [animation-delay:440ms]">
-          Free &amp; keyless · every claim cited · every citation audited · honest quality scores
+          Free &amp; keyless · every claim cited &amp; audited · honest WITHHELD verdicts · exports with the evidence ledger
+        </p>
+        <p className="rise-in relative z-10 mt-1.5 text-center text-[11.5px] text-muted-foreground/80 [animation-delay:480ms]">
+          <a href="/gallery" className="hover:text-foreground hover:underline">Explore the report gallery</a>
+          {" · "}
+          <a href="/api-docs" className="hover:text-foreground hover:underline">Verified-report API</a>
         </p>
         <p className="kbd-hints relative z-10 mt-2.5 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
           <span className="inline-flex items-center gap-1"><kbd>/</kbd> focus</span>

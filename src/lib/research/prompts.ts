@@ -63,6 +63,8 @@ ${message.slice(0, 700)}
 
 Rewrite the message as a self-contained question: resolve "it / that / this / the same / the previous topic", ellipsis ("what about France?") and references to earlier turns into the concrete topic they point at.
 
+This is a RESEARCH SESSION, not isolated runs: when the message builds on earlier turns (goes deeper, challenges, asks for comparison with, or extends them), the resolved question should make that continuity explicit — e.g. "Compared to the ECL forward-looking factors covered earlier, how do banks in France approach them?" — so the report can cite and build on the thread's earlier findings instead of restarting from zero.
+
 Hard rules:
 - PRESERVE the user's intent, scope and language exactly. Do not broaden, do not narrow, do not answer, do not introduce topics the user did not ask about.
 - Fold in ONLY as much of the earlier conversation as the message needs to stand alone.

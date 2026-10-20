@@ -61,6 +61,9 @@ import {
   type EnginePhase,
 } from "./checkpoint";
 import { applySourceQualityGate } from "./sourcequality";
+import { getDomainPack, siteVariants } from "./domain-packs";
+import { processComputes } from "./compute";
+import { scoreReport, type ReportScore } from "./report-score";
 
 /** v2.5.0 continuation: activeJobs now carries a heartbeat — a frozen slice's
  * entry goes stale so the poller's resume attempt is allowed on warm instances
@@ -1035,6 +1038,8 @@ export async function runJob(jobId: string) {
     if (!leaseHeld) return;
 
     const unlimited = job.breadth < 0 || job.depth < 0 || job.maxSources < 0 || job.maxMinutes < 0;
+    // P2-1 domain pack — evidence standards, authority whitelists, citation format
+    const pack = getDomainPack(job.domain);
     // ── serverless wall-clock (Vercel) ─────────────────────────────────────
     // v2.5.0: the budget is no longer clamped to one invocation. Each slice
     // gets a fresh 288s function clock (hardStop) while the RESEARCH budget
@@ -1546,7 +1551,7 @@ export async function runJob(jobId: string) {
       ? Math.max(120_000, Math.min(ctx.timeLeft * 0.4, 10 * 60_000))
       : Infinity;
     const planPromise = ctx.llmLive(
-      [{ role: "user", content: planPrompt(job.query, SERVERLESS ? Math.min(job.breadth + 1, 5) : job.breadth, job.language, threadContext || undefined, initSnippets, comprehensionDigest || undefined, job.court) }],
+      [{ role: "user", content: planPrompt(job.query, SERVERLESS ? Math.min(job.breadth + 1, 5) : job.breadth, job.language, threadContext || undefined, initSnippets, comprehensionDigest || undefined, job.court, pack.guidance || undefined) }],
       "plan",
       "Planning the research",
       // v2.4.7: on the serverless clock the plan must not ride patient cooldowns for
@@ -1838,7 +1843,10 @@ export async function runJob(jobId: string) {
 
         // 2a-2. SEARCH
         const searchResults: SearchResult[] = [];
-        for (const q of queries.slice(0, 3)) {
+        // P2-1 domain packs: round 1 probes one authority domain explicitly —
+        // statutes/filings/journals surface even when generic engines rank them low
+        const domainQueries = round === 1 ? siteVariants(queries, pack) : [];
+        for (const q of [...queries.slice(0, 3), ...domainQueries].slice(0, 4)) {
           const rs = await searchAll(q, { academic: !!plan.academic });
           await ctx.emit("search", `Searching: “${q}”`, `${rs.length} results`, undefined, { query: q, count: rs.length, engines: [...new Set(rs.map((r) => r.engine))] });
           searchResults.push(...rs);
@@ -1882,7 +1890,7 @@ export async function runJob(jobId: string) {
         // official docs…) and concrete snippets (numbers, dates, named systems) sort
         // first — the raw material of a 9/10 report is specific, checkable evidence.
         {
-          const qg = applySourceQualityGate(fresh, `${sec.question} ${queries.join(" ")}`, { boostNews: true });
+          const qg = applySourceQualityGate(fresh, `${sec.question} ${queries.join(" ")}`, { boostNews: true, authorityDomains: pack.authorities });
           if (qg.dropped.length > 0) {
             const byReason = qg.dropped.reduce<Record<string, number>>((m, d) => ((m[d.reason] = (m[d.reason] ?? 0) + 1), m), {});
             await ctx.emit(
@@ -2963,6 +2971,24 @@ export async function runJob(jobId: string) {
           }
         }
         draftsArr[i] = draftText;
+        // P1-3 COMPUTE TOOL: resolve every [[COMPUTE expr]] the drafter emitted —
+        // exact arithmetic replaces the directive before the text ships anywhere
+        {
+          const pc = processComputes(draftText);
+          if (pc.computes.length > 0) {
+            draftsArr[i] = pc.text;
+            draftText = pc.text;
+            for (const c of pc.computes) {
+              await ctx.emit(
+                "compute",
+                c.ok ? `Computed: ${c.expr} = ${c.result}` : `Compute failed: ${c.expr}`,
+                c.ok ? `Exact evaluation for “${sec.title}” — the number in the report is machine-computed, not model-guessed.` : c.result,
+                undefined,
+                { section: sec.title, expr: c.expr, result: c.result, ok: c.ok },
+              );
+            }
+          }
+        }
         await db.researchSection.update({ where: { id: sec.id }, data: { draftMd: draftText } });
         sec.draftMd = draftText; // keep the in-memory row in sync — report assembly reads this array
         await ctx.emit("draft", `Wrote: ${sec.title}`, `${draftText.split(/\s+/).length} words`, draftModel, { section: sec.title });
@@ -3719,6 +3745,14 @@ ${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
             );
             if (rwRes.text && rwRes.text.split(/\s+/).length > 60) {
               sec.draftMd = trimToCompleteSentence(rwRes.text); // v2.5.3: no abrupt endings from capped rewrites
+              // P1-3: compute directives resolve on rewritten drafts too
+              const pc2 = processComputes(sec.draftMd);
+              if (pc2.computes.length > 0) {
+                sec.draftMd = pc2.text;
+                for (const c of pc2.computes) {
+                  await ctx.emit("compute", c.ok ? `Computed: ${c.expr} = ${c.result}` : `Compute failed: ${c.expr}`, c.ok ? "Machine-evaluated during the improve rewrite." : c.result, undefined, { section: sec.title, expr: c.expr, result: c.result, ok: c.ok });
+                }
+              }
               draftsArr[finalSections.indexOf(sec)] = sec.draftMd;
               await db.researchSection.update({ where: { id: sec.id }, data: { draftMd: sec.draftMd } }).catch(() => null);
               rewritten++;
@@ -4033,6 +4067,44 @@ ${graderRules.map((r) => `- ${r}`).join("\n")}` : ""}`;
       slices: sliceN,
       finishedAt: new Date().toISOString(),
     };
+    // P1-2 PRE-SHIP REPORT SCORE — deterministic, LLM-free gate on the three
+    // dimensions the strategy named (evidence coverage, citation integrity,
+    // verdict consistency) + compute resolution. Scored AFTER the improve loop
+    // settles, BEFORE the report ships. Persisted in stats so the UI, exports,
+    // and telemetry all read the same number.
+    {
+      let usedSourceRows: { domain: string; quality: number; used: boolean }[] = [];
+      try {
+        usedSourceRows = await db.source.findMany({ where: { jobId }, select: { domain: true, quality: true, used: true } });
+      } catch { usedSourceRows = []; }
+      const reportScore: ReportScore = scoreReport({
+        reportMd,
+        claimChecks,
+        claimVerdict,
+        citationIntegrity: citeStats.integrity,
+        courtVerdict: court?.verdict ?? null,
+        sources: usedSourceRows,
+        authorityDomains: pack.authorities,
+      });
+      (stats as Record<string, unknown>).reportScore = reportScore;
+      if (reportScore.flags.length > 0) {
+        await ctx.emit(
+          "info",
+          `Pre-ship score: ${reportScore.overall}/100 (${reportScore.passed ? "passed" : "below the 60 gate"})`,
+          reportScore.flags.join(" · "),
+          undefined,
+          { reportScore: { overall: reportScore.overall, dims: reportScore.dims } },
+        );
+      } else {
+        await ctx.emit(
+          "info",
+          `Pre-ship score: ${reportScore.overall}/100 — coverage ${reportScore.dims.coverage}, integrity ${reportScore.dims.integrity}, evidence ${reportScore.dims.evidence}, consistency ${reportScore.dims.consistency}`,
+          undefined,
+          undefined,
+          "verbose",
+        );
+      }
+    }
     await updateJob(jobId, { status: "completed", stage: "Completed", progress: 100, reportMd, stats: JSON.stringify(stats), completedAt: new Date() });
     await persist("done").catch(() => {}); // informational — the job is complete
     await ctx.emit(

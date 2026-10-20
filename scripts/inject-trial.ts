@@ -87,6 +87,13 @@ const stats = {
 
 const reportMd = `# ${court.charge}\n\n## Executive summary\n\nThe court examined the proposition and delivered its verdict.\n\n## The prosecution's case\n\nEvidence cited from the gathered sources [1] [3].\n\n## The defense\n\nThe defense established reasonable doubt on methodology [4].\n\n## Verdict\n\nSee the verdict card above.\n`;
 
+// v3.3: real source rows so export endpoints render a sources table (standalone CI)
+const TEST_SOURCES = [
+  { url: "https://www.nature.com/articles/ci-test", domain: "nature.com", title: "CI source one — Nature", snippet: "Deterministic test source for the standalone export check.", engine: "ddg", words: 1200, quality: 88, used: true, sectionTitle: "The prosecution's case" },
+  { url: "https://stanford.edu/ci-test", domain: "stanford.edu", title: "CI source two — Stanford", snippet: "Second deterministic test source.", engine: "wikipedia", words: 900, quality: 84, used: true, sectionTitle: "The defense" },
+  { url: "https://hbr.org/ci-test", domain: "hbr.org", title: "CI source three — HBR", snippet: "Third deterministic test source.", engine: "mojeek", words: 700, quality: 76, used: true, sectionTitle: "Verdict" },
+];
+
 const now = new Date();
 const job = await prisma.researchJob.create({
   data: {
@@ -106,6 +113,7 @@ const job = await prisma.researchJob.create({
     maxMinutes: 30,
     reportMd,
     stats: JSON.stringify(stats),
+    sources: { create: TEST_SOURCES },
     startedAt: new Date(now.getTime() - 512000),
     completedAt: now,
     events: {

@@ -6,8 +6,8 @@ import Link from "next/link";
 import { MotionConfig } from "framer-motion";
 import { useTheme } from "next-themes";
 import {
-  ArrowLeft, Compass, Gauge, House, LibraryBig, Loader2, Menu, Moon, PanelLeftClose,
-  Plus, Settings, Settings2, Sun, Trash2, Wifi, WifiOff,
+  ArrowLeft, Compass, FlaskConical, Gauge, House, Images, LibraryBig, Loader2, Menu, Moon, PanelLeftClose,
+  Plus, Settings, Settings2, Sun, Trash2, UserRound, Wifi, WifiOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -700,6 +700,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <SidebarItem compact collapsed={!sidebarOpen} icon={<House className="h-4 w-4" />} label="Home" active={pathname === "/"} href="/" onClick={() => {}} />
             <SidebarItem compact collapsed={!sidebarOpen} icon={<Compass className="h-4 w-4" />} label="Discover" active={pathname === "/discover"} href="/discover" onClick={() => {}} />
             <SidebarItem compact collapsed={!sidebarOpen} icon={<LibraryBig className="h-4 w-4" />} label="Library" active={pathname === "/library"} href="/library" onClick={() => {}} />
+            <SidebarItem compact collapsed={!sidebarOpen} icon={<Images className="h-4 w-4" />} label="Gallery" active={pathname === "/gallery"} href="/gallery" onClick={() => {}} />
+            <SidebarItem compact collapsed={!sidebarOpen} icon={<FlaskConical className="h-4 w-4" />} label="Benchmark" active={pathname === "/benchmark"} href="/benchmark" onClick={() => {}} />
           </nav>
 
           {sidebarOpen && (
@@ -717,6 +719,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             </>
           )}
           <div className={`mt-auto space-y-1 border-t border-sidebar-border pb-2.5 pt-1.5 ${sidebarOpen ? "px-3" : "px-1"}`}>
+            <SidebarItem compact collapsed={!sidebarOpen} icon={<UserRound className="h-4 w-4" />} label="Account" active={pathname === "/account"} href="/account" onClick={() => {}} />
             <SidebarItem compact collapsed={!sidebarOpen} icon={<Settings className="h-4 w-4" />} label="Settings" onClick={openSettings} />
           </div>
         </aside>
@@ -771,6 +774,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
               <SidebarItem icon={<House className="h-[18px] w-[18px]" />} label="Home" active={pathname === "/"} href="/" onClick={() => setMobileNavOpen(false)} />
               <SidebarItem icon={<Compass className="h-[18px] w-[18px]" />} label="Discover" active={pathname === "/discover"} href="/discover" onClick={() => setMobileNavOpen(false)} />
               <SidebarItem icon={<LibraryBig className="h-[18px] w-[18px]" />} label="Library" active={pathname === "/library"} href="/library" onClick={() => setMobileNavOpen(false)} />
+              <SidebarItem icon={<Images className="h-[18px] w-[18px]" />} label="Gallery" active={pathname === "/gallery"} href="/gallery" onClick={() => setMobileNavOpen(false)} />
+              <SidebarItem icon={<FlaskConical className="h-[18px] w-[18px]" />} label="Benchmark" active={pathname === "/benchmark"} href="/benchmark" onClick={() => setMobileNavOpen(false)} />
             </nav>
             <div className="mt-3 px-3">
               <p className="px-3 pb-1 pt-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">Recents</p>

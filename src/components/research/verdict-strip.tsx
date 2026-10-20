@@ -3,7 +3,7 @@
 import { useState } from "react";
 import {
   BadgeCheck, Check, ChevronDown, Clock, Gavel, Globe2, Scale, Swords,
-  MessagesSquare, XCircle, ArrowLeftRight,
+  MessagesSquare, XCircle, ArrowLeftRight, ShieldCheck,
 } from "lucide-react";
 import type { JobItem } from "@/components/research/types";
 import { fmtElapsed } from "@/components/research/types";
@@ -102,6 +102,42 @@ function ExpandedCard({ stats, quality }: { stats: Stats; quality?: Quality }) {
               <span className="font-medium text-foreground">Biggest weakness:</span> {quality.biggestWeakness}
             </p>
           )}
+        </div>
+      )}
+
+      {/* P1-2 pre-ship score — the deterministic gate before delivery */}
+      {stats.reportScore && (
+        <div className="rounded-[14px] border border-primary/25 bg-primary/5 p-3.5">
+          <p className="flex items-center gap-2 text-xs font-semibold">
+            <ShieldCheck className="h-4 w-4 text-primary" />
+            Pre-ship verification score
+            <span className={`ml-auto text-[13px] font-semibold tabular-nums ${stats.reportScore.passed ? "text-[#248a3d] dark:text-[#30d158]" : "text-[#b25000] dark:text-[#ff9f0a]"}`}>
+              {stats.reportScore.overall}/100
+            </span>
+          </p>
+          <div className="mt-2.5 grid grid-cols-5 gap-2">
+            {[
+              ["coverage", stats.reportScore.dims.coverage],
+              ["integrity", stats.reportScore.dims.integrity],
+              ["evidence", stats.reportScore.dims.evidence],
+              ["consistency", stats.reportScore.dims.consistency],
+              ["compute", stats.reportScore.dims.compute],
+            ].map(([label, v]) => (
+              <div key={label as string} className="text-center">
+                <div className="mx-auto h-1.5 w-full overflow-hidden rounded-full bg-muted/70">
+                  <div
+                    className={`h-full rounded-full ${(v as number) >= 75 ? "bg-[#34c759]" : (v as number) >= 55 ? "bg-[#ff9f0a]" : "bg-destructive"}`}
+                    style={{ width: `${Math.max(3, v as number)}%` }}
+                  />
+                </div>
+                <p className="mt-1 text-[10px] font-medium text-muted-foreground">{label as string}</p>
+                <p className="text-[11px] font-semibold tabular-nums">{v as number}</p>
+              </div>
+            ))}
+          </div>
+          <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+            Deterministic check run before this report reached you — not an LLM opinion. {stats.reportScore.flags.length > 0 ? "Flags: " + stats.reportScore.flags[0] : "No warnings."}
+          </p>
         </div>
       )}
 

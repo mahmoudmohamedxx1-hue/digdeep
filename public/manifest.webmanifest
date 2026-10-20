@@ -1,0 +1,23 @@
+{
+  "name": "DigDeep — deep research that shows its work",
+  "short_name": "DigDeep",
+  "description": "Deep research with an adversarial court, a per-claim evidence ledger, and audited citations. Free, no API key.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#04110f",
+  "theme_color": "#0d9488",
+  "categories": ["productivity", "research", "utilities"],
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "New research", "url": "/", "description": "Ask a new research question" },
+    { "name": "Library", "url": "/library", "description": "Your research history" },
+    { "name": "Gallery", "url": "/gallery", "description": "Public verified reports" }
+  ]
+}

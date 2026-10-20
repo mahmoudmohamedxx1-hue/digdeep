@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, ChevronDown, Cpu, FileText, Gavel, Gauge, Infinity as InfinityIcon, KeyRound, Loader2, Paperclip, Pin, Plus, Settings2, Square, X, BrainCircuit } from "lucide-react";
+import { ArrowUp, Check, ChevronDown, Cpu, FileText, Gavel, Gauge, Infinity as InfinityIcon, KeyRound, Loader2, Paperclip, Pin, Plus, Scale, Settings2, Square, X, BrainCircuit } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Slider } from "@/components/ui/slider";
@@ -9,6 +9,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import type { AdvParams, AttachedDoc } from "@/components/research/types";
 import { LLM7_MODEL_CHOICES, PIN_PREFIX, modelPrefPillLabel, type ModelPrefValue } from "@/lib/model-choices";
+import { DOMAIN_CHOICES } from "@/lib/research/domain-packs";
 
 export const MODES = [
   { id: "quick", label: "Quick", hint: "≈ 5–10 min", desc: "2 aspects × 1 round · ~8 sources" },
@@ -154,6 +155,7 @@ export function AskBox({
   mode, onMode, adv, advTouched, onAdv, language, onLanguage, modelPref, onModelPref,
   showThinking, onShowThinking, onManagePool, stopMode = false, onStop, stopping = false,
   court = false, onCourt,
+  domain = "general", onDomain,
   docs, onDocs, inputId, placeholderStream,
 }: {
   value: string;
@@ -176,6 +178,8 @@ export function AskBox({
   onShowThinking: (b: boolean) => void;
   court?: boolean;
   onCourt?: (b: boolean) => void;
+  domain?: string;
+  onDomain?: (d: string) => void;
   onManagePool: () => void;
   stopMode?: boolean;
   onStop?: () => void;
@@ -444,6 +448,37 @@ export function AskBox({
         </Popover>
 
         <div className="ml-auto flex items-center gap-1.5">
+          {/* P2-1 domain pack — evidence standards for law / finance / medicine */}
+          {onDomain && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  className={`press-scale hidden h-9 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium transition-colors sm:flex ${
+                    domain !== "general" ? "text-primary" : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                  }`}
+                  aria-label={`Domain: ${domain}`}
+                  title="Domain pack — curates sources toward primary authorities and applies professional evidence standards"
+                >
+                  <Scale className="h-4 w-4 text-primary/70" />
+                  <span className="max-w-[110px] capitalize">{domain === "general" ? "Domain" : domain}</span>
+                  <ChevronDown className="h-3 w-3 opacity-50" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="glass w-80 rounded-[18px]">
+                <DropdownMenuLabel className="text-xs text-muted-foreground">Domain — evidence standards &amp; authorities</DropdownMenuLabel>
+                {DOMAIN_CHOICES.map((d) => (
+                  <DropdownMenuItem key={d.key} onClick={() => onDomain(d.key)} className={`gap-2.5 rounded-[10px] ${domain === d.key ? "bg-primary/10" : ""}`}>
+                    <span className="text-base leading-none">{d.emoji}</span>
+                    <span className="flex min-w-0 flex-col">
+                      <span className="text-sm font-medium">{d.label}</span>
+                      <span className="text-[11px] leading-snug text-muted-foreground">{d.hint}</span>
+                    </span>
+                    {domain === d.key && <Check className="ml-auto h-3.5 w-3.5 text-primary" />}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           {/* court mode — put the idea on trial: prosecutor vs defense, jury of 12, judge */}
           {onCourt && (
             <button
