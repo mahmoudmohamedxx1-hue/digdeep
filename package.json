@@ -23,6 +23,7 @@
     "pg:stop": "bun scripts/pg-dev.ts stop",
     "postinstall": "prisma generate && bash scripts/db-migrate-deploy.sh",
     "test:render": "bun scripts/test-court-render.ts",
+    "test:relevance": "bun scripts/test-relevance.ts",
     "test:compute": "bun scripts/test-compute.ts",
     "test:all": "bun scripts/test-routing.ts && bun scripts/test-jury.ts && bun scripts/test-model-pin.ts && bun scripts/test-relevance.ts && bun scripts/test-court-render.ts && bun scripts/test-compute.ts"
   },
