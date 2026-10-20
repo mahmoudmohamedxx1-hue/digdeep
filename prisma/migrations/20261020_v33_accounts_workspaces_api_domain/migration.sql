@@ -1,14 +1,21 @@
--- AlterTable
-ALTER TABLE "ResearchJob" ADD COLUMN     "checkpoint" TEXT,
-ADD COLUMN     "court" BOOLEAN NOT NULL DEFAULT false,
-ADD COLUMN     "domain" TEXT NOT NULL DEFAULT 'general',
-ADD COLUMN     "leaseUntil" TIMESTAMP(3),
-ADD COLUMN     "sliceN" INTEGER NOT NULL DEFAULT 0,
-ADD COLUMN     "userId" TEXT,
-ADD COLUMN     "workspaceId" TEXT;
+-- v3.3: accounts, workspaces, API keys, domain packs.
+-- FULLY IDEMPOTENT by design: production's ResearchJob already carries the
+-- v3.0-v3.2 columns below (applied via db push during development, not via a
+-- migration file), so a plain ADD COLUMN would fail the whole deploy with
+-- "column already exists". IF NOT EXISTS / DO-blocks make this safe against
+-- every database state: fresh, partially evolved, or fully evolved.
+
+-- AlterTable (v3.0-v3.2 columns included defensively — no-op where they exist)
+ALTER TABLE "ResearchJob" ADD COLUMN IF NOT EXISTS "checkpoint" TEXT;
+ALTER TABLE "ResearchJob" ADD COLUMN IF NOT EXISTS "court" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "ResearchJob" ADD COLUMN IF NOT EXISTS "domain" TEXT NOT NULL DEFAULT 'general';
+ALTER TABLE "ResearchJob" ADD COLUMN IF NOT EXISTS "leaseUntil" TIMESTAMP(3);
+ALTER TABLE "ResearchJob" ADD COLUMN IF NOT EXISTS "sliceN" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "ResearchJob" ADD COLUMN IF NOT EXISTS "userId" TEXT;
+ALTER TABLE "ResearchJob" ADD COLUMN IF NOT EXISTS "workspaceId" TEXT;
 
 -- CreateTable
-CREATE TABLE "User" (
+CREATE TABLE IF NOT EXISTS "User" (
     "id" TEXT NOT NULL,
     "email" TEXT NOT NULL,
     "name" TEXT,
@@ -19,7 +26,7 @@ CREATE TABLE "User" (
 );
 
 -- CreateTable
-CREATE TABLE "Session" (
+CREATE TABLE IF NOT EXISTS "Session" (
     "id" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
     "expiresAt" TIMESTAMP(3) NOT NULL,
@@ -29,7 +36,7 @@ CREATE TABLE "Session" (
 );
 
 -- CreateTable
-CREATE TABLE "Workspace" (
+CREATE TABLE IF NOT EXISTS "Workspace" (
     "id" TEXT NOT NULL,
     "name" TEXT NOT NULL,
     "ownerId" TEXT NOT NULL,
@@ -40,7 +47,7 @@ CREATE TABLE "Workspace" (
 );
 
 -- CreateTable
-CREATE TABLE "WorkspaceMember" (
+CREATE TABLE IF NOT EXISTS "WorkspaceMember" (
     "id" TEXT NOT NULL,
     "workspaceId" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
@@ -51,7 +58,7 @@ CREATE TABLE "WorkspaceMember" (
 );
 
 -- CreateTable
-CREATE TABLE "ApiKey" (
+CREATE TABLE IF NOT EXISTS "ApiKey" (
     "id" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
     "name" TEXT NOT NULL DEFAULT 'default',
@@ -65,50 +72,71 @@ CREATE TABLE "ApiKey" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "User_email_key" ON "User"("email");
+CREATE UNIQUE INDEX IF NOT EXISTS "User_email_key" ON "User"("email");
 
 -- CreateIndex
-CREATE INDEX "User_createdAt_idx" ON "User"("createdAt");
+CREATE INDEX IF NOT EXISTS "User_createdAt_idx" ON "User"("createdAt");
 
 -- CreateIndex
-CREATE INDEX "Session_userId_idx" ON "Session"("userId");
+CREATE INDEX IF NOT EXISTS "Session_userId_idx" ON "Session"("userId");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "Workspace_inviteCode_key" ON "Workspace"("inviteCode");
+CREATE UNIQUE INDEX IF NOT EXISTS "Workspace_inviteCode_key" ON "Workspace"("inviteCode");
 
 -- CreateIndex
-CREATE INDEX "Workspace_createdAt_idx" ON "Workspace"("createdAt");
+CREATE INDEX IF NOT EXISTS "Workspace_createdAt_idx" ON "Workspace"("createdAt");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "WorkspaceMember_workspaceId_userId_key" ON "WorkspaceMember"("workspaceId", "userId");
+CREATE UNIQUE INDEX IF NOT EXISTS "WorkspaceMember_workspaceId_userId_key" ON "WorkspaceMember"("workspaceId", "userId");
 
 -- CreateIndex
-CREATE INDEX "ApiKey_userId_idx" ON "ApiKey"("userId");
+CREATE INDEX IF NOT EXISTS "ApiKey_userId_idx" ON "ApiKey"("userId");
 
 -- CreateIndex
-CREATE INDEX "ResearchJob_userId_updatedAt_idx" ON "ResearchJob"("userId", "updatedAt");
+CREATE INDEX IF NOT EXISTS "ResearchJob_userId_updatedAt_idx" ON "ResearchJob"("userId", "updatedAt");
 
 -- CreateIndex
-CREATE INDEX "ResearchJob_workspaceId_updatedAt_idx" ON "ResearchJob"("workspaceId", "updatedAt");
+CREATE INDEX IF NOT EXISTS "ResearchJob_workspaceId_updatedAt_idx" ON "ResearchJob"("workspaceId", "updatedAt");
 
--- AddForeignKey
-ALTER TABLE "ResearchJob" ADD CONSTRAINT "ResearchJob_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+-- AddForeignKey (no IF NOT EXISTS for constraints — guarded via pg_constraint)
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ResearchJob_userId_fkey') THEN
+    ALTER TABLE "ResearchJob" ADD CONSTRAINT "ResearchJob_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+  END IF;
+END $$;
 
--- AddForeignKey
-ALTER TABLE "ResearchJob" ADD CONSTRAINT "ResearchJob_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ResearchJob_workspaceId_fkey') THEN
+    ALTER TABLE "ResearchJob" ADD CONSTRAINT "ResearchJob_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+  END IF;
+END $$;
 
--- AddForeignKey
-ALTER TABLE "Session" ADD CONSTRAINT "Session_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'Session_userId_fkey') THEN
+    ALTER TABLE "Session" ADD CONSTRAINT "Session_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
--- AddForeignKey
-ALTER TABLE "Workspace" ADD CONSTRAINT "Workspace_ownerId_fkey" FOREIGN KEY ("ownerId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'Workspace_ownerId_fkey') THEN
+    ALTER TABLE "Workspace" ADD CONSTRAINT "Workspace_ownerId_fkey" FOREIGN KEY ("ownerId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
--- AddForeignKey
-ALTER TABLE "WorkspaceMember" ADD CONSTRAINT "WorkspaceMember_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'WorkspaceMember_workspaceId_fkey') THEN
+    ALTER TABLE "WorkspaceMember" ADD CONSTRAINT "WorkspaceMember_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
--- AddForeignKey
-ALTER TABLE "WorkspaceMember" ADD CONSTRAINT "WorkspaceMember_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'WorkspaceMember_userId_fkey') THEN
+    ALTER TABLE "WorkspaceMember" ADD CONSTRAINT "WorkspaceMember_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
 
--- AddForeignKey
-ALTER TABLE "ApiKey" ADD CONSTRAINT "ApiKey_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ApiKey_userId_fkey') THEN
+    ALTER TABLE "ApiKey" ADD CONSTRAINT "ApiKey_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;

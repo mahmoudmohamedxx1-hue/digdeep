@@ -76,6 +76,7 @@ scripts/*
 !scripts/test-court-render.ts
 !scripts/test-compute.ts
 !scripts/test-standalone.sh
+!scripts/test-migration.sh
 !scripts/inject-trial.ts
 !scripts/probe-stop.ts
 !scripts/mock-llm.js
