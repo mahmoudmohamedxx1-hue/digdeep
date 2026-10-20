@@ -1,8 +1,16 @@
 import { NextResponse } from "next/server";
+import { after } from "next/server";
 import { db } from "@/lib/db";
+import { runJob, engineAlive } from "@/lib/research/engine";
 import { userFromApiKey } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
+// continuation polls extend this function past the response — same 300s
+// ceiling as the POST that starts the run and the UI's internal endpoint.
+export const maxDuration = 300;
+
+// v3.3.1: statuses that an engine can still resume from a checkpoint.
+const ACTIVE = ["queued", "planning", "researching", "critiquing", "synthesizing"];
 
 /**
  * P2-3 PUBLIC API — GET /api/v1/research/<id>
@@ -20,6 +28,17 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   });
   if (!job || job.userId !== caller.id) {
     return NextResponse.json({ error: "Research run not found for this key." }, { status: 404 });
+  }
+  // ── v3.3.1 CONTINUATION TRIGGER (P1 fix) ─────────────────────────────────
+  // On serverless the run's `after()` slice dies at a checkpoint when the
+  // function clock ends. The UI self-heals this because its internal status
+  // endpoint re-triggers the engine; API-only users had NO such trigger —
+  // their run stalled forever (observed live: a quick run pinned at 96% for
+  // 20 min until the internal endpoint was hit). Same pattern as the internal
+  // route: the owner's poll resumes the engine; the lease + heartbeat guards
+  // in runJob make this a no-op while an engine is genuinely running.
+  if (ACTIVE.includes(job.status) && !engineAlive(job.id)) {
+    after(runJob(job.id).catch((e) => console.error("[api-v1-resume]", job.id, e)));
   }
   let stats: Record<string, unknown> = {};
   try { stats = job.stats ? JSON.parse(job.stats) : {}; } catch { stats = {}; }

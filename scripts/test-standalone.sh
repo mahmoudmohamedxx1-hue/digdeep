@@ -138,6 +138,22 @@ START=$(curl -s -X POST "$BASE/api/v1/research" -H "Authorization: Bearer $DDK" 
 JOB_ID=$(echo "$START" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
 [[ -n "$JOB_ID" ]] && pass "v1 run started via API key ($JOB_ID)" || fail "v1 start failed: $START"
 
+echo "── 6b · v1 run must actually process (after() kickoff + v1 continuation) ──"
+# v3.3.1 regression class: the run is started via the public API, then the
+# serverless after() slice dies at a checkpoint — only a v1 poll may resume it.
+# If the status never leaves 'queued', the public API is a row-inserter, not a
+# pipeline. (No LLM key in CI is fine: the engine still transitions — to a
+# planning or error state — the point is that it RUNS.)
+V1STAT=""
+for i in $(seq 1 12); do
+  V1STAT=$(curl -s "$BASE/api/v1/research/$JOB_ID" -H "Authorization: Bearer $DDK" | grep -o '"status":"[^"]*"' | head -1 || true)
+  [[ -n "$V1STAT" && "$V1STAT" != '"status":"queued"' ]] && break
+  sleep 5
+done
+[[ -n "$V1STAT" && "$V1STAT" != '"status":"queued"' ]] \
+  && pass "v1 run left the queue ($V1STAT) — engine runs from the public API" \
+  || fail "v1 run stuck in 'queued' — after() kickoff / v1 continuation broken"
+
 echo "── 7 · Inject a completed run and exercise EVERY export format ──"
 # a deterministic completed job with sources (inject-trial pattern) — no LLM, no waiting
 EXPORT_JOB=""
