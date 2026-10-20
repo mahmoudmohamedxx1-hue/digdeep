@@ -74,6 +74,8 @@ scripts/*
 !scripts/test-jury.ts
 !scripts/test-relevance.ts
 !scripts/test-court-render.ts
+!scripts/test-compute.ts
+!scripts/test-standalone.sh
 !scripts/inject-trial.ts
 !scripts/probe-stop.ts
 !scripts/mock-llm.js
