@@ -357,8 +357,15 @@ echo "$MR" | grep -q '\-32600' && pass "MCP message without jsonrpc 2.0 → -326
 
 echo "── 15 · admin allowlist: ADMIN_EMAILS operator saves, everyone else 403 ──"
 # Second server instance on the next port, identical EXCEPT ADMIN_EMAILS is
-# set (mixed-case entry proves case-insensitivity; emails are normalized to
-# lowercase at registration and the allowlist is lowercased before compare).
+# set. Idempotency (found by the re-audit): emails are unique per run
+# ($RANDOM, same pattern as step 5) — a fixed email would 409 on every run
+# after the first against a non-ephemeral dev DB. The env entry is mixed-case
+# and the registration uses a different case mix of the SAME address — both
+# prove case-insensitivity (emails normalize to lowercase at registration;
+# the allowlist lowercases before compare).
+ARND=$RANDOM$RANDOM
+AADMIN="ci-admin-$ARND@example.org"
+APLAIN="ci-plain-$ARND@example.org"
 APORT=$((PORT + 1))
 ABASE="http://localhost:$APORT"
 STALE_APIDS=$(lsof -ti :"$APORT" 2>/dev/null || true)
@@ -367,7 +374,7 @@ if [[ -n "$STALE_APIDS" ]]; then
   kill $STALE_APIDS 2>/dev/null || true; sleep 1
   kill -9 $STALE_APIDS 2>/dev/null || true; sleep 1
 fi
-NODE_ENV=production DATABASE_URL="$DATABASE_URL" PORT=$APORT CRON_SECRET="${CRON_SECRET:-ci-cron-secret}" ALLOW_LOCAL_WEBHOOKS=1 ADMIN_EMAILS="CI-Admin@Example.ORG" node .next/standalone/server.js > /tmp/standalone-admin-server.log 2>&1 &
+NODE_ENV=production DATABASE_URL="$DATABASE_URL" PORT=$APORT CRON_SECRET="${CRON_SECRET:-ci-cron-secret}" ALLOW_LOCAL_WEBHOOKS=1 ADMIN_EMAILS="CI-Admin-$ARND@Example.ORG" node .next/standalone/server.js > /tmp/standalone-admin-server.log 2>&1 &
 ASRV_PID=$!
 ADMIN_UP=0
 for i in $(seq 1 40); do
@@ -381,7 +388,7 @@ else
   # register with the UPPERCASE form of the listed email → stored lowercase,
   # allowlist matches case-insensitively, session reports isAdmin
   AJAR="/tmp/ci-admin.jar"; rm -f "$AJAR"
-  REG=$(curl -s -c "$AJAR" -X POST "$ABASE/api/auth" -H "Content-Type: application/json" -d '{"action":"register","email":"ci-ADMIN@example.org","password":"ci-admin-pass-123"}')
+  REG=$(curl -s -c "$AJAR" -X POST "$ABASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"register\",\"email\":\"ci-ADMIN-$ARND@example.org\",\"password\":\"ci-admin-pass-123\"}")
   echo "$REG" | grep -q '"isAdmin":true' && pass "admin email register → isAdmin true (case-insensitive allowlist)" || fail "admin register response: $(echo "$REG" | head -c 160)"
   SES=$(curl -s -b "$AJAR" "$ABASE/api/auth")
   echo "$SES" | grep -q '"isAdmin":true' && pass "GET /api/auth flags the admin session" || fail "admin session GET: $(echo "$SES" | head -c 160)"
@@ -399,12 +406,66 @@ else
   [[ "$CODE" == "200" ]] && pass "real action (save-search no-op round-trip) with admin session → 200" || fail "admin save-search → $CODE (want 200)"
   # non-admin on the SAME server (allowlist active) → still 403
   NJAR="/tmp/ci-nonadmin.jar"; rm -f "$NJAR"
-  curl -s -c "$NJAR" -X POST "$ABASE/api/auth" -H "Content-Type: application/json" -d '{"action":"register","email":"ci-plain@example.org","password":"ci-plain-pass-123"}' > /dev/null
+  curl -s -c "$NJAR" -X POST "$ABASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"register\",\"email\":\"$APLAIN\",\"password\":\"ci-plain-pass-123\"}" > /dev/null
   NSES=$(curl -s -b "$NJAR" "$ABASE/api/auth")
   echo "$NSES" | grep -q '"isAdmin":false' && pass "non-admin session reports isAdmin false" || fail "non-admin session: $(echo "$NSES" | head -c 160)"
   CODE=$(curl -s -o /dev/null -w "%{http_code}" -b "$NJAR" -X POST "$ABASE/api/settings" -H "Content-Type: application/json" -d '{"action":"__ci_gate_probe__"}')
   [[ "$CODE" == "403" ]] && pass "settings POST non-admin (allowlist active) → 403" || fail "non-admin → $CODE (want 403)"
 fi
+
+echo "── 16 · Cleanup: purge this suite's test data (cascade) ──"
+# The suite creates ci-* accounts + injected runs + seeded shares. On CI the
+# DB is ephemeral, but locally they accumulate run-after-run.
+# ORDER MATTERS — found by the re-audit: ResearchJob.userId is onDelete:
+# SetNull (runs survive account deletion as public artifacts, by design), so
+# deleting users alone ORPHANS their runs into anonymous (= publicly
+# readable) state — which then breaks the F5 thread-privacy check on the
+# next run. Correct cleanup deletes the RUNS and SNAPSHOTS first, then the
+# users (whose keys/hooks/watches/sessions cascade for real).
+CLEANED=$(DATABASE_URL="$DATABASE_URL" bun -e '
+const { PrismaClient } = require("@prisma/client");
+const p = new PrismaClient({ datasources: { db: { url: process.env.DATABASE_URL } } });
+(async () => {
+  // 1. runs of this suite: the two inject threads + any run attributed to a
+  //    ci-* account (covers orphans left by pre-cleanup-fix runs)
+  const ciUsers = await p.user.findMany({ where: { email: { startsWith: "ci-" } }, select: { id: true } });
+  const jobs = await p.researchJob.findMany({
+    where: { OR: [
+      { threadId: { in: ["ci-standalone-thread", "ci-webhook-thread"] } },
+      { userId: { in: ciUsers.map((u) => u.id) } },
+    ] },
+    select: { id: true },
+  });
+  const jobIds = jobs.map((j) => j.id);
+  // 2. share snapshots reference jobId as a plain string (no FK) — delete
+  //    explicitly, plus the fixed-id og-card seeds from step 4b
+  const shares = await p.sharedReport.deleteMany({
+    where: { OR: [
+      { jobId: { in: jobIds } },
+      { id: { in: ["s-citestand", "s-cistarab"] } },
+      { threadId: { startsWith: "ci-" } },
+    ] },
+  });
+  // 3. runs (events/sources/sections cascade via FK)
+  const runs = await p.researchJob.deleteMany({
+    where: { OR: [
+      { id: { in: jobIds } },
+      { threadId: { in: ["ci-standalone-thread", "ci-webhook-thread"] } },
+      { userId: { in: ciUsers.map((u) => u.id) } },
+    ] },
+  });
+  // 4. users (keys/webhooks/watches/sessions cascade)
+  const users = await p.user.deleteMany({
+    where: { email: { startsWith: "ci-" }, OR: [{ email: { endsWith: "@test.local" } }, { email: { endsWith: "@example.org" } }] },
+  });
+  console.log(`${users.count}:${runs.count}:${shares.count}`);
+  await p.$disconnect();
+})().catch(() => { console.log("-1:0:0"); });' 2>/dev/null || echo "-1:0:0")
+U_COUNT=$(echo "$CLEANED" | cut -d: -f1)
+R_COUNT=$(echo "$CLEANED" | cut -d: -f2)
+S_COUNT=$(echo "$CLEANED" | cut -d: -f3)
+if [[ "$U_COUNT" == "-1" ]]; then fail "cleanup query failed"
+else pass "purged $U_COUNT user(s), $R_COUNT run(s), $S_COUNT share snapshot(s) — nothing orphaned"; fi
 
 echo ""
 if [[ $FAILED -eq 0 ]]; then
