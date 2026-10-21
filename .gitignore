@@ -90,6 +90,8 @@ scripts/*
 !scripts/supabase/verify-live.sh
 !scripts/benchmark-harness.mjs
 !scripts/replay-self-questions.sh
+!scripts/audit-cap-watch.sh
+!scripts/audit-prod-fingerprint.sh
 !scripts/bench/
 scripts/bench/*
 !scripts/bench/questions.jsonl
@@ -108,3 +110,4 @@ db/.pgpw
 !scripts/teal_brand.py
 !scripts/verify_maze_208.py
 !scripts/verify_mazemark_210.py
+3210

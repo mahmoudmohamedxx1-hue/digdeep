@@ -95,7 +95,13 @@ export async function POST(req: Request) {
     if (sent.kind === "unreachable") {
       return NextResponse.json({ error: "Email provider unreachable — try again shortly." }, { status: 502 });
     }
-    return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 });
+    // Upstream rejected the send (signup toggle, domain allowlist, provider
+    // policy, …). Our own validation already passed, so blaming the email
+    // address would mislead the user — report it as a temporary outage.
+    return NextResponse.json(
+      { error: "Email codes are temporarily unavailable — try again shortly." },
+      { status: 502 }
+    );
   }
 
   if (action === "otp-verify") {

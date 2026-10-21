@@ -1,5 +1,26 @@
 # Changelog
 
+## v3.5.2 — a rejected send is not your email's fault (2026-10-21)
+
+- **Found live during the deep audit.** When Supabase rejects an OTP *send* for
+  an operational reason (email-cap edge responses, signup toggle, domain
+  allowlist, provider policy), the API answered `400 "Enter a valid email
+  address."` — blaming an address that had already passed our own validation.
+  Real users would retry the same valid email and keep getting told it was
+  invalid. Upstream send rejections now answer `502 "Email codes are
+  temporarily unavailable — try again shortly."` — an honest, non-enumerating
+  outage signal. Our own regex validation still returns the 400 (that message
+  is only shown when the address really is malformed).
+- Locked with a permanent standalone check: a mock-Supabase policy rejection
+  (`@reject.test` fixture → upstream 400 `signup_disabled`) must surface as
+  502 + temporary-unavailable, never as "Enter a valid email address."
+- API version strings (`/api/openapi.json`, MCP server info) bumped from the
+  stale 3.4.0 to 3.5.2.
+- New ops forensics: `scripts/audit-cap-watch.sh` (watches the Supabase
+  built-in mailer's 2/hour project cap and captures the raw upstream verdict
+  when a slot frees) and `scripts/audit-prod-fingerprint.sh` (OTP behavior
+  fingerprint + budget-free real-code verify through any deployment).
+
 ## v2.9.0 — chatting with the gavel up stays chatting (2026-10-19)
 
 - **"Chatting while court is activated is really bad."** Root cause: with Court

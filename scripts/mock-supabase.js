@@ -47,6 +47,14 @@ const server = http.createServer((req, res) => {
     if (req.url === "/auth/v1/otp") {
       if (!email) return json(400, { code: 400, msg: "Email is required" });
       if (parsed.create_user !== true) return json(400, { msg: "mock expects create_user" });
+      // Rejection fixture: emails at reject.test simulate an upstream policy
+      // refusal (signup toggle / domain allowlist) — production Supabase
+      // answers 400 with an error_code, NOT 429. The app must report this as
+      // a temporary outage (502), never "Enter a valid email address."
+      if (email.endsWith("@reject.test")) {
+        console.log(`[mock-supabase] otp REJECT (policy) → ${email}`);
+        return json(400, { code: 400, error_code: "signup_disabled", msg: "Signups not allowed" });
+      }
       sent.set(email, (sent.get(email) || 0) + 1);
       console.log(`[mock-supabase] otp → ${email} (#${sent.get(email)})`);
       return json(200, {});

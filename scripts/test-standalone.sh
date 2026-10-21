@@ -517,6 +517,20 @@ echo "$S8" | grep -q '"ok":true' && pass "otp-send (8-digit flow) → ok" || fai
 V8=$(curl -s -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"otp-verify\",\"email\":\"$OEMAIL8\",\"code\":\"24681099\"}")
 echo "$V8" | grep -q "\"email\":\"$OEMAIL8\"" && pass "otp-verify 8-digit code → signed in (config-agnostic 6–8)" || fail "otp-verify 8-digit: $(echo "$V8" | head -c 200)"
 
+# upstream policy rejection (mock: @reject.test → 400 signup_disabled): the
+# email passed OUR validation, so the app must NOT blame the email address —
+# it reports a temporary outage (502). Found live on prod 2026-10-22: real
+# Supabase 4xx rejections surfaced as "Enter a valid email address."
+RCODE=$(curl -s -w "|%{http_code}" -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"otp-send\",\"email\":\"ci-reject-$ORND@reject.test\"}")
+if echo "$RCODE" | grep -q "temporarily unavailable" && echo "$RCODE" | grep -q "|502$"; then
+  pass "otp-send upstream policy rejection → 502 temporary-unavailable (not 'invalid email')"
+else
+  fail "otp-send rejection mapping: $RCODE (want 502 + temporarily unavailable)"
+fi
+if echo "$RCODE" | grep -q "Enter a valid email address"; then
+  fail "otp-send rejection still blames the email (regression)"
+fi
+
 echo "── 17 · Cleanup: purge this suite's test data (cascade) ──"
 # The suite creates ci-* accounts + injected runs + seeded shares. On CI the
 # DB is ephemeral, but locally they accumulate run-after-run.
