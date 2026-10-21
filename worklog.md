@@ -365,3 +365,30 @@ Work Log:
 
 Stage Summary:
 - v3.4 is LIVE and verified end-to-end on production: 57-check standalone, 19-check migration states, 6 unit suites, tsc, lint, browser E2E, and a live six-feature prod gauntlet including a real scheduled-research cycle. DigDeep now speaks to agents (MCP), to servers (webhooks), to schedulers (watches), to developers (OpenAPI + scoped/quota'd keys), and to skeptics (live public track record).
+
+---
+Task ID: 35
+Agent: main (Z.ai)
+Task: User: "NOW MAKE AUDIT ON EVERYTHING TO CHECK THAT EVERYTHING IS PERFECT" — full adversarial audit of the entire platform (v3.4 live), fix everything found, redeploy, reverify.
+
+Work Log:
+- ENV RECOVERY (10th reset): PG re-init on :5433, db push, rebuild. NOTE: shell carries a stale DATABASE_URL=file:...db/custom.db (SQLite) — app-side already skips it (db.ts precedence + migrate-script repair), but direct-Prisma helpers don't; normalized in test-standalone.sh + inject-trial.ts (it had silently cascaded 12 phantom test failures).
+- CODE-LEVEL ADVERSARIAL AUDIT (every v3.4 surface read line-by-line, not just tests re-run): scopes/quotas, webhooks, MCP, watches/cron, OpenAPI, public stats, keys, account UI, share/og, auth, admin, settings, ALL research routes, trending/providers/workspaces.
+- VERIFIED CLEAN: scope+ownership enforcement on every v1/MCP path; quota calendar logic; webhook HMAC + 8 engine terminal sites + never-throws design + delivery logging; cron closed-when-unset + batch cap + double-fire guard; idempotent v34 migration with hot-path indexes; key sha256 storage + one-time reveal + empty-scope rejection (legacy-key fallback is correct back-compat); public stats aggregates-only; share/og keyed by share id; scrypt + IP rate limit on auth; ownership on workspaces/session twins.
+- 9 FINDINGS, ALL FIXED (b630a19):
+  * F1 CRITICAL: POST /api/settings UNAUTHENTICATED — anyone could swap the prod LLM pool (streaming engine traffic + stored endpoint keys to attacker URLs), delete the LLM key, repoint search, and `test` was an open SSRF probe. Fix: ADMIN_EMAILS allowlist (fail-closed when unset, CRON_SECRET pattern); GET stays open+masked for the UI health surface.
+  * F2 CRITICAL: /api/admin/migrate secret HARDCODED in repo. Route deleted (superseded by migration pipeline + P3009 self-heal, zero references).
+  * F3 HIGH: POST share of ANY completed report by anyone with the job id (private-report exfiltration to public URL). Gated.
+  * F4 HIGH: internal GET/PATCH/export served owned-run data to anyone (full report; format=json = plan+events+sections dump; PATCH retry = artifact wipe + repeatable cost drain) — contradicted v1's ownership isolation and the OpenAPI spec's own security claim. Gated.
+  * F5 HIGH: GET /api/research without threadId listed EVERY user's recent private queries, unauthenticated, zero consumers. Now anonymous-only; threadId list filters to anonymous-or-owned.
+  * F3-F5 share one rule — new src/lib/research/access.ts canAccessJob: anonymous runs stay keyless-open (capability URLs = the core keyless UX), owned runs require owner session OR owner Bearer key (research:read) OR an explicit share; 404 never 403 (existence stays secret). Share-page viewers unaffected (snapshot via /api/share; /r/s-<id> enrichment of shared runs allowed by the shared-allowance). getApiCaller() now actually resolves Bearer keys (docstring promised, code didn't).
+  * F6 MEDIUM: webhook SSRF — url-guard.ts blocks localhost/.local/.internal/.lan, IPv4 loopback/0/8/10/100.64/169.254/172.16/192.168/224+, IPv6 loopback/ULA/link-local/multicast, credentialed URLs; applied to webhooks + settings probe; ALLOW_LOCAL_WEBHOOKS=1 loopback-only escape hatch (CI receiver). Documented residual: public-DNS-name→private-IP (rebinding class) not blocked.
+  * F7 LOW: timing-safe compares — verifyWebhookSignature (the reference impl receivers copy) + cron bearer (sha256 digests + timingSafeEqual).
+  * F8 LOW: quota TOCTOU — count-after-create re-check rolls back the over-limit run; concurrent starts can no longer both pass.
+  * F9 LOW: MCP requests without jsonrpc 2.0 → -32600.
+- TESTS: standalone suite 57 → 77 checks (new step 14: internal-route 404s for strangers, keyless preserved, thread-leak, SSRF rejections, settings fail-closed, admin route gone, MCP -32600). Full battery: tsc clean, eslint clean, 6 unit suites green, migration states 19/19, standalone 77/77.
+- DEPLOY b630a19 → READY (~80s), migrations clean ("No pending migrations" — pipeline healthy).
+- PROD VERIFICATION (scripts/prod-audit-verify.sh, committed): ALL 35 CHECKS PASSED — core surfaces; register/keys; MCP -32600 + initialize regression; settings 403 anon+session, GET masked; admin/migrate 404; SSRF 400s (metadata/localhost/private); scope 403 regression; owned run: internal status/export/PATCH/share all 404 anonymous, 200 with owner session, export 200 with owner Bearer (spec-true now), thread list 0 jobs anonymous; v1 quick run completed ~100s; owner can share; shared run becomes public-by-choice (anonymous internal read 200); share page renders; keys revoked after.
+
+Stage Summary:
+- The platform was functionally perfect but NOT security-perfect: 2 critical + 3 high + 4 low findings, all fixed, all gated by permanent test coverage, deployed and verified live (35/35). Known documented residuals: in-memory rate limiter weak on serverless (Tier 0, deferred by choice), DNS-rebinding-class SSRF, ADMIN_EMAILS unset on prod (settings save is fail-closed until the operator sets it — one env var). DigDeep's owned-run data now has the same isolation everywhere the platform promises it, and the keyless UX is bit-for-bit unchanged.
