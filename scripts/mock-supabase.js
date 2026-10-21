@@ -5,8 +5,9 @@
  *
  *   POST /auth/v1/otp    { email, create_user: true } → 200 {}
  *   POST /auth/v1/verify { email, token, type: "email" }
- *        token 246810  → 200 { access_token, user: { id, email } }
- *        anything else → 400 { code: 400, error_code: "otp_expired",
+ *        token 246810    → 200 (6-digit code shape)
+ *        token 24681099  → 200 (8-digit code shape — the real project issues 8)
+ *        anything else   → 400 { code: 400, error_code: "otp_expired",
  *                               msg: "Email link is invalid or has expired" }
  *        (production Supabase returns the same error_code for wrong AND
  *        expired codes — the app maps both to one user-facing message)
@@ -54,7 +55,7 @@ const server = http.createServer((req, res) => {
     if (req.url === "/auth/v1/verify") {
       if (String(parsed.type || "") !== "email") return json(400, { msg: "mock expects type email" });
       const token = String(parsed.token || "");
-      if (token === "246810") {
+      if (token === "246810" || token === "24681099") {
         console.log(`[mock-supabase] verify OK → ${email}`);
         return json(200, {
           access_token: "mock-access-token",

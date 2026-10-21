@@ -151,7 +151,7 @@ export default function AccountPage() {
     return () => clearTimeout(t);
   }, [resendIn]);
 
-  /** v3.5: ask the backend to email a 6-digit sign-in code to $email. */
+  /** v3.5: ask the backend to email a one-time sign-in code (6–8 digits) to $email. */
   async function sendCode(e?: React.MouseEvent) {
     e?.preventDefault();
     if (!email.includes("@")) {
@@ -183,8 +183,8 @@ export default function AccountPage() {
   /** v3.5: confirm the code → signed in (a brand-new address gets an account). */
   async function verifyCode(e: React.FormEvent) {
     e.preventDefault();
-    if (otpCode.length !== 6) {
-      toast({ title: "Enter the 6-digit code from your email." });
+    if (otpCode.length < 6) {
+      toast({ title: "Enter the code from your email (6–8 digits)." });
       return;
     }
     setOtpBusy(true);
@@ -380,15 +380,18 @@ export default function AccountPage() {
             />
             {otpSent && (
               <div className="space-y-2">
-                <InputOTP maxLength={6} value={otpCode} onChange={setOtpCode} autoFocus>
+                {/* 8 boxes: the code length is a per-project Supabase setting
+                 * (this project issues 8) — the button unlocks at 6 so a
+                 * future 6-digit config keeps working without a UI change. */}
+                <InputOTP maxLength={8} value={otpCode} onChange={setOtpCode} autoFocus>
                   <InputOTPGroup>
-                    {[0, 1, 2, 3, 4, 5].map((i) => (
+                    {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
                       <InputOTPSlot key={i} index={i} />
                     ))}
                   </InputOTPGroup>
                 </InputOTP>
                 <p className="text-xs text-muted-foreground">
-                  Enter the 6-digit code emailed to {email}. Wrong code? Request a new one — codes expire.
+                  Enter the code emailed to {email} (6–8 digits). Wrong code? Request a new one — codes expire.
                 </p>
               </div>
             )}
@@ -398,7 +401,7 @@ export default function AccountPage() {
               </Button>
             ) : (
               <div className="space-y-2">
-                <Button type="submit" disabled={otpBusy || otpCode.length !== 6} className="w-full">
+                <Button type="submit" disabled={otpBusy || otpCode.length < 6} className="w-full">
                   {otpBusy ? "Verifying…" : "Verify & sign in"}
                 </Button>
                 <div className="flex items-center justify-between text-xs">

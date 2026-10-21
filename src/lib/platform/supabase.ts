@@ -3,35 +3,48 @@
  *
  * Design:
  *   - Supabase Auth is used as a STATELESS email-verification engine: it sends
- *     the 6-digit code to the user's inbox and confirms it on verify. DigDeep
- *     keeps its own User/Session tables and issues its own session cookie on
- *     verify — every existing feature (admin allowlist by email, API keys,
- *     scopes, quotas, thread claiming) works unchanged for OTP accounts.
- *   - Fail-closed like every other operator switch in this repo: with
- *     SUPABASE_URL / SUPABASE_ANON_KEY unset, otpEnabled() is false, the UI
- *     hides the email-code tab, and the OTP endpoints answer 503 — an
- *     unconfigured deployment can never half-work.
+ *     the one-time code (6–8 digits, per the project's mailer_otp_length) to
+ *     the user's inbox and confirms it on verify. DigDeep keeps its own
+ *     User/Session tables and issues its own session cookie on verify — every
+ *     existing feature (admin allowlist by email, API keys, scopes, quotas,
+ *     thread claiming) works unchanged for OTP accounts.
+ *   - This repository ships with the operator's project as the DEFAULT target
+ *     (v3.5.1): the values below are public-by-design — the Supabase
+ *     publishable key is the successor of the legacy anon key and ships in
+ *     every browser bundle, only reaching what Row Level Security allows.
+ *     Email-code auth therefore works on every deployment of this repo out of
+ *     the box, with no dashboard step.
+ *   - Fail-closed override semantics: an env var that is SET (even to an empty
+ *     string) always wins over the defaults. SUPABASE_URL="" turns the
+ *     feature completely off (otpEnabled() false, UI tab hidden, endpoints
+ *     answer 503) — an explicitly disabled deployment can never half-work.
  *   - The ANON (publishable) key is used server-side, not the secret key:
  *     these are the same calls a browser would make, so a leaked value grants
  *     nothing beyond what the public auth flow already allows.
  *
- * Wire-up (production): set SUPABASE_URL (https://<ref>.supabase.co) and
- * SUPABASE_ANON_KEY in Vercel → Settings → Environment Variables, redeploy.
- * For 6-digit CODES (not a magic link), the project's "Magic Link" email
- * template must contain {{ .Token }} — see scripts/supabase/bootstrap.sh.
+ * Wire-up (override/repoint): set SUPABASE_URL (https://<ref>.supabase.co)
+ * and SUPABASE_ANON_KEY in Vercel → Settings → Environment Variables and
+ * redeploy. For CODES (not a magic link), the project's "Magic Link" email
+ * template must contain {{ .Token }} — see scripts/supabase/.
  */
+
+// Operator's production project — public-by-design values (see header).
+const DEFAULT_SUPABASE_URL = "https://vvopggnkskzzwolxbjig.supabase.co";
+const DEFAULT_SUPABASE_ANON_KEY = "sb_publishable_PGIlUqfudf0aisRjfC9s6g_KatzsD-D";
 
 export interface SupabaseAuthConfig {
   url: string; // https://<ref>.supabase.co (no trailing slash)
   anonKey: string;
 }
 
-/** Resolve the Supabase Auth config. Null when unset/malformed (fail-closed).
- *  http URLs are accepted for local dev (supabase CLI stack / test mock);
- *  production is always https://<ref>.supabase.co. */
+/** Resolve the Supabase Auth config. Null when the effective values are
+ *  unset/malformed (fail-closed). Env PRESENT (even empty) beats the repo
+ *  defaults — SUPABASE_URL="" is an explicit off switch. http URLs are
+ *  accepted for local dev (supabase CLI stack / test mock); production is
+ *  always https://<ref>.supabase.co. */
 export function supabaseAuthConfig(): SupabaseAuthConfig | null {
-  const url = (process.env.SUPABASE_URL ?? "").trim().replace(/\/+$/, "");
-  const anonKey = (process.env.SUPABASE_ANON_KEY ?? "").trim();
+  const url = (process.env.SUPABASE_URL ?? DEFAULT_SUPABASE_URL).trim().replace(/\/+$/, "");
+  const anonKey = (process.env.SUPABASE_ANON_KEY ?? DEFAULT_SUPABASE_ANON_KEY).trim();
   if (!/^https?:\/\/[^\s/]+$/i.test(url) || anonKey.length < 20 || /\s/.test(anonKey)) {
     return null;
   }

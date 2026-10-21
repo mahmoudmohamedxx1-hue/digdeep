@@ -388,7 +388,7 @@ if [[ -n "$STALE_APIDS" ]]; then
   kill $STALE_APIDS 2>/dev/null || true; sleep 1
   kill -9 $STALE_APIDS 2>/dev/null || true; sleep 1
 fi
-NODE_ENV=production DATABASE_URL="$DATABASE_URL" PORT=$APORT CRON_SECRET="${CRON_SECRET:-ci-cron-secret}" ALLOW_LOCAL_WEBHOOKS=1 ADMIN_EMAILS="CI-Admin-$ARND@Example.ORG" node .next/standalone/server.js > /tmp/standalone-admin-server.log 2>&1 &
+NODE_ENV=production DATABASE_URL="$DATABASE_URL" PORT=$APORT CRON_SECRET="${CRON_SECRET:-ci-cron-secret}" ALLOW_LOCAL_WEBHOOKS=1 ADMIN_EMAILS="CI-Admin-$ARND@Example.ORG" SUPABASE_URL="" SUPABASE_ANON_KEY="" node .next/standalone/server.js > /tmp/standalone-admin-server.log 2>&1 &
 ASRV_PID=$!
 ADMIN_UP=0
 for i in $(seq 1 40); do
@@ -430,17 +430,37 @@ fi
 echo "── 16 · email-OTP auth (mock Supabase): fail-closed, send, throttle, verify ──"
 # The MAIN server (started with SUPABASE_URL=http://localhost:3199 + the test
 # anon key) exercises the configured path; the ADMIN server from step 15
-# (:$APORT, no SUPABASE_* env) proves the fail-closed posture. Mock contract:
-# code 246810 verifies any email, anything else → 400 otp_expired (production
-# Supabase returns the same error_code for wrong AND expired codes).
+# (:$APORT, SUPABASE_* explicitly BLANKED — empty env beats the repo defaults,
+# the v3.5.1 off switch) proves the fail-closed posture. Mock contract:
+# codes 246810 (6-digit) and 24681099 (8-digit — the real project issues 8)
+# verify any email, anything else → 400 otp_expired (production Supabase
+# returns the same error_code for wrong AND expired codes).
+
+# v3.5.1 config semantics: repo defaults when unset · blank env disables ·
+# set env repoints (what the main/admin servers above rely on).
+CFGP=$(bun -e '(async () => {
+  const m = await import(process.cwd() + "/src/lib/platform/supabase.ts");
+  delete process.env.SUPABASE_URL; delete process.env.SUPABASE_ANON_KEY;
+  const c = m.supabaseAuthConfig();
+  console.log(m.otpEnabled() && c && c.url === "https://vvopggnkskzzwolxbjig.supabase.co" && c.anonKey.startsWith("sb_publishable_") ? "DEFAULTS-OK" : "DEFAULTS-BAD");
+  process.env.SUPABASE_URL = ""; process.env.SUPABASE_ANON_KEY = "";
+  console.log(!m.otpEnabled() ? "DISABLE-OK" : "DISABLE-BAD");
+  process.env.SUPABASE_URL = "http://localhost:3199"; process.env.SUPABASE_ANON_KEY = "test-anon-key-0123456789abcdef";
+  const c2 = m.supabaseAuthConfig();
+  console.log(c2 && c2.url === "http://localhost:3199" && c2.anonKey === "test-anon-key-0123456789abcdef" ? "OVERRIDE-OK" : "OVERRIDE-BAD");
+})()')
+echo "$CFGP" | grep -q DEFAULTS-OK && pass "config: unset env → repo defaults (prod project, otpEnabled)" || fail "config defaults: $CFGP"
+echo "$CFGP" | grep -q DISABLE-OK && pass "config: SUPABASE_URL="" (blank) → feature OFF (fail-closed off switch)" || fail "config disable: $CFGP"
+echo "$CFGP" | grep -q OVERRIDE-OK && pass "config: set env beats defaults (mock URL active on main server)" || fail "config override: $CFGP"
+
 ORND=$RANDOM$RANDOM
 OEMAIL="ci-otp-$ORND@test.local"
 PEMAIL="ci-pw-otp-$ORND@test.local"
 OJAR="/tmp/ci-otp.jar"; rm -f "$OJAR"
 
-# fail-closed: admin server has no SUPABASE env — feature inert, 503, no email
+# fail-closed: admin server has SUPABASE_* blanked — feature inert, 503, no email
 SES=$(curl -s "$ABASE/api/auth")
-echo "$SES" | grep -q '"otpEnabled":false' && pass "GET /api/auth without SUPABASE env → otpEnabled false" || fail "admin-server session GET: $(echo "$SES" | head -c 160)"
+echo "$SES" | grep -q '"otpEnabled":false' && pass "GET /api/auth with SUPABASE env blanked → otpEnabled false" || fail "admin-server session GET: $(echo "$SES" | head -c 160)"
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$ABASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"otp-send\",\"email\":\"$OEMAIL\"}")
 [[ "$CODE" == "503" ]] && pass "otp-send without SUPABASE env → 503 (fail-closed, nothing emailed)" || fail "otp-send unconfigured → $CODE (want 503)"
 grep -q "otp → " /tmp/mock-supabase.log && fail "mock recorded a send while unconfigured (must not call upstream)" || pass "no upstream call when unconfigured (503 short-circuits)"
@@ -454,6 +474,8 @@ CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/auth" -H "Conte
 [[ "$CODE" == "400" ]] && pass "otp-send malformed email → 400" || fail "otp-send bad email → $CODE (want 400)"
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"otp-verify\",\"email\":\"$OEMAIL\",\"code\":\"12345\"}")
 [[ "$CODE" == "400" ]] && pass "otp-verify 5-digit code → 400" || fail "otp-verify short code → $CODE (want 400)"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"otp-verify\",\"email\":\"$OEMAIL\",\"code\":\"123456789\"}")
+[[ "$CODE" == "400" ]] && pass "otp-verify 9-digit code → 400 (validation ceiling)" || fail "otp-verify 9-digit → $CODE (want 400)"
 
 # send + 60s per-email cooldown (server-side)
 S1=$(curl -s -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"otp-send\",\"email\":\"$OEMAIL\"}")
@@ -465,6 +487,8 @@ grep -qF "otp → $OEMAIL (#1)" /tmp/mock-supabase.log && pass "mock Supabase lo
 # wrong code → 401; right code 246810 → brand-new OTP-only account + session
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"otp-verify\",\"email\":\"$OEMAIL\",\"code\":\"111111\"}")
 [[ "$CODE" == "401" ]] && pass "otp-verify wrong code → 401 (mapped from upstream 400 otp_expired)" || fail "otp-verify wrong code → $CODE (want 401)"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"otp-verify\",\"email\":\"$OEMAIL\",\"code\":\"11111111\"}")
+[[ "$CODE" == "401" ]] && pass "otp-verify wrong 8-digit code → 401 (8-digit codes pass validation)" || fail "otp-verify wrong 8-digit → $CODE (want 401)"
 V=$(curl -s -c "$OJAR" -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"otp-verify\",\"email\":\"$OEMAIL\",\"code\":\"246810\"}")
 echo "$V" | grep -q "\"email\":\"$OEMAIL\"" && pass "otp-verify right code → signed in, OTP-only account created" || fail "otp-verify response: $(echo "$V" | head -c 200)"
 SES=$(curl -s -b "$OJAR" "$BASE/api/auth")
@@ -485,6 +509,13 @@ V2ID=$(echo "$V2" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
 [[ -n "$PWID" && "$V2ID" == "$PWID" ]] && pass "password account signs in by code → SAME user row reused ($PWID)" || fail "OTP on password account: got '$V2ID' want '$PWID'"
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"login\",\"email\":\"$PEMAIL\",\"password\":\"ci-pw-pass-123\"}")
 [[ "$CODE" == "200" ]] && pass "password login still works after a code sign-in" || fail "password login after OTP → $CODE (want 200)"
+
+# 8-digit code shape (the real project's mailer_otp_length is 8) — end-to-end
+OEMAIL8="ci-otp8-$ORND@test.local"
+S8=$(curl -s -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"otp-send\",\"email\":\"$OEMAIL8\"}")
+echo "$S8" | grep -q '"ok":true' && pass "otp-send (8-digit flow) → ok" || fail "otp-send 8-digit flow: $(echo "$S8" | head -c 160)"
+V8=$(curl -s -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"otp-verify\",\"email\":\"$OEMAIL8\",\"code\":\"24681099\"}")
+echo "$V8" | grep -q "\"email\":\"$OEMAIL8\"" && pass "otp-verify 8-digit code → signed in (config-agnostic 6–8)" || fail "otp-verify 8-digit: $(echo "$V8" | head -c 200)"
 
 echo "── 17 · Cleanup: purge this suite's test data (cascade) ──"
 # The suite creates ci-* accounts + injected runs + seeded shares. On CI the

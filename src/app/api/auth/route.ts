@@ -38,7 +38,7 @@ export async function GET() {
  * POST /api/auth — one endpoint, action-based:
  *  { action: "register", email, password, name?, claimThreadIds?: string[] }
  *  { action: "login", email, password, claimThreadIds?: string[] }
- *  { action: "otp-send", email }                        — v3.5: email a 6-digit code
+ *  { action: "otp-send", email }                        — v3.5: email a one-time code (6–8 digits)
  *  { action: "otp-verify", email, code, claimThreadIds? } — verify it, sign in
  *  { action: "logout" }
  * claimThreadIds = the anonymous browser's local thread ids — migrated to the
@@ -86,7 +86,7 @@ export async function POST(req: Request) {
       // uniform response — never reveals whether the address has an account
       return NextResponse.json({
         ok: true,
-        message: "If that address can receive mail, a 6-digit code is on its way.",
+        message: "If that address can receive mail, a one-time code is on its way.",
       });
     }
     if (sent.kind === "rate_limited") {
@@ -103,8 +103,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 });
     }
     const code = String(body.code || "").trim();
-    if (!/^\d{6}$/.test(code)) {
-      return NextResponse.json({ error: "Enter the 6-digit code from your email." }, { status: 400 });
+    // 6–8 digits: the code length is a per-project Supabase setting
+    // (mailer_otp_length — this project issues 8); stay config-agnostic.
+    if (!/^\d{6,8}$/.test(code)) {
+      return NextResponse.json({ error: "Enter the code from your email (6–8 digits)." }, { status: 400 });
     }
     if (!otpEnabled()) {
       return NextResponse.json({ error: "Email codes are not configured on this deployment." }, { status: 503 });
