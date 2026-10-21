@@ -22,6 +22,21 @@ BASE="http://localhost:$PORT"
 FAST=0
 [[ "${1:-}" == "--fast" ]] && FAST=1
 
+# v3.4.1 audit fix: the app (src/lib/db.ts) SKIPS invalid DATABASE_URL values
+# (e.g. a stale file: SQLite URL exported in this shell by old tooling), but
+# the direct-Prisma helpers here (inject-trial, the seed one-liners) do not —
+# they would silently fail and cascade empty job ids through the whole suite.
+# Normalize ONCE, up front, so every ${DATABASE_URL:-…} below gets a real
+# postgres:// URL.
+case "${DATABASE_URL:-}" in
+  postgresql://* | postgres://* | "") ;;
+  *)
+    echo "  ⚠ DATABASE_URL='${DATABASE_URL}' is not a postgres URL — normalizing to local PG :5433"
+    DATABASE_URL="postgresql://postgres:postgres@localhost:5433/digdeep"
+    ;;
+esac
+export DATABASE_URL
+
 pass() { echo "  ✅ $1"; }
 fail() { echo "  ❌ $1"; FAILED=1; }
 FAILED=0
@@ -65,7 +80,7 @@ cleanup() {
   [[ -n "$RECV_PID" ]] && kill "$RECV_PID" 2>/dev/null || true
 }
 trap cleanup EXIT
-NODE_ENV=production DATABASE_URL="${DATABASE_URL:-postgresql://postgres:postgres@localhost:5433/digdeep}" PORT=$PORT CRON_SECRET="${CRON_SECRET:-ci-cron-secret}" node .next/standalone/server.js > /tmp/standalone-server.log 2>&1 &
+NODE_ENV=production DATABASE_URL="${DATABASE_URL:-postgresql://postgres:postgres@localhost:5433/digdeep}" PORT=$PORT CRON_SECRET="${CRON_SECRET:-ci-cron-secret}" ALLOW_LOCAL_WEBHOOKS=1 node .next/standalone/server.js > /tmp/standalone-server.log 2>&1 &
 SRV_PID=$!
 
 # v3.4 step 10 receiver: a local HTTP sink that records webhook deliveries
@@ -290,6 +305,52 @@ echo "$DOCHTML" | grep -q "digdeep_research" && pass "/api-docs renders MCP tool
 echo "$DOCHTML" | grep -q "api/v1/webhooks" && pass "/api-docs documents the webhook endpoints" || fail "/api-docs missing webhooks"
 BENCHHTML=$(curl -s "$BASE/benchmark")
 echo "$BENCHHTML" | grep -q "Live track record" && pass "/benchmark renders the live track-record section" || fail "/benchmark missing live stats section"
+
+echo "── 14 · v3.4.1 audit gates: ownership on internal routes, SSRF, settings ──"
+# F4: internal status/export/PATCH of an OWNED run must 404 for strangers
+if [[ -n "${NOTIFY_JOB:-}" ]]; then
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/research/$NOTIFY_JOB")
+  [[ "$CODE" == "404" ]] && pass "internal status of another owner's run → 404 (was: full report leak)" || fail "internal status no-auth → $CODE (want 404)"
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/research/$NOTIFY_JOB/export?format=json")
+  [[ "$CODE" == "404" ]] && pass "internal export (json dump) of owned run → 404 (was: full artifact leak)" || fail "internal export no-auth → $CODE (want 404)"
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH "$BASE/api/research/$NOTIFY_JOB" -H "Content-Type: application/json" -d '{"action":"retry"}')
+  [[ "$CODE" == "404" ]] && pass "PATCH retry of owned run by stranger → 404 (was: artifact wipe + cost drain)" || fail "PATCH no-auth → $CODE (want 404)"
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/research/$NOTIFY_JOB/share")
+  [[ "$CODE" == "404" ]] && pass "share-publish of owned run by stranger → 404 (was: private report made public)" || fail "share no-auth → $CODE (want 404)"
+  # owner (session cookie) still has full access — the UI paths keep working
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" -b "$JAR" "$BASE/api/research/$NOTIFY_JOB")
+  [[ "$CODE" == "200" ]] && pass "internal status with owner session → 200 (UI unaffected)" || fail "owner session status → $CODE (want 200)"
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" -b "$JAR" -X POST "$BASE/api/research/$NOTIFY_JOB/share")
+  [[ "$CODE" == "200" || "$CODE" == "201" ]] && pass "share-publish with owner session → ok (owner can still share)" || fail "owner share → $CODE"
+fi
+# keyless UX preserved: anonymous runs stay capability-URL open
+if [[ -n "${EXPORT_JOB:-}" ]]; then
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/research/$EXPORT_JOB")
+  [[ "$CODE" == "200" ]] && pass "anonymous run internal status stays open (keyless UX preserved)" || fail "anonymous status → $CODE (want 200)"
+fi
+# F5: thread list must not leak other users' runs
+ANON_THREAD=$(curl -s "$BASE/api/research?threadId=ci-webhook-thread" | node -e 'let r="";process.stdin.on("data",c=>r+=c);process.stdin.on("end",()=>{try{console.log(JSON.parse(r).jobs.length)}catch{console.log("parse-error")}})' 2>/dev/null || echo "?")
+[[ "$ANON_THREAD" == "0" ]] && pass "thread list of another user's thread → 0 jobs (was: every query leaked)" || fail "thread list leak: $ANON_THREAD jobs visible"
+OWNER_THREAD=$(curl -s -b "$JAR" "$BASE/api/research?threadId=ci-webhook-thread" | node -e 'let r="";process.stdin.on("data",c=>r+=c);process.stdin.on("end",()=>{try{console.log(JSON.parse(r).jobs.length)}catch{console.log("parse-error")}})' 2>/dev/null || echo "?")
+[[ "$OWNER_THREAD" != "0" && "$OWNER_THREAD" != "?" ]] && pass "owner sees own thread jobs ($OWNER_THREAD)" || fail "owner thread list broken: $OWNER_THREAD"
+# F6: webhook SSRF guard — metadata + private ranges rejected even with the local-testing flag
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/v1/webhooks" -H "Authorization: Bearer $DDK" -H "Content-Type: application/json" -d '{"action":"create","url":"http://169.254.169.254/latest/meta-data","events":["run.completed"]}')
+[[ "$CODE" == "400" ]] && pass "webhook to cloud metadata IP → 400 (SSRF guard)" || fail "metadata webhook → $CODE (want 400)"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/v1/webhooks" -H "Authorization: Bearer $DDK" -H "Content-Type: application/json" -d '{"action":"create","url":"http://10.0.0.1/hook","events":["run.completed"]}')
+[[ "$CODE" == "400" ]] && pass "webhook to private range → 400 (SSRF guard)" || fail "private webhook → $CODE (want 400)"
+# F1: settings POST is admin-gated and fail-closed (ADMIN_EMAILS unset here)
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/settings" -H "Content-Type: application/json" -d '{"action":"save","endpoints":[]}')
+[[ "$CODE" == "403" ]] && pass "settings POST anonymous → 403 (was: prod pool takeover)" || fail "settings no-auth → $CODE (want 403)"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -b "$JAR" -X POST "$BASE/api/settings" -H "Content-Type: application/json" -d '{"action":"save-llm7-key","key":"x"}')
+[[ "$CODE" == "403" ]] && pass "settings POST signed-in non-admin → 403 (fail-closed without ADMIN_EMAILS)" || fail "settings signed-in → $CODE (want 403)"
+STGET=$(curl -s "$BASE/api/settings")
+echo "$STGET" | grep -q '"endpoints"' && pass "settings GET stays open + masked (UI health surface)" || fail "settings GET broken: $(echo "$STGET" | head -c 120)"
+# F2: admin/migrate route is gone
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/admin/migrate")
+[[ "$CODE" == "404" ]] && pass "admin/migrate route deleted (hardcoded-secret DDL endpoint removed)" || fail "admin/migrate → $CODE (want 404)"
+# F9: MCP rejects non-2.0 jsonrpc
+MR=$(curl -s -X POST "$BASE/api/mcp" -H "Authorization: Bearer $DDK" -H "Content-Type: application/json" -d '{"id":99,"method":"tools/list"}')
+echo "$MR" | grep -q '\-32600' && pass "MCP message without jsonrpc 2.0 → -32600 Invalid Request" || fail "MCP no-jsonrpc not rejected: $(echo "$MR" | head -c 120)"
 
 echo ""
 if [[ $FAILED -eq 0 ]]; then

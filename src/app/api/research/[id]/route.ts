@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { after } from "next/server";
 import { db } from "@/lib/db";
 import { runJob, markStaleJobs, engineAlive } from "@/lib/research/engine";
+import { canAccessJob } from "@/lib/research/access";
 
 export const dynamic = "force-dynamic";
 // v2.5.0: every poll can carry a continuation slice — same 300s ceiling as the
@@ -18,6 +19,15 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     after(markStaleJobs().catch(() => {}));
     const job = await db.researchJob.findUnique({ where: { id } });
     if (!job) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+    // ── v3.4.1 AUDIT FIX: ownership gate ────────────────────────────────────
+    // Anonymous runs stay keyless-open (capability URLs); owned runs require
+    // the owner (session or Bearer key) or an explicit share. Same isolation
+    // the public API v1 already enforces — 404, never 403, so run ids that
+    // exist stay indistinguishable from ids that don't.
+    if (!(await canAccessJob(req, job))) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
 
     // ── v2.5.0 CONTINUATION TRIGGER ────────────────────────────────────────
     // An active job with no live engine on THIS instance gets re-triggered in
@@ -76,6 +86,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const body = await req.json();
     const job = await db.researchJob.findUnique({ where: { id } });
     if (!job) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    // v3.4.1 AUDIT FIX: cancel/retry are owner mutations — an anonymous
+    // poller must not be able to kill a stranger's run or re-run it (a
+    // repeatable cost-drain that also wipes the run's artifacts).
+    if (!(await canAccessJob(req, job))) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
     if (body.action === "cancel") {
       if (!ACTIVE.includes(job.status)) return NextResponse.json({ error: "Job already finished" }, { status: 400 });
       await db.researchJob.update({ where: { id }, data: { cancelRequested: true, stage: "Stopping…" } });

@@ -6,6 +6,7 @@ import {
   TextRun, WidthType, ExternalHyperlink, BorderStyle, type IRunOptions,
 } from "docx";
 import ExcelJS from "exceljs";
+import { canAccessJob } from "@/lib/research/access";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +38,14 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const format = req.nextUrl.searchParams.get("format") ?? "md";
   const job = await db.researchJob.findUnique({ where: { id } });
   if (!job) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  // v3.4.1 AUDIT FIX: exports carry the full report (format=json adds plan,
+  // events, sections) — owned runs need the owner (session or Bearer key with
+  // research:read, matching the OpenAPI spec's security claim) or an explicit
+  // share. Anonymous runs stay keyless-open. Fixes a silent ownership bypass
+  // that contradicted v1's 404 isolation.
+  if (!(await canAccessJob(req, job))) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
   const base = `deepresearch-${slug(job.query)}`;
 
   if (format === "json") {

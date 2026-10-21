@@ -1,4 +1,4 @@
-import { createHmac, createHash, randomBytes } from "crypto";
+import { createHmac, createHash, randomBytes, timingSafeEqual } from "crypto";
 import { db } from "@/lib/db";
 
 /**
@@ -25,8 +25,12 @@ export function signWebhook(secret: string, timestampMs: number, body: string): 
 }
 
 export function verifyWebhookSignature(secret: string, timestampMs: number, body: string, signature: string): boolean {
+  // v3.4.1: constant-time compare — receivers copy this reference
+  // implementation, so it must teach the safe pattern.
   const expected = signWebhook(secret, timestampMs, body);
-  return expected.length === signature.length && expected === signature;
+  const a = Buffer.from(expected, "hex");
+  const b = Buffer.from(signature.replace(/^sha256=/, ""), "hex");
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 const DELIVERY_TIMEOUT_MS = 10_000;

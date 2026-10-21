@@ -2,8 +2,29 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getPoolEndpoints, invalidateEndpointsCache, invalidateLlm7KeyCache, getBackendHealthSnapshot, type PoolEndpoint } from "@/lib/research/llm";
 import { getSearchSettings, invalidateSearchSettingsCache, type SearchSettings } from "@/lib/research/search";
+import { getSessionUser } from "@/lib/auth";
+import { isPublicHttpUrl } from "@/lib/platform/url-guard";
 
 export const dynamic = "force-dynamic";
+
+/** v3.4.1 AUDIT FIX — this route is the OPERATOR console for the whole
+ *  deployment (LLM pool + keys + search providers). It used to accept POSTs
+ *  from ANYONE: swapping the pool to attacker URLs would stream every
+ *  research request — Authorization headers included — off-platform, and
+ *  `test` was an unauthenticated SSRF probe. Now every POST action requires
+ *  a signed-in session whose email is in ADMIN_EMAILS (comma-separated env).
+ *  Fail-closed: with ADMIN_EMAILS unset, every POST is refused — the same
+ *  posture as CRON_SECRET. GET stays open: it only ever returns MASKED data
+ *  (hasKey booleans), which the public UI shows as backend health. */
+async function requireAdmin(): Promise<boolean> {
+  const list = (process.env.ADMIN_EMAILS ?? "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  if (!list.length) return false; // unset → closed, never open
+  const user = await getSessionUser();
+  return !!user && list.includes(user.email.toLowerCase());
+}
 
 /** Mask stored API keys for the UI — the key itself never leaves the server
  *  once saved; the client only sees whether one exists. */
@@ -30,9 +51,21 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  if (!(await requireAdmin())) {
+    return NextResponse.json(
+      { error: "Admin only. Sign in with an account whose email is listed in the deployment's ADMIN_EMAILS environment variable." },
+      { status: 403 },
+    );
+  }
   try {
     const body = await req.json();
     if (body.action === "test") {
+      // v3.4.1: private/loopback targets are refused — even admins probe
+      // public endpoints from here (this runs on serverless, there is no
+      // localhost to reach anyway).
+      if (typeof body.baseUrl === "string" && !isPublicHttpUrl(body.baseUrl)) {
+        return NextResponse.json({ ok: false, error: "Only public http(s) URLs can be probed." }, { status: 400 });
+      }
       // quick endpoint probe (OpenAI-compatible) — supports BYOK Authorization headers
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 45_000);

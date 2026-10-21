@@ -93,11 +93,14 @@ export function sessionCookieOptions() {
   };
 }
 
-/** Resolve the API caller: session cookie OR Bearer API key (P2-3). */
-export async function getApiCaller(): Promise<SessionUser | null> {
+/** Resolve the API caller: session cookie OR Bearer API key (P2-3).
+ *  v3.4.1: previously session-only despite the docstring — now the Bearer
+ *  path actually resolves (keys without research:read still identify the
+ *  caller; scope enforcement stays at each route). */
+export async function getApiCaller(authHeader: string | null): Promise<SessionUser | null> {
   const user = await getSessionUser();
   if (user) return user;
-  return null;
+  return userFromApiKey(authHeader);
 }
 
 export async function userFromApiKey(authHeader: string | null): Promise<ApiCaller | null> {

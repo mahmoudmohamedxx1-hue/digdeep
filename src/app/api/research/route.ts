@@ -4,7 +4,7 @@ import { db } from "@/lib/db";
 import { runJob } from "@/lib/research/engine";
 import { isValidModelPref } from "@/lib/model-choices";
 import { isValidDomain } from "@/lib/research/domain-packs";
-import { getSessionUser, rateLimit, clientIp } from "@/lib/auth";
+import { getSessionUser, rateLimit, clientIp, getApiCaller } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 // Vercel: the engine must finish inside one invocation (the function is frozen
@@ -86,16 +86,30 @@ export async function POST(req: NextRequest) {
 
 export async function GET(req: NextRequest) {
   try {
+    // v3.4.1 AUDIT FIX: these lists used to hand out ANY user's jobs (queries
+    // included) to anonymous callers. Two rules now:
+    //  - threadId list: anonymous runs (capability URLs, keyless UX) plus the
+    //    caller's own runs when a session or Bearer key is present. Share
+    //    viewers never come through here (the /r/s-<id> page loads the
+    //    snapshot via /api/share/<id> instead).
+    //  - no threadId: anonymous runs only — the old "30 most recent platform-
+    //    wide" branch leaked every user's private research questions and had
+    //    zero consumers.
+    const caller = await getApiCaller(req.headers.get("authorization"));
+    const ownedBy: { userId: string | null }[] = caller
+      ? [{ userId: null }, { userId: caller.id }]
+      : [{ userId: null }];
     const threadId = req.nextUrl.searchParams.get("threadId");
     if (threadId) {
       const jobs = await db.researchJob.findMany({
-        where: { threadId },
+        where: { threadId, OR: ownedBy },
         orderBy: { createdAt: "asc" },
         select: { id: true, query: true, status: true, stage: true, progress: true, preset: true, mode: true, court: true, domain: true, createdAt: true, completedAt: true, modelPref: true, language: true },
       });
       return NextResponse.json({ jobs, threadId });
     }
     const jobs = await db.researchJob.findMany({
+      where: { userId: null },
       orderBy: { createdAt: "desc" },
       take: 30,
       select: { id: true, query: true, status: true, stage: true, progress: true, preset: true, mode: true, threadId: true, createdAt: true, completedAt: true, modelPref: true },

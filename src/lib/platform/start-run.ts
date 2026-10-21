@@ -88,6 +88,24 @@ export async function startResearchRun(
         stage: "Queued",
       },
     });
+    // v3.4.1: quota re-check AFTER the insert — count-then-create had a TOCTOU
+    // race (two concurrent starts both read N, both pass, N+2 runs land).
+    // Counting the fresh row makes the check self-correcting: whoever lands
+    // over the limit rolls their run back and gets the same 429.
+    if (caller.key.monthlyLimit != null) {
+      const usedNow = await monthlyKeyUsage(caller.key.id);
+      if (usedNow > caller.key.monthlyLimit) {
+        await db.researchJob.delete({ where: { id: job.id } }).catch(() => {});
+        const now = new Date();
+        const retry = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+        return {
+          ok: false,
+          status: 429,
+          error: `Monthly quota reached for this key (${caller.key.monthlyLimit}/${caller.key.monthlyLimit} runs). Quota resets or can be raised at /account.`,
+          retryAt: retry.toISOString(),
+        };
+      }
+    }
     after(runJob(job.id).catch((e) => console.error("[api-start]", job.id, e)));
     return { ok: true, id: job.id };
   } catch (err) {

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { after } from "next/server";
+import { createHash, timingSafeEqual } from "crypto";
 import { db } from "@/lib/db";
 import { runJob } from "@/lib/research/engine";
 
@@ -63,7 +64,10 @@ function authorized(req: Request): boolean {
   const secret = process.env.CRON_SECRET;
   if (!secret) return false; // unset → endpoint is closed, not open
   const auth = req.headers.get("authorization") ?? "";
-  return auth === `Bearer ${secret}`;
+  // v3.4.1: constant-time compare over fixed-length sha256 digests
+  const given = createHash("sha256").update(auth).digest();
+  const want = createHash("sha256").update(`Bearer ${secret}`).digest();
+  return timingSafeEqual(given, want);
 }
 
 export async function GET(req: Request) {

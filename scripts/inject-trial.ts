@@ -14,7 +14,17 @@
 import { PrismaClient } from "@prisma/client";
 import { notifyRunFinished } from "../src/lib/platform/webhooks";
 
-const prisma = new PrismaClient();
+// v3.4.1: same invalid-URL skip the app applies (src/lib/db.ts) — a stale
+// `file:` SQLite DATABASE_URL exported in the shell would otherwise crash
+// every direct-Prisma helper while the app itself runs fine.
+function resolveDbUrl(): string {
+  const url = process.env.DATABASE_URL ?? "";
+  return url.startsWith("postgresql://") || url.startsWith("postgres://")
+    ? url
+    : "postgresql://postgres:postgres@localhost:5433/digdeep";
+}
+
+const prisma = new PrismaClient({ datasources: { db: { url: resolveDbUrl() } } });
 const ARGS = process.argv.slice(2);
 const FLAG = (name: string): string | null => {
   const i = ARGS.indexOf(`--${name}`);

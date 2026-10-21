@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { canAccessJob } from "@/lib/research/access";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +20,7 @@ function newShareId(): string {
  * forgets the run. Keyless: the snapshot lives in the same Postgres the engine
  * already uses; nothing new is required of the user.
  */
-export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
     const existing = await db.sharedReport.findFirst({ where: { jobId: id }, select: { id: true } });
@@ -27,6 +28,13 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
 
     const job = await db.researchJob.findUnique({ where: { id } });
     if (!job) return NextResponse.json({ error: "That research run is not on this server." }, { status: 404 });
+    // v3.4.1 AUDIT FIX: sharing PUBLISHES the report to a public URL — only
+    // the owner (session) or the keyless creator of an anonymous run may do
+    // that. Previously anyone holding a job id could exfiltrate any completed
+    // private report to a share link.
+    if (!(await canAccessJob(req, job))) {
+      return NextResponse.json({ error: "That research run is not on this server." }, { status: 404 });
+    }
     if (job.status !== "completed" || !job.reportMd) {
       return NextResponse.json({ error: "Only finished reports can be shared — wait for the run to complete." }, { status: 409 });
     }

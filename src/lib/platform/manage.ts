@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import { WEBHOOK_EVENTS, newWebhookSecret, type WebhookEvent } from "@/lib/platform/webhooks";
 import { PRESETS } from "@/lib/platform/start-run";
+import { isPublicHttpUrl } from "@/lib/platform/url-guard";
 
 /**
  * v3.4 PLATFORM — owner-scoped CRUD for webhooks + watches. Shared by the
@@ -13,12 +14,17 @@ const MAX_WEBHOOKS = 10;
 const MAX_WATCHES = 25;
 
 function validWebhookUrl(url: string): boolean {
-  try {
-    const u = new URL(url);
-    return (u.protocol === "https:" || u.protocol === "http:") && u.hostname.length > 0;
-  } catch {
-    return false;
-  }
+  // v3.4.1 AUDIT FIX: the platform fetches this URL on the owner's behalf —
+  // private/loopback/metadata targets are refused (SSRF guard, shared with
+  // the settings probe via url-guard). One explicit escape hatch: local
+  // testing against a loopback receiver (the CI standalone test's HMAC
+  // verifier) — gated by an env flag production never sets, loopback ONLY
+  // (other private ranges stay blocked even with the flag).
+  if (isPublicHttpUrl(url)) return true;
+  return (
+    process.env.ALLOW_LOCAL_WEBHOOKS === "1" &&
+    /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?([/?#]|$)/i.test(url)
+  );
 }
 
 // ── webhooks ────────────────────────────────────────────────────────────────

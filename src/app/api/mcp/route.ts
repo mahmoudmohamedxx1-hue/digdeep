@@ -228,6 +228,12 @@ export async function POST(req: Request) {
     return new NextResponse(null, { status: 202 });
   }
 
+  // v3.4.1: JSON-RPC 2.0 requires the version field on requests — malformed
+  // messages get -32600 instead of silently executing.
+  if (msg.jsonrpc !== "2.0") {
+    return rpcError(msg.id, -32600, "Invalid Request: jsonrpc must be \"2.0\".");
+  }
+
   if (method === "initialize") {
     const requested = String((msg.params as { protocolVersion?: string } | undefined)?.protocolVersion ?? "");
     return rpcResult(msg.id, {

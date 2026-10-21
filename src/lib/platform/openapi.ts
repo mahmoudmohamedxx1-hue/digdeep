@@ -122,7 +122,10 @@ export const openApiSpec = {
     "/api/research/{id}/export": {
       get: {
         tags: ["Research"],
-        summary: "Download a report (pdf · docx · xlsx · md)",
+        summary: "Download a report (pdf · docx · xlsx · md · json)",
+        description:
+          "The run's export files. Access: the owner (session cookie or this Bearer key with research:read), " +
+          "any run you have explicitly shared, or any keyless/anonymous run. Everything else 404s.",
         security: bearer,
         parameters: [
           { name: "id", in: "path", required: true, schema: { type: "string" } },
