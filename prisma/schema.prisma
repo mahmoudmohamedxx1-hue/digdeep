@@ -64,7 +64,10 @@ model User {
   id           String            @id @default(cuid())
   email        String            @unique
   name         String?
-  passwordHash String
+  // v3.5 email-OTP: null = OTP-only account (created by verifying an email
+  // code; signs in with codes, password login unavailable until they register
+  // a password). Password accounts keep their hash and can use either method.
+  passwordHash String?
   createdAt    DateTime          @default(now())
   sessions     Session[]
   apiKeys      ApiKey[]

@@ -75,15 +75,17 @@ fi
 SRV_PID=""
 ASRV_PID=""
 RECV_PID=""
+MOCK_PID=""
 cleanup() {
   [[ -n "$SRV_PID" ]] && kill "$SRV_PID" 2>/dev/null || true
   wait "$SRV_PID" 2>/dev/null || true
   [[ -n "$ASRV_PID" ]] && kill "$ASRV_PID" 2>/dev/null || true
   wait "$ASRV_PID" 2>/dev/null || true
   [[ -n "$RECV_PID" ]] && kill "$RECV_PID" 2>/dev/null || true
+  [[ -n "$MOCK_PID" ]] && kill "$MOCK_PID" 2>/dev/null || true
 }
 trap cleanup EXIT
-NODE_ENV=production DATABASE_URL="${DATABASE_URL:-postgresql://postgres:postgres@localhost:5433/digdeep}" PORT=$PORT CRON_SECRET="${CRON_SECRET:-ci-cron-secret}" ALLOW_LOCAL_WEBHOOKS=1 node .next/standalone/server.js > /tmp/standalone-server.log 2>&1 &
+NODE_ENV=production DATABASE_URL="${DATABASE_URL:-postgresql://postgres:postgres@localhost:5433/digdeep}" PORT=$PORT CRON_SECRET="${CRON_SECRET:-ci-cron-secret}" ALLOW_LOCAL_WEBHOOKS=1 SUPABASE_URL="http://localhost:3199" SUPABASE_ANON_KEY="test-anon-key-0123456789abcdef" node .next/standalone/server.js > /tmp/standalone-server.log 2>&1 &
 SRV_PID=$!
 
 # v3.4 step 10 receiver: a local HTTP sink that records webhook deliveries
@@ -99,6 +101,18 @@ OUT=/tmp/ci-webhook-hits.jsonl node -e '
     });
   }).listen(3999);' 2>/dev/null &
 RECV_PID=$!
+
+# v3.5 step 16 helper: mock Supabase Auth (email-OTP) on :3199 — stale
+# holder check mirrors the :$PORT logic (a crashed session's mock would
+# EADDRINUSE the new one and every OTP check would probe a dead port)
+STALE_MIDS=$(lsof -ti :3199 2>/dev/null || true)
+if [[ -n "$STALE_MIDS" ]]; then
+  echo "  ⚠ killing stale mock-supabase on :3199 → $STALE_MIDS"
+  kill $STALE_MIDS 2>/dev/null || true; sleep 0.5
+fi
+rm -f /tmp/mock-supabase.log
+node scripts/mock-supabase.js > /tmp/mock-supabase.log 2>&1 &
+MOCK_PID=$!
 
 for i in $(seq 1 40); do
   curl -sf -o /dev/null "$BASE/" && break
@@ -413,7 +427,66 @@ else
   [[ "$CODE" == "403" ]] && pass "settings POST non-admin (allowlist active) → 403" || fail "non-admin → $CODE (want 403)"
 fi
 
-echo "── 16 · Cleanup: purge this suite's test data (cascade) ──"
+echo "── 16 · email-OTP auth (mock Supabase): fail-closed, send, throttle, verify ──"
+# The MAIN server (started with SUPABASE_URL=http://localhost:3199 + the test
+# anon key) exercises the configured path; the ADMIN server from step 15
+# (:$APORT, no SUPABASE_* env) proves the fail-closed posture. Mock contract:
+# code 246810 verifies any email, anything else → 400 otp_expired (production
+# Supabase returns the same error_code for wrong AND expired codes).
+ORND=$RANDOM$RANDOM
+OEMAIL="ci-otp-$ORND@test.local"
+PEMAIL="ci-pw-otp-$ORND@test.local"
+OJAR="/tmp/ci-otp.jar"; rm -f "$OJAR"
+
+# fail-closed: admin server has no SUPABASE env — feature inert, 503, no email
+SES=$(curl -s "$ABASE/api/auth")
+echo "$SES" | grep -q '"otpEnabled":false' && pass "GET /api/auth without SUPABASE env → otpEnabled false" || fail "admin-server session GET: $(echo "$SES" | head -c 160)"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$ABASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"otp-send\",\"email\":\"$OEMAIL\"}")
+[[ "$CODE" == "503" ]] && pass "otp-send without SUPABASE env → 503 (fail-closed, nothing emailed)" || fail "otp-send unconfigured → $CODE (want 503)"
+grep -q "otp → " /tmp/mock-supabase.log && fail "mock recorded a send while unconfigured (must not call upstream)" || pass "no upstream call when unconfigured (503 short-circuits)"
+
+# configured path on the main server
+SES=$(curl -s "$BASE/api/auth")
+echo "$SES" | grep -q '"otpEnabled":true' && pass "GET /api/auth with SUPABASE env → otpEnabled true" || fail "main-server session GET: $(echo "$SES" | head -c 160)"
+
+# validation
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d '{"action":"otp-send","email":"not-an-email"}')
+[[ "$CODE" == "400" ]] && pass "otp-send malformed email → 400" || fail "otp-send bad email → $CODE (want 400)"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"otp-verify\",\"email\":\"$OEMAIL\",\"code\":\"12345\"}")
+[[ "$CODE" == "400" ]] && pass "otp-verify 5-digit code → 400" || fail "otp-verify short code → $CODE (want 400)"
+
+# send + 60s per-email cooldown (server-side)
+S1=$(curl -s -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"otp-send\",\"email\":\"$OEMAIL\"}")
+echo "$S1" | grep -q '"ok":true' && pass "otp-send → ok (upstream accepted, uniform response)" || fail "otp-send: $(echo "$S1" | head -c 160)"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"otp-send\",\"email\":\"$OEMAIL\"}")
+[[ "$CODE" == "429" ]] && pass "otp-send resend within 60s → 429 cooldown" || fail "otp-send resend → $CODE (want 429)"
+grep -qF "otp → $OEMAIL (#1)" /tmp/mock-supabase.log && pass "mock Supabase logged exactly one send (apikey auth accepted)" || fail "mock log missing the send"
+
+# wrong code → 401; right code 246810 → brand-new OTP-only account + session
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"otp-verify\",\"email\":\"$OEMAIL\",\"code\":\"111111\"}")
+[[ "$CODE" == "401" ]] && pass "otp-verify wrong code → 401 (mapped from upstream 400 otp_expired)" || fail "otp-verify wrong code → $CODE (want 401)"
+V=$(curl -s -c "$OJAR" -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"otp-verify\",\"email\":\"$OEMAIL\",\"code\":\"246810\"}")
+echo "$V" | grep -q "\"email\":\"$OEMAIL\"" && pass "otp-verify right code → signed in, OTP-only account created" || fail "otp-verify response: $(echo "$V" | head -c 200)"
+SES=$(curl -s -b "$OJAR" "$BASE/api/auth")
+echo "$SES" | grep -q "\"email\":\"$OEMAIL\"" && pass "OTP session persists (GET /api/auth)" || fail "OTP session GET: $(echo "$SES" | head -c 160)"
+echo "$SES" | grep -q '"isAdmin":false' && pass "OTP account is non-admin → isAdmin false" || fail "OTP session isAdmin: $(echo "$SES" | head -c 160)"
+
+# OTP-only accounts have no password — login stays non-enumerating 401
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"login\",\"email\":\"$OEMAIL\",\"password\":\"whatever-pass\"}")
+[[ "$CODE" == "401" ]] && pass "password login for OTP-only account → 401 (null hash, no crash)" || fail "password login OTP-only → $CODE (want 401)"
+
+# a password account can ALSO sign in by code — same row reused, not duplicated
+REG=$(curl -s -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"register\",\"email\":\"$PEMAIL\",\"password\":\"ci-pw-pass-123\"}")
+PWID=$(echo "$REG" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+S2=$(curl -s -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"otp-send\",\"email\":\"$PEMAIL\"}")
+echo "$S2" | grep -q '"ok":true' && pass "otp-send for a password account → ok" || fail "otp-send (password account): $(echo "$S2" | head -c 160)"
+V2=$(curl -s -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"otp-verify\",\"email\":\"$PEMAIL\",\"code\":\"246810\"}")
+V2ID=$(echo "$V2" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+[[ -n "$PWID" && "$V2ID" == "$PWID" ]] && pass "password account signs in by code → SAME user row reused ($PWID)" || fail "OTP on password account: got '$V2ID' want '$PWID'"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"login\",\"email\":\"$PEMAIL\",\"password\":\"ci-pw-pass-123\"}")
+[[ "$CODE" == "200" ]] && pass "password login still works after a code sign-in" || fail "password login after OTP → $CODE (want 200)"
+
+echo "── 17 · Cleanup: purge this suite's test data (cascade) ──"
 # The suite creates ci-* accounts + injected runs + seeded shares. On CI the
 # DB is ephemeral, but locally they accumulate run-after-run.
 # ORDER MATTERS — found by the re-audit: ResearchJob.userId is onDelete:

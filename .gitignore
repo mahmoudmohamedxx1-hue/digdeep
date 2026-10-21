@@ -81,6 +81,9 @@ scripts/*
 !scripts/inject-trial.ts
 !scripts/probe-stop.ts
 !scripts/mock-llm.js
+!scripts/mock-supabase.js
+!scripts/supabase/
+!scripts/supabase/bootstrap.sh
 !scripts/benchmark-harness.mjs
 !scripts/replay-self-questions.sh
 !scripts/bench/

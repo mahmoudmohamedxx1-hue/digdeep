@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
 import { toast } from "@/hooks/use-toast";
 import { getThreadTurns } from "@/lib/idb-store";
 import { useSettings } from "@/lib/store";
@@ -38,11 +39,17 @@ export default function AccountPage() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [loading, setLoading] = useState(true);
   // auth form
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode, setMode] = useState<"login" | "register" | "code">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  // email-code (OTP) sign-in — v3.5
+  const [otpOn, setOtpOn] = useState(false); // deployment supports email codes
+  const [otpSent, setOtpSent] = useState(false); // a code was requested for $email
+  const [otpCode, setOtpCode] = useState("");
+  const [otpBusy, setOtpBusy] = useState(false);
+  const [resendIn, setResendIn] = useState(0); // resend cooldown, seconds
   // api keys
   const [keys, setKeys] = useState<ApiKeyRow[]>([]);
   const [freshKey, setFreshKey] = useState<string | null>(null);
@@ -70,6 +77,7 @@ export default function AccountPage() {
       const res = await fetch("/api/auth").then((r) => r.json());
       const u = (res.user ?? null) as SessionUser | null;
       setUser(u);
+      setOtpOn(!!(res as { otpEnabled?: boolean }).otpEnabled);
       if (u) {
         const [k, w, h, wt] = await Promise.all([
           fetch("/api/keys").then((r) => r.json()),
@@ -134,6 +142,87 @@ export default function AccountPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  // resend-code countdown (v3.5)
+  useEffect(() => {
+    if (resendIn <= 0) return;
+    const t = setTimeout(() => setResendIn((s) => s - 1), 1_000);
+    return () => clearTimeout(t);
+  }, [resendIn]);
+
+  /** v3.5: ask the backend to email a 6-digit sign-in code to $email. */
+  async function sendCode(e?: React.MouseEvent) {
+    e?.preventDefault();
+    if (!email.includes("@")) {
+      toast({ title: "Enter your email address first." });
+      return;
+    }
+    setOtpBusy(true);
+    try {
+      const res = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "otp-send", email: email.trim().toLowerCase() }),
+      }).then((r) => r.json());
+      if (res.error) {
+        toast({ title: res.error });
+        return;
+      }
+      setOtpSent(true);
+      setOtpCode("");
+      setResendIn(60);
+      toast({ title: res.message ?? "Code sent — check your inbox (and spam folder)." });
+    } catch {
+      toast({ title: "Could not send the code — check your connection." });
+    } finally {
+      setOtpBusy(false);
+    }
+  }
+
+  /** v3.5: confirm the code → signed in (a brand-new address gets an account). */
+  async function verifyCode(e: React.FormEvent) {
+    e.preventDefault();
+    if (otpCode.length !== 6) {
+      toast({ title: "Enter the 6-digit code from your email." });
+      return;
+    }
+    setOtpBusy(true);
+    try {
+      const claimThreadIds = await localThreadIds();
+      const res = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "otp-verify",
+          email: email.trim().toLowerCase(),
+          code: otpCode,
+          claimThreadIds,
+        }),
+      }).then((r) => r.json());
+      if (res.error) {
+        toast({ title: res.error });
+        return;
+      }
+      setUser(res.user);
+      setClaimed(res.claimed ?? 0);
+      if (res.claimed > 0) {
+        toast({
+          title: `Welcome — ${res.claimed} of your anonymous research thread${res.claimed > 1 ? "s" : ""} now sync to this account.`,
+        });
+      }
+      await loadAll();
+    } catch {
+      toast({ title: "Sign-in failed — check your connection." });
+    } finally {
+      setOtpBusy(false);
+    }
+  }
+
+  /** Clear code-entry state (the email stays for the next attempt). */
+  function resetOtp() {
+    setOtpSent(false);
+    setOtpCode("");
   }
 
   async function logout() {
@@ -271,28 +360,100 @@ export default function AccountPage() {
     return (
       <div className="mx-auto flex max-w-md flex-col px-4 py-14">
         <h1 className="text-2xl font-serif font-semibold tracking-tight">
-          {mode === "login" ? "Welcome back" : "Create your account"}
+          {mode === "code" ? "Sign in with an email code" : mode === "login" ? "Welcome back" : "Create your account"}
         </h1>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
           An account syncs your research history across devices — and everything you ran anonymously in this browser
-          comes with you. No email verification, no credit card.
+          comes with you. Password or one-time email code — no credit card.
         </p>
-        <form onSubmit={submitAuth} className="mt-6 space-y-3">
-          {mode === "register" && (
-            <Input placeholder="Name (optional)" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} />
+
+        {mode === "code" ? (
+          <form onSubmit={verifyCode} className="mt-6 space-y-3">
+            <Input
+              type="email"
+              required
+              placeholder="you@example.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              autoComplete="email"
+              disabled={otpSent}
+            />
+            {otpSent && (
+              <div className="space-y-2">
+                <InputOTP maxLength={6} value={otpCode} onChange={setOtpCode} autoFocus>
+                  <InputOTPGroup>
+                    {[0, 1, 2, 3, 4, 5].map((i) => (
+                      <InputOTPSlot key={i} index={i} />
+                    ))}
+                  </InputOTPGroup>
+                </InputOTP>
+                <p className="text-xs text-muted-foreground">
+                  Enter the 6-digit code emailed to {email}. Wrong code? Request a new one — codes expire.
+                </p>
+              </div>
+            )}
+            {!otpSent ? (
+              <Button type="button" disabled={otpBusy || !email.includes("@")} className="w-full" onClick={sendCode}>
+                {otpBusy ? "Sending…" : "Email me a code"}
+              </Button>
+            ) : (
+              <div className="space-y-2">
+                <Button type="submit" disabled={otpBusy || otpCode.length !== 6} className="w-full">
+                  {otpBusy ? "Verifying…" : "Verify & sign in"}
+                </Button>
+                <div className="flex items-center justify-between text-xs">
+                  <button type="button" className="text-primary hover:underline" onClick={resetOtp}>
+                    Use a different email
+                  </button>
+                  <button
+                    type="button"
+                    className="text-primary hover:underline disabled:cursor-not-allowed disabled:no-underline disabled:text-muted-foreground"
+                    disabled={resendIn > 0 || otpBusy}
+                    onClick={sendCode}
+                  >
+                    {resendIn > 0 ? `Resend in ${resendIn}s` : "Resend code"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </form>
+        ) : (
+          <form onSubmit={submitAuth} className="mt-6 space-y-3">
+            {mode === "register" && (
+              <Input placeholder="Name (optional)" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} />
+            )}
+            <Input type="email" required placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" />
+            <Input type="password" required placeholder="Password (8+ characters)" value={password} onChange={(e) => setPassword(e.target.value)} minLength={8} autoComplete={mode === "login" ? "current-password" : "new-password"} />
+            <Button type="submit" disabled={busy} className="w-full">
+              {busy ? "Working…" : mode === "login" ? "Sign in" : "Create account"}
+            </Button>
+          </form>
+        )}
+
+        <div className="mt-4 space-y-1 text-center text-sm">
+          {otpOn && mode !== "code" && (
+            <button
+              type="button"
+              onClick={() => {
+                setMode("code");
+                resetOtp();
+              }}
+              className="block w-full text-primary hover:underline"
+            >
+              Sign in with an email code instead
+            </button>
           )}
-          <Input type="email" required placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" />
-          <Input type="password" required placeholder="Password (8+ characters)" value={password} onChange={(e) => setPassword(e.target.value)} minLength={8} autoComplete={mode === "login" ? "current-password" : "new-password"} />
-          <Button type="submit" disabled={busy} className="w-full">
-            {busy ? "Working…" : mode === "login" ? "Sign in" : "Create account"}
-          </Button>
-        </form>
-        <button
-          onClick={() => setMode(mode === "login" ? "register" : "login")}
-          className="mt-4 text-center text-sm text-primary hover:underline"
-        >
-          {mode === "login" ? "No account yet? Create one" : "Already have an account? Sign in"}
-        </button>
+          {mode !== "login" && (
+            <button type="button" onClick={() => setMode("login")} className="block w-full text-primary hover:underline">
+              Sign in with a password
+            </button>
+          )}
+          {mode === "login" && (
+            <button type="button" onClick={() => setMode("register")} className="block w-full text-primary hover:underline">
+              No account yet? Create one
+            </button>
+          )}
+        </div>
       </div>
     );
   }

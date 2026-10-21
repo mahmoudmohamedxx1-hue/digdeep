@@ -23,12 +23,18 @@ export PGUSER PGPASSWORD PGHOST PGPORT
 BASE_URL="postgresql://postgres:postgres@localhost:5433"
 V33="prisma/migrations/20261020_v33_accounts_workspaces_api_domain"
 V34="prisma/migrations/20261021_v34_platform_scopes_webhooks_watches"
+V35="prisma/migrations/20261021_v35_email_otp_auth"
 STASH="$(mktemp -d)"
 
-# stash/restore BOTH post-init migration dirs — base states (A/B/D) must start
-# from init+shared only, with v33+v34 applied on top (v3.4 added a second dir).
-stash_post() { mv "$V33" "$STASH/"; mv "$V34" "$STASH/"; }
-restore_post() { mv "$STASH/20261020_v33_accounts_workspaces_api_domain" prisma/migrations/; mv "$STASH/20261021_v34_platform_scopes_webhooks_watches" prisma/migrations/; }
+# stash/restore ALL post-init migration dirs — base states (A/B/D) must start
+# from init+shared only, with v33+v34+v35 applied on top (v3.4 added v34, v3.5
+# added v35: its ALTER targets "User" which only exists after v33).
+stash_post() { mv "$V33" "$STASH/"; mv "$V34" "$STASH/"; mv "$V35" "$STASH/"; }
+restore_post() {
+  mv "$STASH/20261020_v33_accounts_workspaces_api_domain" prisma/migrations/
+  mv "$STASH/20261021_v34_platform_scopes_webhooks_watches" prisma/migrations/
+  mv "$STASH/20261021_v35_email_otp_auth" prisma/migrations/
+}
 
 pass() { echo "  ✅ $1"; }
 fail() { echo "  ❌ $1"; FAILED=1; }
@@ -114,10 +120,15 @@ V33DONE=$(pg_scalar mig_d "SELECT count(*)::int AS n FROM _prisma_migrations WHE
 [[ "$V33DONE" == "1" ]] && pass "v3.3 migration now recorded as cleanly applied" || fail "v3.3 migration not applied after self-heal ($V33DONE)"
 V34DONE=$(pg_scalar mig_d "SELECT count(*)::int AS n FROM _prisma_migrations WHERE migration_name = \$1 AND finished_at IS NOT NULL" 20261021_v34_platform_scopes_webhooks_watches)
 [[ "$V34DONE" == "1" ]] && pass "v3.4 migration recorded as cleanly applied" || fail "v3.4 migration not applied after self-heal ($V34DONE)"
+V35DONE=$(pg_scalar mig_d "SELECT count(*)::int AS n FROM _prisma_migrations WHERE migration_name = \$1 AND finished_at IS NOT NULL" 20261021_v35_email_otp_auth)
+[[ "$V35DONE" == "1" ]] && pass "v3.5 migration recorded as cleanly applied (heal applied it too)" || fail "v3.5 migration not applied after self-heal ($V35DONE)"
 LEFT=$(pg_scalar mig_d "SELECT count(*)::int AS n FROM _prisma_migrations WHERE finished_at IS NULL AND rolled_back_at IS NULL")
 [[ "$LEFT" == "0" ]] && pass "no failed records remain" || fail "$LEFT failed record(s) remain after self-heal"
 
 echo "── Drift check: migrations must reproduce schema.prisma exactly ──"
+# v3.5 purpose check on the from-zero DB: OTP accounts need a nullable password
+NULLABLE=$(pg_scalar mig_c "SELECT (is_nullable = 'YES')::int AS n FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'User' AND column_name = 'passwordHash'")
+[[ "$NULLABLE" == "1" ]] && pass "User.passwordHash is nullable after full history (OTP-only accounts possible)" || fail "passwordHash still NOT NULL after migrations"
 for db in mig_a mig_b mig_c mig_d; do
   DIFF=$(npx prisma migrate diff --from-url "$BASE_URL/$db" --to-schema-datamodel prisma/schema.prisma 2>/dev/null | grep -cE '^\s*[-+~]' || true)
   [[ "$DIFF" == "0" ]] && pass "$db matches schema.prisma (no drift)" || fail "$db DRIFTS from schema.prisma ($(npx prisma migrate diff --from-url "$BASE_URL/$db" --to-schema-datamodel prisma/schema.prisma 2>/dev/null | grep -E '^\s*[-+~]' | head -3))"
