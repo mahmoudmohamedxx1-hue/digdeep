@@ -87,6 +87,7 @@ scripts/*
 !scripts/supabase/schema.sql
 !scripts/supabase/validate-schema.sh
 !scripts/supabase/e2e-real.sh
+!scripts/supabase/verify-live.sh
 !scripts/benchmark-harness.mjs
 !scripts/replay-self-questions.sh
 !scripts/bench/
