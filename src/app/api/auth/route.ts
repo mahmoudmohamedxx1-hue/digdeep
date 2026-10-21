@@ -12,15 +12,22 @@ import {
   sessionCookieOptions,
   verifyPassword,
 } from "@/lib/auth";
+import { isAdminEmail } from "@/lib/platform/admin";
 
 export const maxDuration = 60;
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/** Attach the deployment's admin flag so the UI can badge operator accounts.
+ *  Purely informational — every actual gate re-checks server-side. */
+function withAdminFlag<T extends { email: string }>(user: T): T & { isAdmin: boolean } {
+  return { ...user, isAdmin: isAdminEmail(user.email) };
+}
+
 /** GET /api/auth — current session user (null when signed out). */
 export async function GET() {
   const user = await getSessionUser();
-  return NextResponse.json({ user });
+  return NextResponse.json({ user: user ? withAdminFlag(user) : null });
 }
 
 /**
@@ -74,7 +81,7 @@ export async function POST(req: Request) {
     const token = await createSession(user.id);
     const claimed = await claimThreads(user.id, body.claimThreadIds);
     jar.set(SESSION_COOKIE, token, sessionCookieOptions());
-    return NextResponse.json({ user: { id: user.id, email: user.email, name: user.name }, claimed });
+    return NextResponse.json({ user: withAdminFlag({ id: user.id, email: user.email, name: user.name }), claimed });
   }
 
   if (action === "login") {
@@ -85,7 +92,7 @@ export async function POST(req: Request) {
     const token = await createSession(user.id);
     const claimed = await claimThreads(user.id, body.claimThreadIds);
     jar.set(SESSION_COOKIE, token, sessionCookieOptions());
-    return NextResponse.json({ user: { id: user.id, email: user.email, name: user.name }, claimed });
+    return NextResponse.json({ user: withAdminFlag({ id: user.id, email: user.email, name: user.name }), claimed });
   }
 
   return NextResponse.json({ error: "Unknown action" }, { status: 400 });

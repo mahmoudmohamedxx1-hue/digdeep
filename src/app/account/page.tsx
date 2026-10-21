@@ -26,7 +26,7 @@ const ALL_SCOPES = [
 
 const ALL_EVENTS = ["run.completed", "run.failed", "watch.changed"] as const;
 
-type SessionUser = { id: string; email: string; name: string | null };
+type SessionUser = { id: string; email: string; name: string | null; isAdmin?: boolean };
 type ApiKeyRow = { id: string; name: string; prefix: string; revoked: boolean; lastUsedAt: string | null; createdAt: string; scopes: string[]; monthlyLimit: number | null; usage: number | null };
 type WorkspaceRow = { id: string; name: string; role: string; inviteCode: string | null; owner: string; jobs: number; members: number; createdAt: string };
 type DeliveryRow = { id: string; event: string; ok: boolean; status: number | null; error: string | null; createdAt: string };
@@ -302,7 +302,17 @@ export default function AccountPage() {
     <div className="mx-auto max-w-3xl space-y-10 px-4 py-10">
       <header className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-serif font-semibold tracking-tight">{user.name || user.email}</h1>
+          <h1 className="flex flex-wrap items-center gap-2 text-2xl font-serif font-semibold tracking-tight">
+            {user.name || user.email}
+            {user.isAdmin && (
+              <span
+                title="Operator account — can manage the LLM pool, endpoint keys, and search providers from the Backends console."
+                className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[11px] font-sans font-medium tracking-wide text-primary"
+              >
+                <ShieldCheck className="h-3 w-3" /> ADMIN
+              </span>
+            )}
+          </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {user.email}
             {claimed != null && claimed > 0 && ` · ${claimed} anonymous thread${claimed > 1 ? "s" : ""} migrated`}

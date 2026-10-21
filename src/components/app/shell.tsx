@@ -549,7 +549,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
     try {
       const r = await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "test", ...ep }) });
       const d = await r.json();
-      toast({ title: d.ok ? `Endpoint works — replied “${d.reply}”` : `Endpoint test failed (HTTP ${d.status})`, variant: d.ok ? "default" : "destructive" });
+      if (d.error) toast({ title: d.error, variant: "destructive" });
+      else toast({ title: d.ok ? `Endpoint works — replied “${d.reply}”` : `Endpoint test failed (HTTP ${d.status})`, variant: d.ok ? "default" : "destructive" });
     } catch {
       toast({ title: "Test request failed", variant: "destructive" });
     } finally {
@@ -561,11 +562,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
     setSavingPool(true);
     try {
       const r = await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "save", endpoints: customEndpoints }) });
+      const d = await r.json().catch(() => ({}));
       if (r.ok) {
-        const d = await r.json();
         if (d.endpoints) setCustomEndpoints(d.endpoints);
         toast({ title: "Endpoints saved" });
-      }
+      } else toast({ title: d.error || "Save failed", variant: "destructive" });
     } catch {
       toast({ title: "Save failed", variant: "destructive" });
     } finally {
@@ -583,7 +584,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
         setHasLlm7Key(!!d.hasLlm7Key);
         setLlm7Key("");
         toast({ title: d.hasLlm7Key ? "LLM7 key saved — premium tier unlocked" : "LLM7 key removed — back to keyless only" });
-      } else toast({ title: "Save failed", variant: "destructive" });
+      } else {
+        const d = await r.json().catch(() => ({}));
+        toast({ title: d.error || "Save failed", variant: "destructive" });
+      }
     } catch {
       toast({ title: "Save failed", variant: "destructive" });
     } finally {
@@ -597,7 +601,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
     try {
       const r = await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "save-search", searchSettings }) });
       if (r.ok) toast({ title: "Search settings saved" });
-      else toast({ title: "Save failed", variant: "destructive" });
+      else {
+        const d = await r.json().catch(() => ({}));
+        toast({ title: d.error || "Save failed", variant: "destructive" });
+      }
     } catch {
       toast({ title: "Save failed", variant: "destructive" });
     } finally {

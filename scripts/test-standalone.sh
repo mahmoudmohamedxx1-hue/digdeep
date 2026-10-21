@@ -73,10 +73,13 @@ if [[ -n "$STALE_PIDS" ]]; then
   fi
 fi
 SRV_PID=""
+ASRV_PID=""
 RECV_PID=""
 cleanup() {
   [[ -n "$SRV_PID" ]] && kill "$SRV_PID" 2>/dev/null || true
   wait "$SRV_PID" 2>/dev/null || true
+  [[ -n "$ASRV_PID" ]] && kill "$ASRV_PID" 2>/dev/null || true
+  wait "$ASRV_PID" 2>/dev/null || true
   [[ -n "$RECV_PID" ]] && kill "$RECV_PID" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -351,6 +354,57 @@ CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/admin/migrate")
 # F9: MCP rejects non-2.0 jsonrpc
 MR=$(curl -s -X POST "$BASE/api/mcp" -H "Authorization: Bearer $DDK" -H "Content-Type: application/json" -d '{"id":99,"method":"tools/list"}')
 echo "$MR" | grep -q '\-32600' && pass "MCP message without jsonrpc 2.0 → -32600 Invalid Request" || fail "MCP no-jsonrpc not rejected: $(echo "$MR" | head -c 120)"
+
+echo "── 15 · admin allowlist: ADMIN_EMAILS operator saves, everyone else 403 ──"
+# Second server instance on the next port, identical EXCEPT ADMIN_EMAILS is
+# set (mixed-case entry proves case-insensitivity; emails are normalized to
+# lowercase at registration and the allowlist is lowercased before compare).
+APORT=$((PORT + 1))
+ABASE="http://localhost:$APORT"
+STALE_APIDS=$(lsof -ti :"$APORT" 2>/dev/null || true)
+if [[ -n "$STALE_APIDS" ]]; then
+  echo "  ⚠ killing stale process(es) on :$APORT → $STALE_APIDS"
+  kill $STALE_APIDS 2>/dev/null || true; sleep 1
+  kill -9 $STALE_APIDS 2>/dev/null || true; sleep 1
+fi
+NODE_ENV=production DATABASE_URL="$DATABASE_URL" PORT=$APORT CRON_SECRET="${CRON_SECRET:-ci-cron-secret}" ALLOW_LOCAL_WEBHOOKS=1 ADMIN_EMAILS="CI-Admin@Example.ORG" node .next/standalone/server.js > /tmp/standalone-admin-server.log 2>&1 &
+ASRV_PID=$!
+ADMIN_UP=0
+for i in $(seq 1 40); do
+  curl -sf -o /dev/null "$ABASE/" && ADMIN_UP=1 && break
+  sleep 0.5
+done
+if [[ $ADMIN_UP -ne 1 ]]; then
+  fail "admin-configured server never came up on :$APORT"; tail -20 /tmp/standalone-admin-server.log
+else
+  pass "admin-configured server up on :$APORT (ADMIN_EMAILS set)"
+  # register with the UPPERCASE form of the listed email → stored lowercase,
+  # allowlist matches case-insensitively, session reports isAdmin
+  AJAR="/tmp/ci-admin.jar"; rm -f "$AJAR"
+  REG=$(curl -s -c "$AJAR" -X POST "$ABASE/api/auth" -H "Content-Type: application/json" -d '{"action":"register","email":"ci-ADMIN@example.org","password":"ci-admin-pass-123"}')
+  echo "$REG" | grep -q '"isAdmin":true' && pass "admin email register → isAdmin true (case-insensitive allowlist)" || fail "admin register response: $(echo "$REG" | head -c 160)"
+  SES=$(curl -s -b "$AJAR" "$ABASE/api/auth")
+  echo "$SES" | grep -q '"isAdmin":true' && pass "GET /api/auth flags the admin session" || fail "admin session GET: $(echo "$SES" | head -c 160)"
+  # gate probe: an UNKNOWN action with an admin session must reach the router
+  # (400 Unknown action) — a 403 here would mean the gate blocked the admin.
+  # Unknown action = zero side effects, unlike a real save.
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" -b "$AJAR" -X POST "$ABASE/api/settings" -H "Content-Type: application/json" -d '{"action":"__ci_gate_probe__"}')
+  [[ "$CODE" == "400" ]] && pass "settings POST with admin session passes the gate (400 unknown-action, not 403)" || fail "admin settings POST → $CODE (want 400 = gate passed)"
+  # real action with zero side effects: re-save the MASKED searchSettings we
+  # just GET — undefined keys keep their stored values, so this is a no-op
+  # round-trip that proves a genuine action executes (200) for the admin.
+  STGET2=$(curl -s -b "$AJAR" "$ABASE/api/settings")
+  RESEND=$(echo "$STGET2" | node -e 'let r="";process.stdin.on("data",c=>r+=c);process.stdin.on("end",()=>{try{const d=JSON.parse(r);process.stdout.write(JSON.stringify({action:"save-search",searchSettings:d.searchSettings||{}}))}catch{process.stdout.write("{}")}})' 2>/dev/null || echo '{}')
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" -b "$AJAR" -X POST "$ABASE/api/settings" -H "Content-Type: application/json" -d "$RESEND")
+  [[ "$CODE" == "200" ]] && pass "real action (save-search no-op round-trip) with admin session → 200" || fail "admin save-search → $CODE (want 200)"
+  # non-admin on the SAME server (allowlist active) → still 403
+  NJAR="/tmp/ci-nonadmin.jar"; rm -f "$NJAR"
+  curl -s -c "$NJAR" -X POST "$ABASE/api/auth" -H "Content-Type: application/json" -d '{"action":"register","email":"ci-plain@example.org","password":"ci-plain-pass-123"}' > /dev/null
+  NSES=$(curl -s -b "$NJAR" "$ABASE/api/auth")
+  echo "$NSES" | grep -q '"isAdmin":false' && pass "non-admin session reports isAdmin false" || fail "non-admin session: $(echo "$NSES" | head -c 160)"
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" -b "$NJAR" -X POST "$ABASE/api/settings" -H "Content-Type: application/json" -d '{"action":"__ci_gate_probe__"}')
+  [[ "$CODE" == "403" ]] && pass "settings POST non-admin (allowlist active) → 403" || fail "non-admin → $CODE (want 403)"
+fi
 
 echo ""
 if [[ $FAILED -eq 0 ]]; then
