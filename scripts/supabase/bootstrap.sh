@@ -28,6 +28,9 @@
 #                        any other client using the old password breaks.
 #   --name NAME          project name to find/create (default: digdeep)
 #   --region REGION      region for project creation (default: eu-central-1)
+#   --ref REF            target a known project ref directly (bypasses the
+#                        name lookup — also works when a scoped token's
+#                        project list omits the project)
 #
 # What it does, in order:
 #   1. Verify the access token against the Management API.
@@ -55,6 +58,7 @@ cd "$(dirname "$0")/../.."
 API="https://api.supabase.com/v1"
 NAME="digdeep"
 REGION="eu-central-1"
+REF_FLAG=""
 DRY=0
 RESET_PW=0
 EMIT=0
@@ -65,6 +69,7 @@ while [[ $# -gt 0 ]]; do
     --reset-db-password) RESET_PW=1 ;;
     --name) NAME="${2:?}"; shift ;;
     --region) REGION="${2:?}"; shift ;;
+    --ref) REF_FLAG="${2:?}"; shift ;;
     *) echo "unknown flag: $1 (see header)"; exit 64 ;;
   esac
   shift
@@ -182,38 +187,59 @@ jget() { # jget <json> <node-expr over d> — tiny JSON helper
   node -e 'let r="";process.stdin.on("data",c=>r+=c);process.stdin.on("end",()=>{try{const d=JSON.parse(r);'"$2"'}catch{process.stdout.write("")}})' <<<"$1"
 }
 
-api() { # api METHOD PATH [JSON_BODY] — prints body; sets HTTP_CODE
+api() { # api METHOD PATH [JSON_BODY] — sets API_BODY + HTTP_CODE globals.
+  # NOTE: callers must NOT use `X=$(api …)` — command substitution runs this
+  # function in a subshell and the globals are lost (the pre-2026-10-23
+  # version had exactly that bug: HTTP_CODE unbound under set -u at the very
+  # first check, plus a sed '$d' that ate single-line JSON bodies). Use:
+  #   api GET /path   →  body in $API_BODY, status in $HTTP_CODE
   local method="$1" path="$2" body="${3:-}"
   local args=(-sS -m 60 -w '\n%{http_code}' -X "$method" "$API$path" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json")
   [[ -n "$body" ]] && args+=(-d "$body")
-  local out; out="$(curl "${args[@]}" 2>&1)" || { echo -n ""; echo -n ""; HTTP_CODE=000; return 1; }
+  local out
+  if ! out="$(curl "${args[@]}" 2>&1)"; then
+    HTTP_CODE="000"; API_BODY="$out"
+    return 1
+  fi
   HTTP_CODE="${out##*$'\n'}"
-  # last line is the code; body is everything before it (JSON has no raw newlines from curl -sS except error text)
-  echo "${out%$'\n'*}" | sed -e '$d' 2>/dev/null || echo "${out%$'\n'*}"
+  API_BODY="${out%$'\n'*}"
+  return 0
 }
 
 # ── 1 · token ────────────────────────────────────────────────────────────
 say "1/7 verifying access token against the Management API…"
-FIRST=$(api GET /projects)
+api GET /projects
 if [[ "$HTTP_CODE" != "200" ]]; then
-  die "token rejected (HTTP $HTTP_CODE): $FIRST" 1
+  die "token rejected (HTTP $HTTP_CODE): $API_BODY" 1
 fi
-COUNT=$(jget "$FIRST" 'process.stdout.write(String((d||[]).length))')
+COUNT=$(jget "$API_BODY" 'process.stdout.write(String((d||[]).length))')
 say "token OK — account has $COUNT project(s)."
 
 # ── 2 · find or create the project ───────────────────────────────────────
 REF=""
 PLAN=""
 REGION_ACTUAL=""
-for row in $(jget "$FIRST" 'process.stdout.write((d||[]).map(p=>p.id).join(" "))'); do
-  :
-done
-# fetch full list as JSON lines: id|name|status|region for readable handling
-PLIST=$(jget "$FIRST" 'process.stdout.write((d||[]).map(p=>`${p.id}|${p.name}|${p.status}|${(p.region||"")}`).join("\n"))')
-while IFS='|' read -r pid pname pstatus pregion; do
-  [[ -z "$pid" ]] && continue
-  if [[ "${pname,,}" == "${NAME,,}" ]]; then REF="$pid"; REGION_ACTUAL="$pregion"; PLAN="$pstatus"; fi
-done <<<"$PLIST"
+if [[ -n "$REF_FLAG" ]]; then
+  # --ref: authoritative — read the project directly. (A scoped token's
+  # project LIST may omit projects outside its org scope; the direct read
+  # works as long as the token covers the project's organization.)
+  api GET "/projects/$REF_FLAG"
+  if [[ "$HTTP_CODE" != "200" ]]; then
+    die "project $REF_FLAG unreadable (HTTP $HTTP_CODE): $API_BODY
+  -> the token is not scoped to this project's organization. Regenerate the
+    PAT with the DigDeep project's org (or all orgs) selected." 2
+  fi
+  REF=$(jget "$API_BODY" 'process.stdout.write(d.id||d.ref||"")')
+  REGION_ACTUAL=$(jget "$API_BODY" 'process.stdout.write(d.region||"")')
+  PLAN=$(jget "$API_BODY" 'process.stdout.write(d.status||"")')
+else
+  # find by name: full list as JSON lines id|name|status|region
+  PLIST=$(jget "$API_BODY" 'process.stdout.write((d||[]).map(p=>`${p.id}|${p.name}|${p.status}|${(p.region||"")}`).join("\n"))')
+  while IFS='|' read -r pid pname pstatus pregion; do
+    [[ -z "$pid" ]] && continue
+    if [[ "${pname,,}" == "${NAME,,}" ]]; then REF="$pid"; REGION_ACTUAL="$pregion"; PLAN="$pstatus"; fi
+  done <<<"$PLIST"
+fi
 
 DB_PW=""
 GEN_PW() { # 32 alnum chars, URL-safe (no symbols → no quoting issues)
@@ -223,22 +249,33 @@ GEN_PW() { # 32 alnum chars, URL-safe (no symbols → no quoting issues)
 }
 
 if [[ -n "$REF" ]]; then
-  say "2/7 found project '$NAME' → ref $REF (status: $PLAN, region: $REGION_ACTUAL)."
-  if [[ "$PLAN" != "ACTIVE" && "$PLAN" != "READY" ]]; then
+  say "2/7 found project → ref $REF (status: $PLAN, region: $REGION_ACTUAL)."
+  if [[ "$PLAN" == "INACTIVE" || "$PLAN" == "PAUSED" ]]; then
+    warn "project is paused ($PLAN) — restoring (free tier pauses ~1 week idle)…"
+    api POST "/projects/$REF/restore"
+    [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "201" || "$HTTP_CODE" == "204" ]] \
+      || warn "restore call failed (HTTP $HTTP_CODE): $API_BODY — restore in the dashboard, then re-run."
+  fi
+  if [[ "$PLAN" != ACTIVE* && "$PLAN" != "READY" ]]; then
     warn "project not ACTIVE yet ($PLAN) — waiting…"
     for i in $(seq 1 60); do
       sleep 10
-      ONE=$(api GET "/projects/$REF")
-      PLAN=$(jget "$ONE" 'process.stdout.write(d.status||"")')
-      [[ "$PLAN" == "ACTIVE" || "$PLAN" == "READY" ]] && break
+      api GET "/projects/$REF"
+      PLAN=$(jget "$API_BODY" 'process.stdout.write(d.status||"")')
+      [[ "$PLAN" == ACTIVE* || "$PLAN" == "READY" ]] && break
     done
   fi
   if [[ "$RESET_PW" == "1" ]]; then
     GEN_PW
     say "  resetting the database password (data untouched)…"
-    R=$(api POST "/projects/$REF/database/reset" "{\"password\":\"$DB_PW\"}")
+    # current endpoint (docs-verified 2026-10, scope database_config_write):
+    #   PATCH /v1/projects/{ref}/database/password {"password": ...}
+    api PATCH "/projects/$REF/database/password" "{\"password\":\"$DB_PW\"}"
     if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "201" && "$HTTP_CODE" != "204" ]]; then
-      die "password reset failed (HTTP $HTTP_CODE): $R — set it manually in the dashboard (Settings → Database) and re-run without --reset-db-password" 3
+      api POST "/projects/$REF/database/reset" "{\"password\":\"$DB_PW\"}" # legacy fallback
+    fi
+    if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "201" && "$HTTP_CODE" != "204" ]]; then
+      die "password reset failed (HTTP $HTTP_CODE): $API_BODY — set it manually in the dashboard (Settings → Database) and re-run without --reset-db-password" 3
     fi
     say "  DB password reset to a generated value."
   fi
@@ -250,30 +287,30 @@ else
     say "dry-run stops before creation. Re-run without --dry-run to actually build."
     exit 0
   fi
-  CR=$(api POST /projects "{\"name\":\"$NAME\",\"db_pass\":\"$DB_PW\",\"region\":\"$REGION\",\"db_instance_size\":\"micro\"}")
+  api POST /projects "{\"name\":\"$NAME\",\"db_pass\":\"$DB_PW\",\"region\":\"$REGION\",\"db_instance_size\":\"micro\"}"
   if [[ "$HTTP_CODE" != "200" && "$HTTP_CODE" != "201" ]]; then
-    die "project creation failed (HTTP $HTTP_CODE): $CR
+    die "project creation failed (HTTP $HTTP_CODE): $API_BODY
   (free plan: only 2 projects per account — pause/delete one, or pass --name for an existing project)" 2
   fi
-  REF=$(jget "$CR" 'process.stdout.write(d.id||"")')
-  REGION_ACTUAL=$(jget "$CR" 'process.stdout.write(d.region||"")')
+  REF=$(jget "$API_BODY" 'process.stdout.write(d.id||"")')
+  REGION_ACTUAL=$(jget "$API_BODY" 'process.stdout.write(d.region||"")')
   say "  created → ref $REF. Provisioning takes 1–3 min; waiting…"
   for i in $(seq 1 60); do
     sleep 10
-    ONE=$(api GET "/projects/$REF")
-    PLAN=$(jget "$ONE" 'process.stdout.write(d.status||"")')
+    api GET "/projects/$REF"
+    PLAN=$(jget "$API_BODY" 'process.stdout.write(d.status||"")')
     say "  status: $PLAN"
-    [[ "$PLAN" == "ACTIVE" || "$PLAN" == "READY" ]] && break
+    [[ "$PLAN" == ACTIVE* || "$PLAN" == "READY" ]] && break
   done
-  [[ "$PLAN" == "ACTIVE" || "$PLAN" == "READY" ]] || die "project never became ACTIVE (last: $PLAN)" 2
+  [[ "$PLAN" == ACTIVE* || "$PLAN" == "READY" ]] || die "project never became ACTIVE (last: $PLAN)" 2
 fi
 
 # ── 3 · anon key ─────────────────────────────────────────────────────────
 say "3/7 recovering the anon/publishable key…"
-KEYS=$(api GET "/projects/$REF/api-keys?reveal=true")
+api GET "/projects/$REF/api-keys?reveal=true"
 ANON_KEY=""
 if [[ "$HTTP_CODE" == "200" ]]; then
-  ANON_KEY=$(jget "$KEYS" 'const k=(d||[]).find(x=>(x.name==="anon"||x.name==="publishable")&&x.value);process.stdout.write(k?k.value:"")')
+  ANON_KEY=$(jget "$API_BODY" 'const k=(d||[]).find(x=>(x.name==="anon"||x.name==="publishable")&&x.value);process.stdout.write(k?k.value:"")')
 fi
 if [[ -z "$ANON_KEY" ]]; then
   warn "api-keys reveal unavailable (HTTP $HTTP_CODE) — the anon key must be set manually later (Project Settings → API)."
@@ -382,23 +419,23 @@ say "  public schema now holds ${VCNT:-?} tables (expected $((NTABLES + 1)))."
 
 # ── 6 · Supabase Auth for email OTP ──────────────────────────────────────
 say "6/7 configuring Supabase Auth (email OTP)…"
-AUTHCFG=$(api GET "/projects/$REF/config/auth")
+api GET "/projects/$REF/config/auth"
 AUTH_OK=0
 if [[ "$HTTP_CODE" == "200" ]]; then
   # ensure signups + email provider on (PATCH is flat-key)
-  NEED_SIGNUP=$(jget "$AUTHCFG" 'process.stdout.write(String(d.disable_signup===true))')
-  NEED_EMAIL=$(jget "$AUTHCFG" 'process.stdout.write(String(d.external_email_enabled===false))')
+  NEED_SIGNUP=$(jget "$API_BODY" 'process.stdout.write(String(d.disable_signup===true))')
+  NEED_EMAIL=$(jget "$API_BODY" 'process.stdout.write(String(d.external_email_enabled===false))')
   if [[ "$NEED_SIGNUP" == "true" || "$NEED_EMAIL" == "true" ]]; then
-    P=$(api PATCH "/projects/$REF/config/auth" '{"disable_signup":false,"external_email_enabled":true}')
+    api PATCH "/projects/$REF/config/auth" '{"disable_signup":false,"external_email_enabled":true}'
     [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "204" ]] && say "  auth config patched (signups on, email on)." || warn "  auth PATCH failed (HTTP $HTTP_CODE) — set manually: Authentication → Providers → Email; Sign-ups enabled."
   else
     say "  signups + email provider already on."
   fi
   # Magic Link template must contain {{ .Token }} for 6-digit CODES
-  TPL=$(api GET "/projects/$REF/config/auth/mailer/templates")
+  api GET "/projects/$REF/config/auth/mailer/templates"
   TPLK=""
   if [[ "$HTTP_CODE" == "200" ]]; then
-    TPLK=$(jget "$TPL" 'process.stdout.write(d.magic_link?d.magic_link.content:"")')
+    TPLK=$(jget "$API_BODY" 'process.stdout.write(d.magic_link?d.magic_link.content:"")')
   fi
   if [[ -n "$TPLK" ]]; then
     if [[ "$TPLK" == *'{{ .Token }}'* ]]; then
@@ -406,7 +443,7 @@ if [[ "$HTTP_CODE" == "200" ]]; then
       AUTH_OK=1
     else
       NEWTPL='{"magic_link":{"subject":"Your DigDeep sign-in code","content":"<h2>Your sign-in code</h2><p>Use this one-time code to sign in to DigDeep:</p><p style=\"font-size:28px;letter-spacing:6px;font-weight:700\">{{ .Token }}</p><p>It expires shortly. If you did not request it, ignore this email.</p>"}}'
-      PUTR=$(api PUT "/projects/$REF/config/auth/mailer/templates" "$NEWTPL")
+      api PUT "/projects/$REF/config/auth/mailer/templates" "$NEWTPL"
       if [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "204" ]]; then
         say "  Magic Link template switched to a 6-digit code ({{ .Token }})."
         AUTH_OK=1
@@ -435,6 +472,10 @@ echo "  # DB password (generated this run — store it or reset later):"
 echo "  $DB_PW"
 [[ "$AUTH_OK" != "1" ]] && echo "" && echo "  REMEMBER: Magic Link template needs {{ .Token }} for codes (see step 6)."
 echo ""
-say "verification: bash scripts/prod-audit-verify.sh after the Vercel redeploy."
+say "Cloudflare Workers deployment (digdeep): set DATABASE_URL as a worker secret:"
+echo "    echo '<the DATABASE_URL above>' | CLOUDFLARE_API_TOKEN=cfat_… \\"
+echo "      node_modules/.bin/wrangler secret put DATABASE_URL --name digdeep"
+say "verification after that: the site's /api/stats answers 200 (was 500)."
+say "Vercel path (if revived): bash scripts/prod-audit-verify.sh after the redeploy."
 rm -rf "$WORK"
 exit 0

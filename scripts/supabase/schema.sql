@@ -248,6 +248,16 @@ CREATE TABLE IF NOT EXISTS "Watch" (
     CONSTRAINT "Watch_pkey" PRIMARY KEY ("id")
 );
 
+-- CreateTable
+CREATE TABLE IF NOT EXISTS "AuthAttempt" (
+    "id" TEXT NOT NULL,
+    "kind" TEXT NOT NULL,
+    "email" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "AuthAttempt_pkey" PRIMARY KEY ("id")
+);
+
 -- CreateIndex
 CREATE INDEX IF NOT EXISTS "ResearchJob_status_updatedAt_idx" ON "ResearchJob"("status", "updatedAt");
 
@@ -304,6 +314,9 @@ CREATE INDEX IF NOT EXISTS "WebhookDelivery_webhookId_createdAt_idx" ON "Webhook
 
 -- CreateIndex
 CREATE INDEX IF NOT EXISTS "Watch_active_nextRunAt_idx" ON "Watch"("active", "nextRunAt");
+
+-- CreateIndex
+CREATE INDEX IF NOT EXISTS "AuthAttempt_kind_email_createdAt_idx" ON "AuthAttempt"("kind", "email", "createdAt");
 
 -- AddForeignKey
 DO $$ BEGIN
@@ -413,12 +426,17 @@ WHERE NOT EXISTS (SELECT 1 FROM "_prisma_migrations" WHERE "migration_name" = '2
 INSERT INTO "_prisma_migrations" ("id","checksum","finished_at","migration_name","logs","started_at","applied_steps_count")
 SELECT gen_random_uuid()::text, 'c9876a3e1a10cd41cca89c699e95d16496e49e2fb493876b3e5b58baf440a916', now(), '20261021_v35_email_otp_auth', NULL, now(), 1
 WHERE NOT EXISTS (SELECT 1 FROM "_prisma_migrations" WHERE "migration_name" = '20261021_v35_email_otp_auth');
+INSERT INTO "_prisma_migrations" ("id","checksum","finished_at","migration_name","logs","started_at","applied_steps_count")
+SELECT gen_random_uuid()::text, 'f3eee128ce9e9dee569e52a61d97aca717c461a3e8f7a7ebc8260bc7b0699a3a', now(), '20261022_v37_auth_hardening', NULL, now(), 1
+WHERE NOT EXISTS (SELECT 1 FROM "_prisma_migrations" WHERE "migration_name" = '20261022_v37_auth_hardening');
 
 -- ── hardening: RLS on + no grants for the PostgREST roles ───────────────
 ALTER TABLE "ActivityEvent" ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE "ActivityEvent" FROM "anon", "authenticated";
 ALTER TABLE "ApiKey" ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE "ApiKey" FROM "anon", "authenticated";
+ALTER TABLE "AuthAttempt" ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE "AuthAttempt" FROM "anon", "authenticated";
 ALTER TABLE "ResearchJob" ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE "ResearchJob" FROM "anon", "authenticated";
 ALTER TABLE "ResearchSection" ENABLE ROW LEVEL SECURITY;

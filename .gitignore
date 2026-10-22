@@ -98,6 +98,7 @@ scripts/*
 !scripts/ui-gate-verify.sh
 !scripts/audit-prod-fingerprint.sh
 !scripts/vercel-rehost.mjs
+!scripts/sb-mgmt.mjs
 !scripts/cf/
 !scripts/bench/
 scripts/bench/*
