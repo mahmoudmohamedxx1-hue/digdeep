@@ -72,6 +72,17 @@ if [[ -n "$STALE_PIDS" ]]; then
     exit 1
   fi
 fi
+# v3.6.1: lsof is blind in some sandboxes AND Next renames the server process
+# to "next-server (vX)" — so a stale standalone server survives both the lsof
+# check above and any pkill -f on the launch command, then EADDRINUSEs our
+# boot while it keeps answering curls (observed in the wild). Sweep by the
+# renamed title too; at this point none of THIS suite's servers exist yet.
+STALE_NEXT=$(pgrep -f "next-server \(" 2>/dev/null || true)
+if [[ -n "$STALE_NEXT" ]]; then
+  echo "  ⚠ killing stale next-server process(es) → $STALE_NEXT"
+  kill $STALE_NEXT 2>/dev/null || true; sleep 1
+  kill -9 $STALE_NEXT 2>/dev/null || true; sleep 1
+fi
 SRV_PID=""
 ASRV_PID=""
 RECV_PID=""
@@ -119,6 +130,28 @@ for i in $(seq 1 40); do
   sleep 0.5
 done
 curl -sf -o /dev/null "$BASE/" && pass "server up on :$PORT" || { fail "server never came up"; tail -20 /tmp/standalone-server.log; exit 1; }
+# v3.6.1 integrity gate: the readiness curl can be answered by a FOREIGN
+# process holding the port while our own server lies dead from EADDRINUSE
+# (observed in the wild: a lingering next-server served an entire suite run
+# and every env-dependent check failed against the wrong binary). lsof is
+# blind in some sandboxes, so ownership is proven WITHOUT it: our process
+# must be alive, its boot log must show Ready, and must NOT show EADDRINUSE.
+if ! kill -0 "$SRV_PID" 2>/dev/null; then
+  echo "  ❌ suite server (pid $SRV_PID) died — boot log tail:"
+  tail -5 /tmp/standalone-server.log
+  exit 1
+fi
+if grep -q "EADDRINUSE" /tmp/standalone-server.log 2>/dev/null; then
+  echo "  ❌ suite server hit EADDRINUSE — a foreign process owns :$PORT. Boot log tail:"
+  tail -5 /tmp/standalone-server.log
+  echo "  (hunt it with: pgrep -af 'next-server \(' )"
+  exit 1
+fi
+if ! grep -q "Ready in" /tmp/standalone-server.log 2>/dev/null; then
+  echo "  ❌ suite server never reported Ready — boot log tail:"
+  tail -5 /tmp/standalone-server.log
+  exit 1
+fi
 
 echo "── 4 · Static surfaces respond ──"
 for path in "/" "/gallery" "/benchmark" "/api-docs" "/manifest.webmanifest" "/sw.js" "/api/og-card" "/offline/"; do
@@ -195,6 +228,36 @@ GATE_SESS=$(curl -s -b "$JAR" -X POST "$BASE/api/research" -H "Content-Type: app
 echo "$GATE_SESS" | grep -q '"id"' && pass "signed-in chat start → run created" || fail "signed-in chat start: $GATE_SESS"
 GATE_JOB=$(echo "$GATE_SESS" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
 [[ -n "$GATE_JOB" ]] && pass "gate probe run attributed + queued ($GATE_JOB)" || fail "no gate probe run id"
+
+echo "── 5c · favicon set is the D-letter brand mark (v3.6.1 audit) ──"
+# the user's mark: teal whale-D on the dark badge, on EVERY surface. The
+# retired set shipped a purple-bars SVG in tabs and near-black ghost PNGs to
+# iOS/PWA — this check makes that class of drift impossible to re-ship.
+SVGI=$(curl -s "$BASE/icon.svg" || true)
+echo "$SVGI" | grep -q "#2dd4bf" && pass "icon.svg carries the brand teal D" || fail "icon.svg is not the teal D mark"
+if echo "$SVGI" | grep -qiE "7C3AED|C4B5FD|5B21B6"; then fail "icon.svg still carries the retired purple palette"; else pass "no retired purple in icon.svg"; fi
+curl -s -o /tmp/ci-icon192.png "$BASE/icon-192.png" || true
+curl -s -o /tmp/ci-apple.png "$BASE/apple-touch-icon.png" || true
+if python3 - <<'PY'
+from PIL import Image
+import numpy as np, sys
+bad = []
+for name, path, opaque in (("192", "/tmp/ci-icon192.png", False), ("apple", "/tmp/ci-apple.png", True)):
+    im = Image.open(path); a = np.array(im.convert("RGBA"))
+    solid = a[:, :, 3] > 40
+    rgb = a[:, :, :3][solid]
+    teal = ((rgb[:, 1] > 150) & (rgb[:, 1] > rgb[:, 0] + 40) & (rgb[:, 2] > 100)).mean()
+    lum = rgb.mean(axis=1).mean()
+    mode_ok = (im.mode == "RGB") if opaque else True
+    print(f"  icon {name}: {im.size[0]}x{im.size[1]} mode={im.mode} teal={100*teal:.0f}% lum={lum:.0f}")
+    if not (teal > 0.05 and lum < 120 and mode_ok): bad.append(name)
+sys.exit(1 if bad else 0)
+PY
+then pass "icon-192 + apple-touch-icon are the dark-badge teal D family (not ghosts)"
+else fail "favicon PNG family failed the D-badge check"
+fi
+MAN=$(curl -s "$BASE/manifest.webmanifest" || true)
+echo "$MAN" | grep -q "icon-192.png" && echo "$MAN" | grep -q "icon-512.png" && pass "manifest points at the 192/512 D icons" || fail "manifest icon refs broken"
 
 echo "── 6 · Public API v1 auth boundary ──"
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/v1/research" -H "Content-Type: application/json" -d '{"query":"test"}')
@@ -332,10 +395,23 @@ ST=$(curl -s "$BASE/api/stats" || true)
 echo "$ST" | grep -q '"completedRuns"' && echo "$ST" | grep -q '"avgCitationIntegrity"' && pass "/api/stats serves the live track record" || fail "/api/stats broken: $(echo "$ST" | head -c 150)"
 OA=$(curl -s "$BASE/api/openapi.json" || true)
 echo "$OA" | grep -q '"openapi":"3.1.0"' && echo "$OA" | grep -q '"/api/v1/webhooks"' && pass "/api/openapi.json serves the 3.1 contract (webhooks documented)" || fail "openapi spec broken: $(echo "$OA" | head -c 150)"
-DOCHTML=$(curl -s "$BASE/api-docs")
+# v3.6.1 hardening: single-shot curls of prerendered pages can race a busy
+# event loop (observed once: api-docs grep missed while neighbors passed and
+# the same page served 10/10 clean on retry) — fetch with retries instead.
+DOCHTML=""
+for _ in 1 2 3; do
+  DOCHTML=$(curl -s --max-time 20 "$BASE/api-docs" || true)
+  echo "$DOCHTML" | grep -q "digdeep_research" && break
+  sleep 1
+done
 echo "$DOCHTML" | grep -q "digdeep_research" && pass "/api-docs renders MCP tools from the spec" || fail "/api-docs missing MCP section"
 echo "$DOCHTML" | grep -q "api/v1/webhooks" && pass "/api-docs documents the webhook endpoints" || fail "/api-docs missing webhooks"
-BENCHHTML=$(curl -s "$BASE/benchmark")
+BENCHHTML=""
+for _ in 1 2 3; do
+  BENCHHTML=$(curl -s --max-time 20 "$BASE/benchmark" || true)
+  echo "$BENCHHTML" | grep -q "Live track record" && break
+  sleep 1
+done
 echo "$BENCHHTML" | grep -q "Live track record" && pass "/benchmark renders the live track-record section" || fail "/benchmark missing live stats section"
 
 echo "── 14 · v3.4.1 audit gates: ownership on internal routes, SSRF, settings ──"

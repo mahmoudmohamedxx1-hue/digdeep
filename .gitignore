@@ -69,6 +69,8 @@ Caddyfile
 # scripts: only the product toolchain is committed
 scripts/*
 !scripts/teal_brand.py
+!scripts/favicon_d_reset.py
+!scripts/favicon_svg_parity.py
 !scripts/test-routing.ts
 !scripts/test-model-pin.ts
 !scripts/test-jury.ts

@@ -8,7 +8,7 @@
  *
  * Frames are canvas-drawn PNG data URLs — the tight transparent emblem is
  * composited onto a dark rounded badge so it stays legible on any tab strip.
- * The badge/emblem geometry mirrors scripts/gen_tight_logo.py (make_badge)
+ * The badge/emblem geometry mirrors scripts/teal_brand.py (badge_with_emblem)
  * so idle, working and done all look like the same icon.
  */
 
@@ -88,18 +88,18 @@ function drawIcon(opts: { dotColor?: string; dotAlpha?: number } = {}): string {
   if (markImg && markImg.naturalWidth > 0) {
     ctx.drawImage(markImg, EMBLEM_OFF, EMBLEM_OFF, EMBLEM_PX, EMBLEM_PX);
   } else {
-    // stand-in until the emblem loads: dark tile + concentric topographic arcs
-    ctx.strokeStyle = "rgba(255,255,255,0.85)";
+    // stand-in until the emblem loads: concentric teal D strokes on the
+    // badge — the same letterform the loaded emblem carries (v3.6.1: was the
+    // retired white-arcs + purple-dot topographic mark)
+    ctx.strokeStyle = "#2dd4bf";
     ctx.lineWidth = 4.5;
     for (const r of [24, 17, 10]) {
       ctx.beginPath();
-      ctx.arc(32, 34, r, Math.PI * 0.15, Math.PI * 1.55);
+      ctx.moveTo(20, 32 - r);
+      ctx.lineTo(20, 32 + r);
+      ctx.arc(20, 32, r, Math.PI / 2, -Math.PI / 2, true);
       ctx.stroke();
     }
-    ctx.fillStyle = "#8B5CF6";
-    ctx.beginPath();
-    ctx.arc(26, 48, 8, 0, Math.PI * 2);
-    ctx.fill();
   }
 
   // status dot — dark backing disc, colored dot, white ring

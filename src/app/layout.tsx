@@ -14,7 +14,7 @@ export const metadata: Metadata = {
     template: "%s — DigDeep",
   },
   description:
-    "DigDeep reads the whole web, puts every claim on trial with a prosecutor, a defense, and a jury of 12, audits every citation against its source passage, and can withhold its verdict when the evidence is thin. Free, no API key, no account.",
+    "DigDeep reads the whole web, puts every claim on trial with a prosecutor, a defense, and a jury of 12, audits every citation against its source passage, and can withhold its verdict when the evidence is thin. Free — no LLM keys needed; a free email account gets you researching.",
   keywords: [
     "digdeep",
     "deep research",

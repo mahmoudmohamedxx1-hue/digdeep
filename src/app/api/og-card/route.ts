@@ -19,7 +19,7 @@ export function GET() {
   <rect x="72" y="378" rx="14" width="612" height="52" fill="#0d9488" fill-opacity="0.16"/>
   <text x="96" y="412" font-family="system-ui, sans-serif" font-size="24" fill="#5eead4" font-weight="700">PROSECUTOR · DEFENSE · JURY OF 12 · JUDGE</text>
   <text x="72" y="500" font-family="system-ui, sans-serif" font-size="21" fill="#94a3b8">Every claim checked · every citation audited · honest WITHHELD verdicts</text>
-  <text x="72" y="556" font-family="system-ui, sans-serif" font-size="21" fill="#5eead4">Free · no API key · no account · exports to PDF / Word / Excel</text>
+  <text x="72" y="556" font-family="system-ui, sans-serif" font-size="21" fill="#5eead4">Free · no LLM keys · free email sign-in · exports to PDF / Word / Excel</text>
 </svg>`;
   return new Response(svg, {
     headers: { "Content-Type": "image/svg+xml", "Cache-Control": "public, max-age=86400, s-maxage=604800" },

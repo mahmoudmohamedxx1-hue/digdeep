@@ -1,7 +1,7 @@
 {
   "name": "DigDeep — deep research that shows its work",
   "short_name": "DigDeep",
-  "description": "Deep research with an adversarial court, a per-claim evidence ledger, and audited citations. Free, no API key.",
+  "description": "Deep research with an adversarial court, a per-claim evidence ledger, and audited citations. Free — no LLM keys needed.",
   "id": "/",
   "start_url": "/",
   "scope": "/",

@@ -121,7 +121,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
             {sources.length} sources read · every citation audited · every claim checked
           </span>
           <span style={{ fontSize: 22, color: "#5eead4" }}>
-            digdeepx.vercel.app — free, no API key, puts its own answer on trial
+            digdeepx.vercel.app — free, no LLM keys, puts its own answer on trial
           </span>
         </div>
       </div>
