@@ -1,5 +1,30 @@
 # Changelog
 
+## v3.6.0 — chatting now needs an account (2026-10-21)
+
+- **The operator closed anonymous chatting.** Anyone who wants to talk to
+  DigDeep — home composer, follow-ups, related-question taps — signs in first.
+  One email code, no password; the account page takes you straight back to
+  what you were writing (`?next=` round-trip).
+- The gate is server-side and total on the chat entry point: `POST /api/research`
+  answers `401 {"code":"auth_required"}` without a session. Deliberately
+  unchanged: reading old anonymous threads (capability URLs), share pages
+  (public-by-choice), exports of shared/anonymous runs, and every v1 + MCP
+  start (those were never anonymous — Bearer key + `research:write` scope).
+- The UI says so before you type: a quiet "Chatting needs a free account —
+  sign in with an email code" strip under the home composer and above the
+  follow-up box on threads; submitting while signed out routes to `/account`
+  and bounces you back after sign-in (relative-path validated — no open
+  redirect).
+- Home hero microcopy: "Free & keyless" → "Free · no LLM keys needed" (the
+  keyless LLM chain is still the truth; "keyless" alone now reads ambiguous
+  next to a sign-in gate).
+- `scripts/replay-self-questions.sh` signs in a local dev account first.
+- Permanent tests: standalone 5b (anon 401 + auth_required body + validation
+  order + signed-in start) and prod-audit E2 (same, live, plus immediate
+  cancel of the probe run for cost hygiene) — 108 → 113 standalone checks,
+  35 → 38 live checks.
+
 ## v3.5.2 — a rejected send is not your email's fault (2026-10-21)
 
 - **Found live during the deep audit.** When Supabase rejects an OTP *send* for

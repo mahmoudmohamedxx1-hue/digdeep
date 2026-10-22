@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, ChevronsDown, ChevronsUp, Compass, Eye, Loader2, Plus, RefreshCw, WifiOff } from "lucide-react";
+import { ArrowLeft, ChevronsDown, ChevronsUp, Compass, Eye, Loader2, Lock, Plus, RefreshCw, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AskBox } from "@/components/pplx/ask-box";
 import { ThreadTurn } from "@/components/pplx/turn";
@@ -53,6 +54,9 @@ export default function ThreadPage() {
   const [reloadNonce, setReloadNonce] = useState(0);
   const [followQuery, setFollowQuery] = useState("");
   const [followDocs, setFollowDocs] = useState<AttachedDoc[]>([]);
+  // v3.6 sign-in gate: follow-ups need an account — surfaced as a prompt on
+  // the composer and as a redirect to /account?next=… when the server 401s.
+  const [signedOut, setSignedOut] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [starting, setStarting] = useState(false);
   const [stoppingAll, setStoppingAll] = useState(false);
@@ -529,6 +533,15 @@ export default function ThreadPage() {
   }, [draftKey, followQuery]);
 
   // ---------- actions ----------
+  // v3.6: one cheap session probe — powers the composer prompt (and the
+  // draft survives: submitFollowUp redirects to /account?next=/r/<thread>).
+  useEffect(() => {
+    fetch("/api/auth")
+      .then((r) => r.json())
+      .then((d) => setSignedOut(!d.user))
+      .catch(() => setSignedOut(false)); // offline: the server gate still speaks
+  }, []);
+
   const submitFollowUp = async () => {
     const question = followQuery.trim();
     if (question.length < 3 || !threadId) {
@@ -543,6 +556,11 @@ export default function ThreadPage() {
     const res = await startResearchRun({ query: question, threadId, docs: followDocs });
     setStarting(false);
     if ("error" in res) {
+      if (res.authRequired) {
+        toast({ title: "Sign in to chat — one email code, no password." });
+        router.push(`/account?next=${encodeURIComponent(`/r/${threadId}`)}`);
+        return;
+      }
       toast({ title: res.error, variant: "destructive" });
       return;
     }
@@ -851,6 +869,22 @@ export default function ThreadPage() {
             /* py only — the composer spans the conversation column edge-to-edge,
                its sides flush with the messages above (v3.1 alignment). */
             <div className="py-3">
+              {/* v3.6 sign-in gate — reading old threads stays open (capability
+                  URLs), but sending new messages needs an account. */}
+              {signedOut && (
+                <div className="mb-2.5 flex w-full items-center justify-center gap-2 rounded-xl border border-primary/25 bg-primary/[0.06] px-4 py-2 text-[12px] text-muted-foreground">
+                  <Lock className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />
+                  <span>
+                    Sign in to send messages —{" "}
+                    <Link
+                      href={`/account?next=${encodeURIComponent(`/r/${threadId ?? id}`)}`}
+                      className="font-medium text-primary hover:underline"
+                    >
+                      one email code, no password
+                    </Link>
+                  </span>
+                </div>
+              )}
               <AskBox
                 value={followQuery}
                 onChange={setFollowQuery}
@@ -943,6 +977,11 @@ export default function ThreadPage() {
     const res = await startResearchRun({ query: q, threadId });
     setStarting(false);
     if ("error" in res) {
+      if (res.authRequired) {
+        toast({ title: "Sign in to chat — one email code, no password." });
+        router.push(`/account?next=${encodeURIComponent(`/r/${threadId}`)}`);
+        return;
+      }
       toast({ title: res.error, variant: "destructive" });
       return;
     }

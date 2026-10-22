@@ -1,27 +1,44 @@
 #!/usr/bin/env bash
 # Replay the exact conversation that failed (from the user's complaint) end-to-end
 # against the live engine, printing mode + answer for each turn.
+# v3.6: chatting requires an account — the script signs in a local dev account
+# first and rides its session cookie (register is idempotent-shaped: if the
+# account exists, login instead).
 set -u
 BASE="http://localhost:3000"
+JAR=$(mktemp)
+
+echo "── signing in (chat gate, v3.6) ──"
+R=$(curl -s -c "$JAR" -X POST "$BASE/api/auth" -H "Content-Type: application/json" \
+  -d '{"action":"register","email":"replay-dev@digdeep.local","password":"replay-dev-pass-123"}')
+if ! echo "$R" | grep -q '"user"'; then
+  R=$(curl -s -c "$JAR" -X POST "$BASE/api/auth" -H "Content-Type: application/json" \
+    -d '{"action":"login","email":"replay-dev@digdeep.local","password":"replay-dev-pass-123"}')
+fi
+if ! echo "$R" | grep -q '"user"'; then
+  echo "SIGN-IN FAILED (is the dev server running on $BASE?): $R"
+  exit 1
+fi
+echo "signed in (replay-dev@digdeep.local)"
 
 send() {
   local q="$1" thread="$2" preset="${3:-standard}"
   local body id mode answer
-  body=$(curl -s -X POST "$BASE/api/research" -H 'Content-Type: application/json' \
+  body=$(curl -s -b "$JAR" -X POST "$BASE/api/research" -H 'Content-Type: application/json' \
     -d "{\"query\": $(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$q"), \"preset\": \"$preset\"${thread:+, \"threadId\": \"$thread\"}}")
   id=$(echo "$body" | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])" 2>/dev/null)
   if [ -z "$id" ]; then echo "CREATE FAILED: $body"; exit 1; fi
   # poll until completed/failed (max ~120s)
   for i in $(seq 1 120); do
     sleep 1
-    status=$(curl -s "$BASE/api/research/$id" | python3 -c "
+    status=$(curl -s -b "$JAR" "$BASE/api/research/$id" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
 j=d.get('job',d)
 print(j.get('status',''))" 2>/dev/null)
     case "$status" in completed|failed|cancelled) break;; esac
   done
-  curl -s "$BASE/api/research/$id" | python3 -c "
+  curl -s -b "$JAR" "$BASE/api/research/$id" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
 j=d.get('job',d)

@@ -38,6 +38,10 @@ export default function AccountPage() {
   const router = useRouter();
   const [user, setUser] = useState<SessionUser | null>(null);
   const [loading, setLoading] = useState(true);
+  // v3.6: ?next=<path> — where to land after sign-in (the chat gate sends
+  // users here with the thread they were writing in). Strictly validated:
+  // relative paths only, so it can never be turned into an open redirect.
+  const [nextPath, setNextPath] = useState<string | null>(null);
   // auth form
   const [mode, setMode] = useState<"login" | "register" | "code">("login");
   const [email, setEmail] = useState("");
@@ -101,6 +105,14 @@ export default function AccountPage() {
     loadAll();
   }, [loadAll]);
 
+  // v3.6: pick up the post-sign-in destination once, safely.
+  useEffect(() => {
+    const n = new URLSearchParams(window.location.search).get("next");
+    if (n && n.startsWith("/") && !n.startsWith("//") && !n.startsWith("/\\") && !n.includes("\n") && !n.includes("\r")) {
+      setNextPath(n);
+    }
+  }, []);
+
   /** Collect the browser's anonymous thread ids so sign-in can adopt them. */
   async function localThreadIds(): Promise<string[]> {
     try {
@@ -137,6 +149,12 @@ export default function AccountPage() {
         toast({ title: `Welcome back — ${res.claimed} of your anonymous research thread${res.claimed > 1 ? "s" : ""} now sync to this account.` });
       }
       await loadAll();
+      // v3.6: the chat gate sent us here — go straight back to where the
+      // user was writing (validated at capture; relative by construction).
+      if (nextPath) {
+        toast({ title: "Signed in — back to your chat." });
+        router.push(nextPath);
+      }
     } catch {
       toast({ title: "Sign-in failed — check your connection." });
     } finally {
@@ -212,6 +230,11 @@ export default function AccountPage() {
         });
       }
       await loadAll();
+      // v3.6: same post-sign-in bounce as the password path.
+      if (nextPath) {
+        toast({ title: "Signed in — back to your chat." });
+        router.push(nextPath);
+      }
     } catch {
       toast({ title: "Sign-in failed — check your connection." });
     } finally {

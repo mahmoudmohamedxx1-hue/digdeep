@@ -91,6 +91,7 @@ scripts/*
 !scripts/benchmark-harness.mjs
 !scripts/replay-self-questions.sh
 !scripts/audit-cap-watch.sh
+!scripts/ui-gate-verify.sh
 !scripts/audit-prod-fingerprint.sh
 !scripts/bench/
 scripts/bench/*

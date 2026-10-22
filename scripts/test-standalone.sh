@@ -181,6 +181,21 @@ DDK=$(echo "$KEY" | grep -o '"key":"ddk_[^"]*"' | head -1 | cut -d'"' -f4 || tru
 KEYS=$(curl -s -b "$JAR" "$BASE/api/keys")
 echo "$KEYS" | grep -q '"prefix"' && pass "keys listable" || fail "keys not listable: $KEYS"
 
+echo "── 5b · chat requires sign-in (v3.6 gate on POST /api/research) ──"
+# The operator closed anonymous run-starting: anyone who wants to chat signs
+# in first. What must NOT change: v1/MCP key starts, reading old anonymous
+# runs (capability URLs), share pages.
+GATE_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/research" -H "Content-Type: application/json" -d '{"query":"gate probe anonymous"}')
+[[ "$GATE_CODE" == "401" ]] && pass "anonymous chat start → 401 (sign-in gate)" || fail "anonymous chat start → $GATE_CODE (want 401)"
+GATE_BODY=$(curl -s -X POST "$BASE/api/research" -H "Content-Type: application/json" -d '{"query":"gate probe anonymous"}')
+echo "$GATE_BODY" | grep -q '"code":"auth_required"' && pass "gate body carries auth_required (UI routes to /account)" || fail "gate body: $GATE_BODY"
+GATE_EMPTY=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/research" -H "Content-Type: application/json" -d '{"query":""}')
+[[ "$GATE_EMPTY" == "400" ]] && pass "empty query still 400 before the gate (validation order stable)" || fail "empty query → $GATE_EMPTY (want 400)"
+GATE_SESS=$(curl -s -b "$JAR" -X POST "$BASE/api/research" -H "Content-Type: application/json" -d '{"query":"ci signed-in gate probe","preset":"quick","threadId":"ci-gate-thread"}')
+echo "$GATE_SESS" | grep -q '"id"' && pass "signed-in chat start → run created" || fail "signed-in chat start: $GATE_SESS"
+GATE_JOB=$(echo "$GATE_SESS" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
+[[ -n "$GATE_JOB" ]] && pass "gate probe run attributed + queued ($GATE_JOB)" || fail "no gate probe run id"
+
 echo "── 6 · Public API v1 auth boundary ──"
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/v1/research" -H "Content-Type: application/json" -d '{"query":"test"}')
 [[ "$CODE" == "401" ]] && pass "v1 without key → 401" || fail "v1 without key → $CODE (want 401)"

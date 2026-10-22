@@ -26,7 +26,7 @@ export const maxDuration = 300;
 
 const PROTOCOL_VERSIONS = ["2025-03-26", "2025-06-18"];
 const DEFAULT_PROTOCOL = "2025-06-18";
-const SERVER_INFO = { name: "digdeep", version: "3.5.2" };
+const SERVER_INFO = { name: "digdeep", version: "3.6.0" };
 const INSTRUCTIONS =
   "DigDeep is a verified-research engine: it plans, searches the live web, reads sources, " +
   "audits every claim against citations, and (optionally) puts the question on trial with a " +

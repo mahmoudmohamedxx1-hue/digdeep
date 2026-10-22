@@ -48,6 +48,17 @@ echo "── E · F2 admin route deleted ──"
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/admin/migrate")
 [[ "$CODE" == "404" ]] && pass "admin/migrate → 404 (route gone)" || fail "admin/migrate → $CODE (want 404)"
 
+echo "── E2 · v3.6 chat sign-in gate (POST /api/research) ──"
+GBODY=$(curl -s -X POST "$BASE/api/research" -H "Content-Type: application/json" -d '{"query":"gate probe anonymous"}' -w "|%{http_code}")
+echo "$GBODY" | grep -q "|401$" && pass "anonymous chat start → 401 (sign-in required)" || fail "anon chat start: $GBODY (want 401)"
+echo "$GBODY" | grep -q '"code":"auth_required"' && pass "gate body carries auth_required (UI routes to /account)" || fail "gate body missing code: $GBODY"
+GSESS=$(curl -s -b "$JAR" -X POST "$BASE/api/research" -H "Content-Type: application/json" -d "{\"query\":\"gate probe signed in $RND\",\"preset\":\"quick\",\"threadId\":\"audit-gate-$RND\"}")
+echo "$GSESS" | grep -q '"id"' && pass "signed-in chat start → run created (gate opens for accounts)" || fail "signed-in chat start: $GSESS"
+# cost hygiene: cancel the probe immediately — the gate is proven, no need to
+# let this run burn a full engine pass (owner session may cancel its own run)
+GJOB=$(echo "$GSESS" | grep -o '"id":"[a-z0-9]*"' | head -1 | cut -d'"' -f4 || true)
+[ -n "$GJOB" ] && curl -s -o /dev/null -b "$JAR" -X PATCH "$BASE/api/research/$GJOB" -H "Content-Type: application/json" -d '{"action":"cancel"}'
+
 echo "── F · F6 webhook SSRF guard ──"
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/v1/webhooks" -H "Authorization: Bearer $DDK" -H "Content-Type: application/json" -d '{"action":"create","url":"http://169.254.169.254/latest/meta-data","events":["run.completed"]}')
 [[ "$CODE" == "400" ]] && pass "webhook to metadata IP → 400" || fail "metadata webhook → $CODE (want 400)"

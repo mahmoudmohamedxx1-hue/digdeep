@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { LucideIcon } from "lucide-react";
-import { BadgeCheck, Scale, ShieldCheck, Sparkles } from "lucide-react";
+import { BadgeCheck, Lock, Scale, ShieldCheck, Sparkles } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { AskBox } from "@/components/pplx/ask-box";
 import { AuroraHero, SpotlightCard, StaggerIn } from "@/components/magic";
@@ -43,7 +44,18 @@ export default function HomePage() {
   const [query, setQuery] = useState("");
   const [docs, setDocs] = useState<AttachedDoc[]>([]);
   const [starting, setStarting] = useState(false);
+  // v3.6: chatting needs an account — track the session so the composer can
+  // say so BEFORE the user types (the server gate is the real enforcement;
+  // this is only the polite heads-up).
+  const [signedOut, setSignedOut] = useState(false);
   const settings = useSettings();
+
+  useEffect(() => {
+    fetch("/api/auth")
+      .then((r) => r.json())
+      .then((d) => setSignedOut(!d.user))
+      .catch(() => setSignedOut(false)); // offline/fetch failure: let the server gate speak
+  }, []);
 
   // legacy deep links: /?t=<threadId> → /r/<threadId>; Discover prefill → composer
   useEffect(() => {
@@ -71,6 +83,13 @@ export default function HomePage() {
     const res = await startResearchRun({ query: question, threadId: null, docs: withDocs ?? docs });
     setStarting(false);
     if ("error" in res) {
+      if (res.authRequired) {
+        // v3.6 sign-in gate — take the question with us so /account can send
+        // the user straight back (the composer draft is preserved below via ?next=/)
+        toast({ title: "Sign in to chat — one email code, no password." });
+        router.push("/account?next=%2F");
+        return;
+      }
       toast({ title: res.error, variant: "destructive" });
       return;
     }
@@ -136,8 +155,20 @@ export default function HomePage() {
           inputId="ask-input"
           placeholderStream={EXAMPLE_STREAM}
         />
+        {/* v3.6 sign-in gate — the polite heads-up under the composer. The
+            composer stays open (landing page stays inviting); submitting
+            without a session routes to /account and straight back after. */}
+        {signedOut && (
+          <div className="relative z-10 mt-3.5 flex w-full items-center justify-center gap-2 rounded-xl border border-primary/25 bg-primary/[0.06] px-4 py-2.5 text-[12.5px] text-muted-foreground">
+            <Lock className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />
+            <span>
+              Chatting needs a free account —{" "}
+              <Link href="/account?next=%2F" className="font-medium text-primary hover:underline">sign in with an email code</Link>
+            </span>
+          </div>
+        )}
         <p className="rise-in relative z-10 mt-3.5 text-center text-[12.5px] font-medium leading-relaxed text-muted-foreground [animation-delay:440ms]">
-          Free &amp; keyless · every claim cited &amp; audited · honest WITHHELD verdicts · exports with the evidence ledger
+          Free · no LLM keys needed · every claim cited &amp; audited · honest WITHHELD verdicts · exports with the evidence ledger
         </p>
         <p className="rise-in relative z-10 mt-1.5 text-center text-[11.5px] text-muted-foreground/80 [animation-delay:480ms]">
           <a href="/gallery" className="hover:text-foreground hover:underline">Explore the report gallery</a>

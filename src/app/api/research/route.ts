@@ -35,6 +35,18 @@ export async function POST(req: NextRequest) {
     // P1-1: authenticated runs are attributed to the account (workspace routing
     // stays opt-in per call — most signed-in users still run personal).
     const user = await getSessionUser();
+    // v3.6: chatting is an account feature. The operator closed anonymous
+    // run-starting on 2026-10-21 — anyone who wants to chat signs in first
+    // (one email code, no password). What deliberately does NOT change:
+    //   - existing anonymous runs keep their capability-URL readability
+    //   - share pages stay public (public-by-choice)
+    //   - v1 + MCP starts were never anonymous (Bearer key + research:write)
+    if (!user) {
+      return NextResponse.json(
+        { error: "Sign in to chat — it takes one email code, no password needed.", code: "auth_required" },
+        { status: 401 }
+      );
+    }
     const workspaceId =
       typeof body.workspaceId === "string" && body.workspaceId.length > 0 && body.workspaceId.length < 64 ? body.workspaceId : null;
     const preset = PRESETS[body.preset] ? body.preset : "standard";
@@ -64,7 +76,7 @@ export async function POST(req: NextRequest) {
         // P2-1 domain packs
         domain: isValidDomain(body.domain) ? body.domain : "general",
         // v3.3 accounts: attribute to the signed-in user (workspace only if explicitly chosen + owned)
-        userId: user?.id ?? null,
+        userId: user.id,
         ...(workspaceId && user ? { workspaceId } : {}),
         breadth: body.breadth != null ? clamp(body.breadth, 1, 50, p.breadth) : p.breadth,
         depth: body.depth != null ? clamp(body.depth, 1, 20, p.depth) : p.depth,
