@@ -259,6 +259,88 @@ fi
 MAN=$(curl -s "$BASE/manifest.webmanifest" || true)
 echo "$MAN" | grep -q "icon-192.png" && echo "$MAN" | grep -q "icon-512.png" && pass "manifest points at the 192/512 D icons" || fail "manifest icon refs broken"
 
+echo "── 5d · auth hardening: password management + sessions (v3.7) ──"
+# A dedicated account — the main ci-$RND session must stay alive for sections
+# 6-16 (keys/webhooks/watches ownership checks ride on $JAR).
+# Each simulated actor carries its own x-forwarded-for (v3.7 clientIp reads
+# the LAST entry = the client here): 5d adds ~11 auth POSTs and the per-IP
+# 20/min net would otherwise swallow section 16's OTP battery whole — one
+# client per actor is also the honest model of what these checks simulate.
+SECEMAIL="ci-sec-$RND@test.local"
+# W5: breach-list staples must not become account passwords
+for badpw in password123 123456789 qwerty123; do
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "x-forwarded-for: 198.51.100.201" -X POST "$BASE/api/auth" -H "Content-Type: application/json" \
+    -d "{\"action\":\"register\",\"email\":\"ci-weak-$RND@test.local\",\"password\":\"$badpw\"}")
+  [[ "$CODE" == "400" ]] && pass "register with '$badpw' → 400 (common-password screen)" || fail "register '$badpw' → $CODE (want 400)"
+done
+SECJAR=$(mktemp)
+SECREG=$(curl -s -c "$SECJAR" -H "x-forwarded-for: 198.51.100.202" -X POST "$BASE/api/auth" -H "Content-Type: application/json" \
+  -d "{\"action\":\"register\",\"email\":\"$SECEMAIL\",\"password\":\"sec-fixture-pass-11\"}")
+echo "$SECREG" | grep -q '"user"' && pass "security fixture account registered" || fail "sec register: $(echo "$SECREG" | head -c 120)"
+# new hashes carry the doubled scrypt cost (N=32768)
+HARDFMT=$(DATABASE_URL="$DATABASE_URL" bun -e '
+const { PrismaClient } = require("@prisma/client");
+const p = new PrismaClient({ datasources: { db: { url: process.env.DATABASE_URL } } });
+(async () => {
+  const u = await p.user.findUnique({ where: { email: "'$SECEMAIL'" }, select: { passwordHash: true } });
+  console.log(u?.passwordHash?.split("$").slice(0, 4).join("$") ?? "none");
+  await p.$disconnect();
+})()' 2>/dev/null || echo "err")
+[[ "$HARDFMT" == 'scrypt$32768$8$1' ]] && pass "registered hash is the new N=32768 scrypt format" || fail "hash format: $HARDFMT (want scrypt\$32768\$8\$1)"
+# W6: change-password / signout-all
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "x-forwarded-for: 198.51.100.206" -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d '{"action":"change-password","newPassword":"brand-new-pass-42"}')
+[[ "$CODE" == "401" ]] && pass "change-password anonymous → 401" || fail "change-password anon → $CODE (want 401)"
+SECJAR2=$(mktemp)
+LOGIN2=$(curl -s -c "$SECJAR2" -H "x-forwarded-for: 198.51.100.203" -X POST "$BASE/api/auth" -H "Content-Type: application/json" \
+  -d "{\"action\":\"login\",\"email\":\"$SECEMAIL\",\"password\":\"sec-fixture-pass-11\"}")
+echo "$LOGIN2" | grep -q '"user"' && pass "second device sign-in → session" || fail "second login: $(echo "$LOGIN2" | head -c 120)"
+ME2=$(curl -s -b "$SECJAR2" "$BASE/api/auth")
+echo "$ME2" | grep -q '"hasPassword":true' && pass "GET /api/auth reports hasPassword" || fail "hasPassword missing: $(echo "$ME2" | head -c 160)"
+SESCOUNT=$(echo "$ME2" | grep -o '"activeSessions":[0-9]*' | grep -o '[0-9]*$' || echo 0)
+[[ "$SESCOUNT" -ge 2 ]] && pass "activeSessions counts both devices ($SESCOUNT ≥ 2)" || fail "activeSessions: $SESCOUNT (want ≥ 2)"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -b "$SECJAR" -H "x-forwarded-for: 198.51.100.202" -X POST "$BASE/api/auth" -H "Content-Type: application/json" \
+  -d '{"action":"change-password","currentPassword":"totally-wrong-old","newPassword":"brand-new-pass-42"}')
+[[ "$CODE" == "401" ]] && pass "change-password with wrong current → 401" || fail "wrong current → $CODE (want 401)"
+CHPW=$(curl -s -b "$SECJAR" -H "x-forwarded-for: 198.51.100.202" -X POST "$BASE/api/auth" -H "Content-Type: application/json" \
+  -d '{"action":"change-password","currentPassword":"sec-fixture-pass-11","newPassword":"brand-new-pass-42"}')
+echo "$CHPW" | grep -q '"ok":true' && pass "change-password → ok" || fail "change-password: $(echo "$CHPW" | head -c 160)"
+REVOKED=$(echo "$CHPW" | grep -o '"revoked":[0-9]*' | grep -o '[0-9]*$' || echo 0)
+[[ "$REVOKED" -ge 1 ]] && pass "other session(s) revoked on password change ($REVOKED)" || fail "revoked: $REVOKED (want ≥ 1)"
+DEAD=$(curl -s -b "$SECJAR2" "$BASE/api/auth")
+echo "$DEAD" | grep -q '"user":null' && pass "second device's session is dead after the change" || fail "second session survived: $(echo "$DEAD" | head -c 160)"
+ALIVE=$(curl -s -b "$SECJAR" "$BASE/api/auth")
+echo "$ALIVE" | grep -q "\"$SECEMAIL\"" && pass "current device stays signed in" || fail "current session died too: $(echo "$ALIVE" | head -c 160)"
+RELOGIN=$(curl -s -H "x-forwarded-for: 198.51.100.204" -X POST "$BASE/api/auth" -H "Content-Type: application/json" \
+  -d "{\"action\":\"login\",\"email\":\"$SECEMAIL\",\"password\":\"brand-new-pass-42\"}")
+echo "$RELOGIN" | grep -q '"user"' && pass "login with the NEW password → 200 (N=32768 verify end-to-end)" || fail "new-password login: $(echo "$RELOGIN" | head -c 160)"
+# legacy N=16384 hashes (every pre-v3.7 account) must keep verifying live
+LEMAIL="ci-legacy-$RND@test.local"
+DATABASE_URL="$DATABASE_URL" bun -e '
+const { PrismaClient } = require("@prisma/client");
+const p = new PrismaClient({ datasources: { db: { url: process.env.DATABASE_URL } } });
+(async () => {
+  await p.user.create({ data: { email: "'$LEMAIL'", name: "legacy", passwordHash: "scrypt$16384$8$1$Hdf4dc5l0hytsqS+ZCflgg==$dhnBfG1MhhZfSxL9KQi0MB1ZMJreKAVJHwbZv/nN9LAeP4Xjtfdvav8ZAZxDKfJaLj0CmQabqI59sOVfA+/CvA==" } });
+  await p.$disconnect();
+})()' 2>/dev/null || true
+LLOGIN=$(curl -s -H "x-forwarded-for: 198.51.100.205" -X POST "$BASE/api/auth" -H "Content-Type: application/json" \
+  -d "{\"action\":\"login\",\"email\":\"$LEMAIL\",\"password\":\"legacy-fixture-pass-9\"}")
+echo "$LLOGIN" | grep -q '"user"' && pass "legacy N=16384 hash still logs in (params honored, zero migration)" || fail "legacy hash login: $(echo "$LLOGIN" | head -c 160)"
+# signout-all kills every device including the caller's
+SOA=$(curl -s -b "$SECJAR" -H "x-forwarded-for: 198.51.100.202" -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d '{"action":"signout-all"}')
+echo "$SOA" | grep -q '"ok":true' && pass "signout-all → ok" || fail "signout-all: $(echo "$SOA" | head -c 160)"
+ALLDEAD=$(curl -s -b "$SECJAR" "$BASE/api/auth")
+echo "$ALLDEAD" | grep -q '"user":null' && pass "caller's own session dead after signout-all" || fail "session survived signout-all: $(echo "$ALLDEAD" | head -c 160)"
+# W9: baseline security headers on every response
+HHDR=$(curl -sI "$BASE/" || true)
+echo "$HHDR" | grep -qi "strict-transport-security" && pass "HSTS header present" || fail "HSTS missing on /"
+echo "$HHDR" | grep -qi "x-content-type-options: nosniff" && pass "nosniff header present" || fail "nosniff missing on /"
+# throwaway account for the 16b lockout battery (registered here so 16b burns
+# zero auth-budget on it; ci- prefix → cleaned up by section 17)
+LOCKEMAIL="ci-lock-$RND@test.local"
+LOCKREG=$(curl -s -H "x-forwarded-for: 198.51.100.207" -X POST "$BASE/api/auth" -H "Content-Type: application/json" \
+  -d "{\"action\":\"register\",\"email\":\"$LOCKEMAIL\",\"password\":\"lock-me-out-77\"}")
+echo "$LOCKREG" | grep -q '"user"' && pass "lockout fixture account registered" || fail "lock fixture register: $(echo "$LOCKREG" | head -c 120)"
+
 echo "── 6 · Public API v1 auth boundary ──"
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/v1/research" -H "Content-Type: application/json" -d '{"query":"test"}')
 [[ "$CODE" == "401" ]] && pass "v1 without key → 401" || fail "v1 without key → $CODE (want 401)"
@@ -620,6 +702,51 @@ else
 fi
 if echo "$RCODE" | grep -q "Enter a valid email address"; then
   fail "otp-send rejection still blames the email (regression)"
+fi
+
+echo "── 16b · v3.7 lockouts: login brute-force freeze (DB-backed) ──"
+# Sections 5d+15+16 burned close to the 20/min IP budget — let the window
+# roll over so the per-IP limiter can never masquerade as the DB lockout.
+sleep 65
+# 5 wrong passwords → 401s (each recorded in AuthAttempt)…
+LOCKFAILS=0
+for i in 1 2 3 4 5; do
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/auth" -H "Content-Type: application/json" \
+    -d "{\"action\":\"login\",\"email\":\"$LOCKEMAIL\",\"password\":\"wrong-pass-$i\"}")
+  [[ "$CODE" == "401" ]] || LOCKFAILS=$((LOCKFAILS+1))
+done
+[[ "$LOCKFAILS" == "0" ]] && pass "5 wrong passwords → five 401s (attempt counter filling)" || fail "$LOCKFAILS of the 5 wrong logins were not 401"
+# …the 6th is frozen out EVEN WITH THE CORRECT PASSWORD (fail-closed window)
+LOCKED=$(curl -s -w "|%{http_code}" -X POST "$BASE/api/auth" -H "Content-Type: application/json" \
+  -d "{\"action\":\"login\",\"email\":\"$LOCKEMAIL\",\"password\":\"lock-me-out-77\"}")
+if echo "$LOCKED" | grep -q "|429$" && echo "$LOCKED" | grep -q "Too many failed sign-ins"; then
+  pass "6th attempt with the CORRECT password → 429 account lockout (fail-closed)"
+else
+  fail "login lockout: $(echo "$LOCKED" | head -c 200) (want 429 + Too many failed sign-ins)"
+fi
+
+echo "── 16c · v3.7 lockouts: OTP code-entry freeze (DB-backed, cross-IP) ──"
+# 10 wrong codes → 401s; the 11th arrives from a DIFFERENT client IP (fresh
+# XFF entry — v3.7's last-entry clientIp) so the per-IP limiter is provably
+# NOT what stops it: only the per-email DB lockout can.
+sleep 65
+OTPLOCKEMAIL="ci-otplock-$RND@test.local"
+S=$(curl -s -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d "{\"action\":\"otp-send\",\"email\":\"$OTPLOCKEMAIL\"}")
+echo "$S" | grep -q '"ok":true' && pass "otp-send for the lock battery → ok" || fail "otp-send (lock): $(echo "$S" | head -c 120)"
+OTPFAILS=0
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  WRONGCODE=$(printf "%08d" "$i") # always 8 digits (i=10 must not become 9)
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/auth" -H "Content-Type: application/json" \
+    -d "{\"action\":\"otp-verify\",\"email\":\"$OTPLOCKEMAIL\",\"code\":\"$WRONGCODE\"}")
+  [[ "$CODE" == "401" ]] || OTPFAILS=$((OTPFAILS+1))
+done
+[[ "$OTPFAILS" == "0" ]] && pass "10 wrong codes → ten 401s (attempt counter filling)" || fail "$OTPFAILS of the 10 wrong codes were not 401"
+OTPLOCKED=$(curl -s -w "|%{http_code}" -H "x-forwarded-for: 203.0.113.99" -X POST "$BASE/api/auth" -H "Content-Type: application/json" \
+  -d "{\"action\":\"otp-verify\",\"email\":\"$OTPLOCKEMAIL\",\"code\":\"246810\"}")
+if echo "$OTPLOCKED" | grep -q "|429$" && echo "$OTPLOCKED" | grep -q "Too many incorrect codes"; then
+  pass "11th code from a fresh IP (even the RIGHT code) → 429 per-email lockout"
+else
+  fail "otp lockout: $(echo "$OTPLOCKED" | head -c 200) (want 429 + Too many incorrect codes)"
 fi
 
 echo "── 17 · Cleanup: purge this suite's test data (cascade) ──"

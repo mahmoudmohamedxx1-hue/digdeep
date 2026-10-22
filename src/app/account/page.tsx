@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Copy, KeyRound, LogOut, Plus, RefreshCw, Scale, ShieldCheck, Users, Check, X, Webhook, Eye, Play,
+  Copy, KeyRound, Lock, LogOut, Plus, RefreshCw, Scale, ShieldCheck, Users, Check, X, Webhook, Eye, Play,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -74,6 +74,13 @@ export default function AccountPage() {
   const [wsName, setWsName] = useState("");
   const [joinCode, setJoinCode] = useState("");
   const [claimed, setClaimed] = useState<number | null>(null);
+  // v3.7 account security: password management + session overview
+  const [hasPassword, setHasPassword] = useState(false);
+  const [activeSessions, setActiveSessions] = useState(0);
+  const [pwCurrent, setPwCurrent] = useState("");
+  const [pwNew, setPwNew] = useState("");
+  const [pwConfirm, setPwConfirm] = useState("");
+  const [pwBusy, setPwBusy] = useState(false);
   const court = useSettings((s) => s.court);
 
   const loadAll = useCallback(async () => {
@@ -82,6 +89,8 @@ export default function AccountPage() {
       const u = (res.user ?? null) as SessionUser | null;
       setUser(u);
       setOtpOn(!!(res as { otpEnabled?: boolean }).otpEnabled);
+      setHasPassword(!!(res as { hasPassword?: boolean }).hasPassword);
+      setActiveSessions((res as { activeSessions?: number }).activeSessions ?? 0);
       if (u) {
         const [k, w, h, wt] = await Promise.all([
           fetch("/api/keys").then((r) => r.json()),
@@ -260,6 +269,76 @@ export default function AccountPage() {
     setHooks([]);
     setWatches([]);
     toast({ title: "Signed out. Your local history stays in this browser." });
+  }
+
+  /** v3.7: set or change the account password. Requires the current one when
+   *  a password exists; OTP-only accounts can set their first from this
+   *  session. Every OTHER signed-in device is signed out on success. */
+  async function changePassword(e: React.FormEvent) {
+    e.preventDefault();
+    if (pwNew !== pwConfirm) {
+      toast({ title: "The two new passwords don't match." });
+      return;
+    }
+    setPwBusy(true);
+    try {
+      const res = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "change-password",
+          ...(hasPassword ? { currentPassword: pwCurrent } : {}),
+          newPassword: pwNew,
+        }),
+      }).then((r) => r.json());
+      if (res.error) {
+        toast({ title: res.error });
+        return;
+      }
+      setHasPassword(true);
+      setPwCurrent("");
+      setPwNew("");
+      setPwConfirm("");
+      setActiveSessions(1); // only this device's session survived
+      toast({
+        title: res.revoked > 0
+          ? `Password updated — ${res.revoked} other session${res.revoked > 1 ? "s" : ""} signed out.`
+          : "Password updated.",
+      });
+    } catch {
+      toast({ title: "Could not update the password — check your connection." });
+    } finally {
+      setPwBusy(false);
+    }
+  }
+
+  /** v3.7: kill every session on every device (lost-phone button). */
+  async function signoutAll() {
+    setPwBusy(true);
+    try {
+      const res = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "signout-all" }),
+      }).then((r) => r.json());
+      if (res.error) {
+        toast({ title: res.error });
+        return;
+      }
+      setUser(null);
+      setKeys([]);
+      setWorkspaces([]);
+      setHooks([]);
+      setWatches([]);
+      setPwCurrent("");
+      setPwNew("");
+      setPwConfirm("");
+      toast({ title: `Signed out everywhere — ${res.signedOut} session${res.signedOut > 1 ? "s" : ""} ended.` });
+    } catch {
+      toast({ title: "Could not sign out — check your connection." });
+    } finally {
+      setPwBusy(false);
+    }
   }
 
   async function createKey() {
@@ -509,6 +588,70 @@ export default function AccountPage() {
           <LogOut className="mr-1.5 h-3.5 w-3.5" /> Sign out
         </Button>
       </header>
+
+      {/* SECURITY (v3.7) — password management + session overview */}
+      <section className="rounded-2xl border p-5">
+        <h2 className="flex items-center gap-2 text-lg font-semibold">
+          <Lock className="h-4.5 w-4.5 text-primary" /> Security
+        </h2>
+        <p className="mt-1.5 text-sm text-muted-foreground">
+          {activeSessions > 0 && (
+            <>
+              {activeSessions} active session{activeSessions > 1 ? "s" : ""} — you're signed in on this device
+              {activeSessions > 1 ? ` and ${activeSessions - 1} other${activeSessions - 1 > 1 ? "s" : ""}` : ""}.
+            </>
+          )}{" "}
+          Changing the password signs out every other device.
+        </p>
+        <form onSubmit={changePassword} className="mt-4 grid gap-3 sm:grid-cols-3">
+          {hasPassword ? (
+            <Input
+              type="password"
+              placeholder="Current password"
+              value={pwCurrent}
+              onChange={(e) => setPwCurrent(e.target.value)}
+              autoComplete="current-password"
+              required
+            />
+          ) : (
+            <div className="flex items-center text-xs text-muted-foreground sm:col-span-1">
+              You sign in with email codes today — set a password to also sign in directly.
+            </div>
+          )}
+          <Input
+            type="password"
+            placeholder={hasPassword ? "New password" : "New password (8+)"}
+            value={pwNew}
+            onChange={(e) => setPwNew(e.target.value)}
+            autoComplete="new-password"
+            minLength={8}
+            required
+          />
+          <div className="flex gap-2">
+            <Input
+              type="password"
+              placeholder="Repeat it"
+              value={pwConfirm}
+              onChange={(e) => setPwConfirm(e.target.value)}
+              autoComplete="new-password"
+              minLength={8}
+              required
+            />
+            <Button type="submit" size="sm" disabled={pwBusy} className="shrink-0">
+              {hasPassword ? <RefreshCw className="mr-1 h-3.5 w-3.5" /> : <Check className="mr-1 h-3.5 w-3.5" />}
+              {hasPassword ? "Update" : "Set"}
+            </Button>
+          </div>
+        </form>
+        <div className="mt-4 flex items-center justify-between gap-3 border-t pt-4">
+          <p className="text-xs text-muted-foreground">
+            Lost a device, or signed in somewhere you don't trust? End every session at once.
+          </p>
+          <Button variant="outline" size="sm" onClick={signoutAll} disabled={pwBusy} className="shrink-0 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive">
+            <ShieldCheck className="mr-1.5 h-3.5 w-3.5" /> Sign out everywhere
+          </Button>
+        </div>
+      </section>
 
       {/* API KEYS (P2-3) */}
       <section>
@@ -796,7 +939,7 @@ export default function AccountPage() {
           <li className="flex gap-2"><Scale className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" /> Cross-device history sync — your threads live on the server, not just this browser</li>
           <li className="flex gap-2"><KeyRound className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" /> API keys for programmatic verified reports (court verdicts included)</li>
           <li className="flex gap-2"><Users className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" /> Team workspaces with shared, auditable research libraries</li>
-          <li className="flex gap-2"><ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" /> Anonymous-first forever — an account is optional; the engine stays free and keyless</li>
+          <li className="flex gap-2"><ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" /> Free forever, no LLM keys needed — anyone can read shared reports; chatting takes this free account</li>
         </ul>
       </section>
     </div>

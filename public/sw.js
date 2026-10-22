@@ -4,7 +4,7 @@
  * Offline: the offline page + cached shell let the user read their local
  * (IndexedDB) history even with no connection.
  */
-const VERSION = "digdeep-v3.6.1";
+const VERSION = "digdeep-v3.7.0";
 const STATIC_CACHE = `${VERSION}-static`;
 const PAGE_CACHE = `${VERSION}-pages`;
 

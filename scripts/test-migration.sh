@@ -24,16 +24,19 @@ BASE_URL="postgresql://postgres:postgres@localhost:5433"
 V33="prisma/migrations/20261020_v33_accounts_workspaces_api_domain"
 V34="prisma/migrations/20261021_v34_platform_scopes_webhooks_watches"
 V35="prisma/migrations/20261021_v35_email_otp_auth"
+V37="prisma/migrations/20261022_v37_auth_hardening"
 STASH="$(mktemp -d)"
 
 # stash/restore ALL post-init migration dirs — base states (A/B/D) must start
-# from init+shared only, with v33+v34+v35 applied on top (v3.4 added v34, v3.5
-# added v35: its ALTER targets "User" which only exists after v33).
-stash_post() { mv "$V33" "$STASH/"; mv "$V34" "$STASH/"; mv "$V35" "$STASH/"; }
+# from init+shared only, with v33+v34+v35+v37 applied on top (v3.4 added v34,
+# v3.5 added v35: its ALTER targets "User" which only exists after v33;
+# v3.7 added v37: a CREATE TABLE, order-independent but tested the same way).
+stash_post() { mv "$V33" "$STASH/"; mv "$V34" "$STASH/"; mv "$V35" "$STASH/"; mv "$V37" "$STASH/"; }
 restore_post() {
   mv "$STASH/20261020_v33_accounts_workspaces_api_domain" prisma/migrations/
   mv "$STASH/20261021_v34_platform_scopes_webhooks_watches" prisma/migrations/
   mv "$STASH/20261021_v35_email_otp_auth" prisma/migrations/
+  mv "$STASH/20261022_v37_auth_hardening" prisma/migrations/
 }
 
 pass() { echo "  ✅ $1"; }
@@ -76,13 +79,13 @@ stash_post
 DATABASE_URL="$BASE_URL/mig_a" npx prisma migrate deploy >/dev/null 2>&1 && pass "init + shared_reports applied" || fail "base migrations failed on mig_a"
 DATABASE_URL="$BASE_URL/mig_a" npx prisma db push --skip-generate --accept-data-loss >/dev/null 2>&1 && pass "db push evolution (prod simulation)" || fail "db push failed on mig_a"
 restore_post
-DATABASE_URL="$BASE_URL/mig_a" npx prisma migrate deploy >/dev/null 2>&1 && pass "v3.3+v3.4 migrations applied over evolved schema (idempotent)" || fail "post-init migrations FAILED on evolved schema — this is the deploy killer"
+DATABASE_URL="$BASE_URL/mig_a" npx prisma migrate deploy >/dev/null 2>&1 && pass "v3.3+v3.4+v3.5+v3.7 migrations applied over evolved schema (idempotent)" || fail "post-init migrations FAILED on evolved schema — this is the deploy killer"
 
 echo "── State B: clean history (init+shared only, v3.3+v3.4 add everything) ──"
 stash_post
 DATABASE_URL="$BASE_URL/mig_b" npx prisma migrate deploy >/dev/null 2>&1 && pass "init + shared_reports applied" || fail "base migrations failed on mig_b"
 restore_post
-DATABASE_URL="$BASE_URL/mig_b" npx prisma migrate deploy >/dev/null 2>&1 && pass "v3.3+v3.4 applied on clean history" || fail "post-init migrations FAILED on clean history"
+DATABASE_URL="$BASE_URL/mig_b" npx prisma migrate deploy >/dev/null 2>&1 && pass "v3.3+v3.4+v3.5+v3.7 applied on clean history" || fail "post-init migrations FAILED on clean history"
 
 echo "── State C: empty database (full history from zero) ──"
 DATABASE_URL="$BASE_URL/mig_c" npx prisma migrate deploy >/dev/null 2>&1 && pass "full history applied from zero" || fail "full deploy FAILED from zero"
@@ -122,6 +125,8 @@ V34DONE=$(pg_scalar mig_d "SELECT count(*)::int AS n FROM _prisma_migrations WHE
 [[ "$V34DONE" == "1" ]] && pass "v3.4 migration recorded as cleanly applied" || fail "v3.4 migration not applied after self-heal ($V34DONE)"
 V35DONE=$(pg_scalar mig_d "SELECT count(*)::int AS n FROM _prisma_migrations WHERE migration_name = \$1 AND finished_at IS NOT NULL" 20261021_v35_email_otp_auth)
 [[ "$V35DONE" == "1" ]] && pass "v3.5 migration recorded as cleanly applied (heal applied it too)" || fail "v3.5 migration not applied after self-heal ($V35DONE)"
+V37DONE=$(pg_scalar mig_d "SELECT count(*)::int AS n FROM _prisma_migrations WHERE migration_name = \$1 AND finished_at IS NOT NULL" 20261022_v37_auth_hardening)
+[[ "$V37DONE" == "1" ]] && pass "v3.7 migration recorded as cleanly applied (heal applied it too)" || fail "v3.7 migration not applied after self-heal ($V37DONE)"
 LEFT=$(pg_scalar mig_d "SELECT count(*)::int AS n FROM _prisma_migrations WHERE finished_at IS NULL AND rolled_back_at IS NULL")
 [[ "$LEFT" == "0" ]] && pass "no failed records remain" || fail "$LEFT failed record(s) remain after self-heal"
 
@@ -129,6 +134,12 @@ echo "── Drift check: migrations must reproduce schema.prisma exactly ──
 # v3.5 purpose check on the from-zero DB: OTP accounts need a nullable password
 NULLABLE=$(pg_scalar mig_c "SELECT (is_nullable = 'YES')::int AS n FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'User' AND column_name = 'passwordHash'")
 [[ "$NULLABLE" == "1" ]] && pass "User.passwordHash is nullable after full history (OTP-only accounts possible)" || fail "passwordHash still NOT NULL after migrations"
+# v3.7 purpose check: the durable attempt table must exist with its lockout
+# index after full history (login/OTP lockouts are the whole point of v37)
+ATABLE=$(pg_scalar mig_c "SELECT count(*)::int AS n FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'AuthAttempt'")
+[[ "$ATABLE" == "1" ]] && pass "AuthAttempt table exists after full history (v3.7 lockouts backed)" || fail "AuthAttempt table missing after migrations"
+AIDX=$(pg_scalar mig_c "SELECT count(*)::int AS n FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'AuthAttempt' AND indexname = 'AuthAttempt_kind_email_createdAt_idx'")
+[[ "$AIDX" == "1" ]] && pass "AuthAttempt lockout index present (kind, email, createdAt)" || fail "AuthAttempt index missing after migrations"
 for db in mig_a mig_b mig_c mig_d; do
   DIFF=$(npx prisma migrate diff --from-url "$BASE_URL/$db" --to-schema-datamodel prisma/schema.prisma 2>/dev/null | grep -cE '^\s*[-+~]' || true)
   [[ "$DIFF" == "0" ]] && pass "$db matches schema.prisma (no drift)" || fail "$db DRIFTS from schema.prisma ($(npx prisma migrate diff --from-url "$BASE_URL/$db" --to-schema-datamodel prisma/schema.prisma 2>/dev/null | grep -E '^\s*[-+~]' | head -3))"

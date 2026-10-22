@@ -59,6 +59,35 @@ echo "$GSESS" | grep -q '"id"' && pass "signed-in chat start → run created (ga
 GJOB=$(echo "$GSESS" | grep -o '"id":"[a-z0-9]*"' | head -1 | cut -d'"' -f4 || true)
 [ -n "$GJOB" ] && curl -s -o /dev/null -b "$JAR" -X PATCH "$BASE/api/research/$GJOB" -H "Content-Type: application/json" -d '{"action":"cancel"}'
 
+echo "── E3 · v3.7 auth hardening: headers, weak-password screen, password lifecycle ──"
+HHDR=$(curl -sI "$BASE/" || true)
+echo "$HHDR" | grep -qi "strict-transport-security" && pass "HSTS header on prod" || fail "HSTS missing on prod /"
+echo "$HHDR" | grep -qi "x-content-type-options: nosniff" && pass "nosniff header on prod" || fail "nosniff missing on prod /"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/auth" -H "Content-Type: application/json" \
+  -d '{"action":"register","email":"weak-pw-probe@test.local","password":"password123"}')
+[[ "$CODE" == "400" ]] && pass "register with password123 → 400 (common-password screen live)" || fail "weak register → $CODE (want 400)"
+ME=$(curl -s -b "$JAR" "$BASE/api/auth")
+echo "$ME" | grep -q '"hasPassword":true' && pass "GET /api/auth reports hasPassword" || fail "hasPassword missing: $(echo "$ME" | head -c 160)"
+SESS=$(echo "$ME" | grep -o '"activeSessions":[0-9]*' | grep -o '[0-9]*$' || echo 0)
+[[ "$SESS" -ge 1 ]] && pass "activeSessions present ($SESS)" || fail "activeSessions: $SESS"
+JAR2=$(mktemp)
+LOGIN2=$(curl -s -c "$JAR2" -X POST "$BASE/api/auth" -H "Content-Type: application/json" \
+  -d "{\"action\":\"login\",\"email\":\"$EMAIL\",\"password\":\"ci-password-123\"}")
+echo "$LOGIN2" | grep -q '"user"' && pass "second device login → session" || fail "second login: $(echo "$LOGIN2" | head -c 160)"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -b "$JAR" -X POST "$BASE/api/auth" -H "Content-Type: application/json" \
+  -d '{"action":"change-password","currentPassword":"totally-wrong","newPassword":"rotated-audit-pass-9"}')
+[[ "$CODE" == "401" ]] && pass "change-password wrong current → 401" || fail "wrong current → $CODE (want 401)"
+CHPW=$(curl -s -b "$JAR" -X POST "$BASE/api/auth" -H "Content-Type: application/json" \
+  -d '{"action":"change-password","currentPassword":"ci-password-123","newPassword":"rotated-audit-pass-9"}')
+echo "$CHPW" | grep -q '"ok":true' && pass "change-password → ok" || fail "change-password: $(echo "$CHPW" | head -c 160)"
+DEAD=$(curl -s -b "$JAR2" "$BASE/api/auth")
+echo "$DEAD" | grep -q '"user":null' && pass "other device's session revoked on change" || fail "second session survived: $(echo "$DEAD" | head -c 160)"
+ALIVE=$(curl -s -b "$JAR" "$BASE/api/auth")
+echo "$ALIVE" | grep -q '"user":{' && pass "current session survives the change" || fail "current session died: $(echo "$ALIVE" | head -c 160)"
+NLOGIN=$(curl -s -X POST "$BASE/api/auth" -H "Content-Type: application/json" \
+  -d "{\"action\":\"login\",\"email\":\"$EMAIL\",\"password\":\"rotated-audit-pass-9\"}")
+echo "$NLOGIN" | grep -q '"user"' && pass "login with the NEW password → 200 (new scrypt params live on prod)" || fail "new-password login: $(echo "$NLOGIN" | head -c 160)"
+
 echo "── F · F6 webhook SSRF guard ──"
 CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/v1/webhooks" -H "Authorization: Bearer $DDK" -H "Content-Type: application/json" -d '{"action":"create","url":"http://169.254.169.254/latest/meta-data","events":["run.completed"]}')
 [[ "$CODE" == "400" ]] && pass "webhook to metadata IP → 400" || fail "metadata webhook → $CODE (want 400)"
@@ -125,6 +154,12 @@ KEYS=$(curl -s -b "$JAR" "$BASE/api/keys")
 for KID in $(echo "$KEYS" | grep -o '"id":"[a-z0-9]*"' | cut -d'"' -f4); do
   curl -s -o /dev/null -b "$JAR" -X POST "$BASE/api/keys" -H "Content-Type: application/json" -d "{\"action\":\"revoke\",\"id\":\"$KID\"}"
 done
+
+echo "── K · v3.7 signout-all ends every session (incl. the caller's) ──"
+SOA=$(curl -s -b "$JAR" -X POST "$BASE/api/auth" -H "Content-Type: application/json" -d '{"action":"signout-all"}')
+echo "$SOA" | grep -q '"ok":true' && pass "signout-all → ok" || fail "signout-all: $(echo "$SOA" | head -c 160)"
+ALLDEAD=$(curl -s -b "$JAR" "$BASE/api/auth")
+echo "$ALLDEAD" | grep -q '"user":null' && pass "caller's session dead after signout-all" || fail "session survived signout-all: $(echo "$ALLDEAD" | head -c 160)"
 echo "  (keys revoked; test account $EMAIL remains — delete from /account if undesired)"
 
 echo ""

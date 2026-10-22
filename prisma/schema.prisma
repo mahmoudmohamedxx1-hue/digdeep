@@ -264,3 +264,18 @@ model Watch {
 
   @@index([active, nextRunAt])
 }
+
+// v3.7 — DURABLE AUTH ATTEMPTS. The in-memory rate limiter is per serverless
+// instance (resets on every cold start) and per-IP only, so distributed
+// brute-force against ONE account was unthrottled. This table backs the
+// per-email lockouts (login 5 fails / 15 min, OTP 10 fails / 15 min) and the
+// per-email send cooldown — state that must survive instance recycling.
+// Retention: rows older than 24h are swept opportunistically on write.
+model AuthAttempt {
+  id        String   @id @default(cuid())
+  kind      String // "login" | "otp" | "otpsend"
+  email     String
+  createdAt DateTime @default(now())
+
+  @@index([kind, email, createdAt])
+}

@@ -3,7 +3,21 @@ import { promisify } from "util";
 import { cookies } from "next/headers";
 import { db } from "@/lib/db";
 
-const scrypt = promisify(_scrypt) as (pw: string, salt: Buffer, len: number) => Promise<Buffer>;
+// v3.7: scrypt parameters are carried IN the stored string and honored on
+// verify (previously verify silently relied on Node's defaults matching the
+// format string — a latent bomb: any param bump would have broken every
+// existing login). New hashes cost 2× memory (OWASP direction); old ones
+// keep verifying forever.
+const SCRYPT_N = 32768;
+const SCRYPT_R = 8;
+const SCRYPT_P = 1;
+const SCRYPT_MAXMEM = 128 * 1024 * 1024; // ≥ 128·N·r for every N we ever issue
+const scrypt = promisify(_scrypt) as (
+  pw: string,
+  salt: Buffer,
+  len: number,
+  opts: { N: number; r: number; p: number; maxmem: number }
+) => Promise<Buffer>;
 
 export const SESSION_COOKIE = "digdeep_session";
 const SESSION_DAYS = 30;
@@ -11,21 +25,96 @@ const SESSION_DAYS = 30;
 /** scrypt password hash — format: scrypt$N$r$p$salt_b64$hash_b64 (no native deps). */
 export async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16);
-  const hash = await scrypt(password, salt, 64);
-  return `scrypt$16384$8$1$${salt.toString("base64")}$${hash.toString("base64")}`;
+  const hash = await scrypt(password, salt, 64, {
+    N: SCRYPT_N,
+    r: SCRYPT_R,
+    p: SCRYPT_P,
+    maxmem: SCRYPT_MAXMEM,
+  });
+  return `scrypt$${SCRYPT_N}$${SCRYPT_R}$${SCRYPT_P}$${salt.toString("base64")}$${hash.toString("base64")}`;
 }
 
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {
   try {
     const parts = stored.split("$");
     if (parts.length !== 6 || parts[0] !== "scrypt") return false;
+    // v3.7: honor the params the hash was written with (legacy 16384 hashes
+    // from pre-v3.7 accounts verify exactly like new 32768 ones)
+    const N = Number.parseInt(parts[1] ?? "", 10);
+    const r = Number.parseInt(parts[2] ?? "", 10);
+    const p = Number.parseInt(parts[3] ?? "", 10);
+    if (!Number.isFinite(N) || !Number.isFinite(r) || !Number.isFinite(p) || N < 2 || r < 1 || p < 1) {
+      return false;
+    }
     const salt = Buffer.from(parts[4], "base64");
     const expected = Buffer.from(parts[5], "base64");
-    const hash = await scrypt(password, salt, expected.length);
+    if (!salt.length || !expected.length) return false;
+    const hash = await scrypt(password, salt, expected.length, {
+      N,
+      r,
+      p,
+      maxmem: SCRYPT_MAXMEM,
+    });
     return hash.length === expected.length && timingSafeEqual(hash, expected);
   } catch {
     return false;
   }
+}
+
+// A fixed scrypt hash of an UNGUESSABLE random value. Verifying against it
+// when the email has no account keeps login latency uniform (known-address
+// runs scrypt, unknown-address now does too) — kills the timing oracle that
+// let anyone enumerate registered emails by response time.
+const DUMMY_VERIFY_HASH =
+  "scrypt$32768$8$1$eT+sacpiFjng0gkRM/3X5A==$xiEG3EcLNVsn5TIpQKk6hpnGQThq3ZLoVk+Xx/OAZTAjsnP70DZbOC19LLkot7UFujmfNBOM1/Ccd0LmMYdWnw==";
+
+/** Timing-equalizing verify for the "account doesn't exist" login path. */
+export async function verifyDummyPassword(password: string): Promise<void> {
+  await verifyPassword(password, DUMMY_VERIFY_HASH);
+}
+
+// v3.7 — common-password screen. Exact-match list (normalized lowercase) of
+// the passwords that dominate breach corpora, plus structural patterns that
+// make a secret trivially guessable regardless of the list (all digits,
+// single repeated character, keyboard/alpha runs in either direction).
+const COMMON_PASSWORDS = new Set([
+  "password", "password1", "password123", "password1234", "passw0rd", "p@ssw0rd", "p@ssword",
+  "123456", "1234567", "12345678", "123456789", "1234567890", "12345678910",
+  "qwerty", "qwerty123", "qwertyuiop", "qwertyui", "1q2w3e4r", "1qaz2wsx", "qazwsx",
+  "abc123", "abcd1234", "abcdefgh", "abcdefghijklmnopqrstuvwxyz", "aaaaaa",
+  "letmein", "letmein123", "welcome", "welcome1", "welcome123", "admin", "admin123",
+  "admin1234", "administrator", "root", "root123", "toor", "superuser", "login",
+  "iloveyou", "sunshine", "princess", "dragon", "monkey", "master", "master123",
+  "football", "baseball", "basketball", "soccer", "hockey", "jordan23", "liverpool",
+  "chelsea", "arsenal", "barcelona", "realmadrid", "manchester", "yankees", "cowboys",
+  "ninja", "shadow", "michael", "jennifer", "jessica", "charlie", "freedom",
+  "whatever", "secret", "secrets", "passcode", "passwort", "motdepasse", "contrasena",
+  "hello123", "hi123456", "test123", "test1234", "guest", "user", "guest123",
+  "changeme", "change_me", "temporary", "default", "google", "facebook", "youtube",
+  "starwars", "pokemon", "minecraft", "computer", "internet", "samsung", "android",
+  "apple123", "iphone", "nokia", "blackberry", "summer1", "winter1", "spring1",
+  "holiday", "vacation", "birthday", "christmas", "halloween", "valentine",
+  "trustno1", "zaq12wsx", "1q2w3e", "qwe123", "asd123", "zxc123", "123qwe", "123abc",
+  "matrix", "neo123", "trinity", "access", "mustang", "corvette", "ferrari",
+  "harley", "banana", "chocolate", "cookie", "flower", "prettywoman",
+  "rockyou", "myspace1", "linkedin", "twitter", "instagram", "tiktok", "snapchat",
+]);
+const KEYBOARD_RUNS = [
+  "qwertyuiop", "asdfghjkl", "zxcvbnm", "1234567890", "abcdefghijklmnopqrstuvwxyz",
+];
+
+/** True when the password is trivially guessable (breach-list staple or a
+ *  structural pattern: digits-only, single-char repeat, keyboard/alpha run). */
+export function isCommonPassword(password: string): boolean {
+  const n = password.toLowerCase();
+  if (COMMON_PASSWORDS.has(n)) return true;
+  if (/^\d+$/.test(n)) return true; // any digits-only password is guessable
+  if (/^(.)\1+$/.test(n)) return true; // aaaaaaaa / 11111111 / …
+  for (const run of KEYBOARD_RUNS) {
+    if (n.length >= 6 && run.includes(n)) return true; // forward run (qwerty…)
+    if (n.length >= 6 && run.split("").reverse().join("").includes(n)) return true; // reversed
+  }
+  return false;
 }
 
 export function hashApiKey(key: string): string {
@@ -75,12 +164,31 @@ export async function createSession(userId: string): Promise<string> {
   const id = randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 86400_000);
   await db.session.create({ data: { id, userId, expiresAt } });
+  // v3.7: expired sessions were only deleted lazily (when their exact token
+  // was re-presented) — everything else piled up forever. Opportunistic
+  // sweep: 2% of sign-ins clear the backlog (cheap deleteMany on the index).
+  if (Math.random() < 0.02) {
+    await db.session.deleteMany({ where: { expiresAt: { lt: new Date() } } }).catch(() => {});
+  }
   return id;
 }
 
 export async function destroySession(token: string | undefined): Promise<void> {
   if (!token) return;
   await db.session.delete({ where: { id: token } }).catch(() => {});
+}
+
+/** v3.7: destroy EVERY session of a user ("sign out everywhere"). */
+export async function destroyAllSessions(userId: string): Promise<number> {
+  const res = await db.session.deleteMany({ where: { userId } }).catch(() => null);
+  return res?.count ?? 0;
+}
+
+/** v3.7: how many live sessions the account has (account page shows this). */
+export async function countActiveSessions(userId: string): Promise<number> {
+  return db.session
+    .count({ where: { userId, expiresAt: { gt: new Date() } } })
+    .catch(() => 0);
 }
 
 export function sessionCookieOptions() {
@@ -125,11 +233,45 @@ export function hasScope(caller: ApiCaller, scope: KeyScope): boolean {
   return caller.key.scopes.includes(scope);
 }
 
-// --- tiny in-memory rate limiter (abuse telemetry baseline, P0 hardening) ---
+// --- durable per-account attempt tracking (v3.7) ---
+// The in-memory limiter below is per serverless instance AND per-IP — cold
+// starts reset it and rotating IPs sidestep it, so it can never be the thing
+// that stops a brute-force. These DB-backed counters do: per-EMAIL lockouts
+// that survive instance recycling (AuthAttempt table, 24h retention).
+export type AttemptKind = "login" | "otp" | "otpsend";
+
+export async function recentAttempts(kind: AttemptKind, email: string, windowMs: number): Promise<number> {
+  return db.authAttempt
+    .count({ where: { kind, email, createdAt: { gt: new Date(Date.now() - windowMs) } } })
+    .catch(() => 0);
+}
+
+export async function recordAttempt(kind: AttemptKind, email: string): Promise<void> {
+  await db.authAttempt.create({ data: { kind, email } }).catch(() => {});
+  if (Math.random() < 0.05) {
+    await db.authAttempt
+      .deleteMany({ where: { createdAt: { lt: new Date(Date.now() - 24 * 3600_000) } } })
+      .catch(() => {});
+  }
+}
+
+export async function clearAttempts(kind: AttemptKind, email: string): Promise<void> {
+  await db.authAttempt.deleteMany({ where: { kind, email } }).catch(() => {});
+}
+
+// --- tiny in-memory rate limiter (per-instance abuse telemetry net; the
+// durable per-account lockouts above are the real brute-force defense) ---
 const buckets = new Map<string, { n: number; reset: number }>();
+const BUCKETS_MAX = 5000;
 
 export function rateLimit(bucket: string, max: number, windowMs: number): boolean {
   const now = Date.now();
+  // v3.7: the map used to grow forever (every unique bucket key stayed);
+  // prune expired entries whenever it crosses the ceiling.
+  if (buckets.size > BUCKETS_MAX) {
+    for (const [k, b] of buckets) if (b.reset < now) buckets.delete(k);
+    if (buckets.size > BUCKETS_MAX) buckets.clear(); // pathological load — reset
+  }
   const b = buckets.get(bucket);
   if (!b || b.reset < now) {
     buckets.set(bucket, { n: 1, reset: now + windowMs });
@@ -140,6 +282,19 @@ export function rateLimit(bucket: string, max: number, windowMs: number): boolea
 }
 
 export function clientIp(req: Request): string {
+  // v3.7 SECURITY FIX: the proxy chain APPENDS the true client IP to
+  // x-forwarded-for — client-supplied entries come FIRST. Reading the first
+  // entry let anyone mint a fresh rate-limit bucket per request with a
+  // spoofed header, silently disabling every IP-scoped limit. Read the LAST
+  // entry (the platform-observed address) instead.
   const fwd = req.headers.get("x-forwarded-for");
-  return fwd?.split(",")[0]?.trim() || "local";
+  if (fwd) {
+    const last = fwd
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .pop();
+    if (last) return last;
+  }
+  return req.headers.get("x-real-ip")?.trim() || "local";
 }
