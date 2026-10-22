@@ -550,3 +550,19 @@ Work Log:
 Stage Summary:
 - v3.7.0: auth is no longer the softest layer — IP limits can't be spoofed around, brute-force lockouts are durable and per-account, login timing doesn't leak account existence, scrypt cost doubled with params carried per-hash (old hashes verify forever), weak passwords are screened at every door, and users finally get the security self-service trio (change password + session overview + sign out everywhere) behind baseline transport headers. All layers green pre-deploy; 143/143 standalone + 25/25 migration + 7 unit suites.
 - DEPLOY BLOCKER (post-push, 2026-10-22 ~11:39 UTC): production at https://digdeepx.vercel.app serves HTTP 402 "DEPLOYMENT_DISABLED / Payment required" (x-vercel-error: DEPLOYMENT_DISABLED) on EVERY route — the whole project, not just new deploys. This is a Vercel ACCOUNT-level state (Hobby quota exhausted or billing hold), not an application defect: Task 42's prod gauntlet passed against v3.6.1 earlier the same day, and the v3.7.0 commit (65ca555) is pushed but no deployment was produced. OPERATOR ACTION: Vercel dashboard → Usage/Billing → restore the account (upgrade or wait for quota reset), then redeploy the latest commit (dashboard Redeploy, or an empty commit push), then re-run scripts/prod-audit-verify.sh (now 49 checks incl. E3 password-rotation lifecycle + K signout-all).
+
+---
+Task ID: 44
+Agent: main (Z.ai)
+Task: User pivoted hosting targets: (1) "the deployment is paused" (Vercel prod serves 402 DEPLOYMENT_DISABLED account-wide); (2) fake Vercel token attempt (sk_12345678mkmkmkm — rejected 403 invalidToken); (3) "publish it here" with Cloudflare credentials (valid cfat_ API token + R2 S3 keys, account 4012fc6c…).
+
+Work Log:
+- Verified Vercel prod status: 402 DEPLOYMENT_DISABLED on every route — account-level freeze, confirmed.
+- Built scripts/vercel-rehost.mjs — staged idempotent rehost pipeline for the moment a VALID Vercel token arrives: validate token → create project (or adopt) → upsert env (SUPABASE_URL/ANON, ADMIN_EMAILS, DATABASE_URL w/ pooler normalization, auto CRON_SECRET, optional ZAI key) → vercel --prod deploy → claim digdeepx.vercel.app → live verify. CLI linked via .vercel/project.json. Tested the validate stage against the fake token (correct rejection + guidance).
+- Cloudflare credentials verified: cfat token ACTIVE; scope is broader than the R2 page suggests — it CAN list and DEPLOY Workers (existing worker "maxtv" on the account) and read Pages. R2 itself NOT ENABLED on the account (S3 keys inert until dashboard enable; R2 is storage-only regardless — cannot host the app).
+- Account plan probe: Teams Free Base. Workers Free = 10ms CPU/invocation (documented, Oct 2026).
+- EMPIRICAL CPU PROBE (scripts/cf/cpu-probe.js, deployed as digdeep-cpu-probe, since deleted): scrypt N=4096 OK, N=16384 OK, **N=32768 — DigDeep's exact v3.7.0 login parameter — HARD FAILS ("Scrypt failed" = CPU cap kill)**. json stage inconclusive (probe's own comma bug) but irrelevant: auth alone breaks on the free plan, and the research engine (LLM stream parsing, report assembly, grading) would hit the same 10ms wall constantly.
+- VERDICT: the Cloudflare free account CANNOT host DigDeep. Paths: (A) valid Vercel token on a new/free Hobby account → one-command rehost (recommended, zero migration); (B) Cloudflare Workers Paid ($5/mo) → real migration first (OpenNext CF adapter supports Next 16; Prisma needs driver-adapter rework; engine after()/setInterval patterns need rework; full battery re-run) — hours of work, material risk. Vercel token creation steps re-sent to the operator (the previous attempt was a placeholder string).
+
+Stage Summary:
+- No secrets committed: cfat/sk_ tokens used via env only. Probe worker deleted from the operator's account. v3.7.0 remains pushed and green on GitHub; hosting is one valid Vercel token away (pipeline ready) or a $5/mo Cloudflare migration (only on explicit request).

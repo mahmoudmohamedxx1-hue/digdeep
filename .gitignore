@@ -95,6 +95,8 @@ scripts/*
 !scripts/audit-cap-watch.sh
 !scripts/ui-gate-verify.sh
 !scripts/audit-prod-fingerprint.sh
+!scripts/vercel-rehost.mjs
+!scripts/cf/
 !scripts/bench/
 scripts/bench/*
 !scripts/bench/questions.jsonl
