@@ -566,3 +566,24 @@ Work Log:
 
 Stage Summary:
 - No secrets committed: cfat/sk_ tokens used via env only. Probe worker deleted from the operator's account. v3.7.0 remains pushed and green on GitHub; hosting is one valid Vercel token away (pipeline ready) or a $5/mo Cloudflare migration (only on explicit request).
+
+---
+Task ID: 45
+Agent: main (Z.ai)
+Task: User: "cloudflare could be 100% free so host on it" — after providing valid Cloudflare credentials (cfat_ API token, account 4012fc6c…, Teams Free). Host DigDeep on the free plan.
+
+Work Log:
+- EMPIRICAL FEASIBILITY (not assumption): deployed a staged CPU probe worker (digdeep-cpu-probe, deleted after): scrypt N=4096 OK, N=16384 OK, N=32768 HARD-KILLED — free plan's 10ms nominal CPU actually tolerates moderate bursts but kills ~2× that. Then a full minimal Next 16.4 + OpenNext app (digdeep-free-feasibility, deleted after): SSR/static fine; API probe route ran REAL DigDeep workloads — 80KB LLM-response JSON parse ✓, report assembly (6 sections + citation regex) ✓, combined research round ✓, scrypt-16384 ✓. Verdict: the free plan CAN run the app's core; the blockers are (a) scrypt-32768, (b) Prisma's native engine binary, (c) the 3 MiB gzipped worker limit.
+- MIGRATION (v3.8.0):
+  * Prisma driver adapters: schema.prisma generator gains previewFeatures ["driverAdapters"]; db.ts constructs PrismaClient({ adapter: new PrismaPg({ connectionString, max:5, timeouts }) }) — pure JS, no libquery_engine .so (verified 0 references in the final bundle; the dead .so left in node_modules is tree-shaken out). One code path for ALL platforms (Vercel included — 143/143 standalone proves the Node path).
+  * All 8 direct-Prisma script sites updated to the adapter (test-standalone.sh ×4, validate-schema.sh, e2e-real.sh, inject-trial.ts).
+  * AUTH_SCRYPT_N env-tunable (powers of two within [16384, 1048576], anything else falls back to 32768): CF profile runs 16384 (the empirical CPU ceiling), Vercel/local keep 32768. Per-cost DUMMY_VERIFY_HASHES (fresh 16384 dummy generated) so the timing-equalization matches the profile cost — a mismatched dummy would itself become the enumeration oracle. Stored hashes carry their own N: accounts hash-verified cross-platform (65536 fixture also passes).
+  * Worker size: initial bundle 3106 KiB gz vs the 3072 KiB free limit (34 KiB over). Root cause: next/og's satori+resvg.wasm (1.4MB raw)+yoga.wasm+noto (~700 KiB gz together). Fix: CF_PROFILE=1 webpack build aliases next/og → src/lib/og/cf-og-stub.ts; /api/og/[id] branches to its existing SVG card variant on the profile (og-card route was already pure SVG). Vercel/local builds untouched — full PNG og:images there. Final CF bundle: 2368 KiB gz, zero wasm, 704 KiB headroom.
+  * Config: open-next.config.ts, wrangler.jsonc (name digdeep, nodejs_compat, ASSETS binding; vars CF_PROFILE=1, AUTH_SCRYPT_N=16384, SUPABASE_URL/ANON, ADMIN_EMAILS). .gitignore: +.open-next/, +scripts/test-auth.ts whitelist, scripts/cf/ dir whitelist; eslint ignores +.open-next/.vercel.
+  * LOST-AND-FOUND: Task 43's scripts/test-auth.ts (37 checks) was NEVER whitelisted/committed — the sandbox reset destroyed it. REBUILT as 41 checks (scrypt roundtrip, legacy fixture, malformed-hash fail-closed matrix, cross-cost verification, dummy never-throws, AUTH_SCRYPT_N env matrix via bun subprocess probes, common-password matrix, clientIp XFF-last-entry, rateLimit windows): 41/41.
+  * Sandbox build quirk: OpenNext wrapper detached builds die silently (only foreground or the exact setsid pattern works); Next 16.4 Turbopack dies in this sandbox — webpack flag required (DigDeep already standardizes on --webpack).
+- BATTERY: tsc clean · eslint clean (repo-wide, after ignoring .open-next) · 7 unit suites green (routing 48, auth 41 rebuilt) · standalone 143/143 ALL PASS on the driver-adapter Node build (incl. auth lockouts, OTP battery, password lifecycle).
+- DEPLOYED LIVE (free plan): https://digdeep.mahmoudmohamedxx1.workers.dev — CRON_SECRET set via wrangler secret. Smoke: home 200 (46KB full UI), /api/auth → {"user":null,"otpEnabled":true} (Supabase OTP configured), DB routes 500 cleanly (DATABASE_URL not yet set — the single missing piece). Probe workers deleted; only "digdeep" + the pre-existing "maxtv" remain on the account.
+
+Stage Summary:
+- DigDeep runs on Cloudflare 100% free: v3.8.0 migrated (Prisma driver adapters, tunable scrypt 16384 on CF, SVG og cards on CF profile, bundle 2368 KiB < 3072 limit), deployed live at digdeep.mahmoudmohamedxx1.workers.dev, full battery green. BLOCKED ON OPERATOR for full function: DATABASE_URL secret (Supabase → Connect → Session pooler, port 5432, with real password) — then `wrangler secret put DATABASE_URL` + redeploy. Free-plan trade-offs accepted: og:images are SVG on CF (raster on Vercel), scrypt 16384 (32768 on Vercel), 100k req/day cap (throttles instead of freezing). Vercel path remains fully intact and green on the same commit.

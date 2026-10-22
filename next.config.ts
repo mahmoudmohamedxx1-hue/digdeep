@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import path from "path";
 
 const nextConfig: NextConfig = {
   output: "standalone",
@@ -40,6 +41,21 @@ const nextConfig: NextConfig = {
   reactStrictMode: false,
   // hide the Next.js dev badge — it covered the Dark mode toggle
   devIndicators: false,
+  /* CF_PROFILE (Cloudflare Workers free plan): alias next/og to a lightweight
+     stub — satori + resvg.wasm + yoga.wasm + Noto (~700 KiB gzipped) would
+     push the worker over the free 3 MiB limit. The og route serves its SVG
+     card variant on this profile (see src/lib/og/cf-og-stub.ts). Vercel and
+     local builds are untouched — full PNG og:images everywhere else. */
+  webpack: (config) => {
+    if (process.env.CF_PROFILE === "1") {
+      config.resolve = config.resolve ?? {};
+      config.resolve.alias = {
+        ...(config.resolve.alias ?? {}),
+        "next/og": path.resolve(__dirname, "src/lib/og/cf-og-stub.ts"),
+      };
+    }
+    return config;
+  },
 };
 
 export default nextConfig;

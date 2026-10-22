@@ -31,7 +31,8 @@ echo "── end-state verification"
 # prisma db execute doesn't PRINT query results — use PrismaClient raw SQL.
 q() { DATABASE_URL="$TEST_URL" bun -e '
 const { PrismaClient } = require("@prisma/client");
-const p = new PrismaClient({ datasources: { db: { url: process.env.DATABASE_URL } } });
+const { PrismaPg } = require("@prisma/adapter-pg");
+const p = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
 (async () => {
   const rows = await p.$queryRawUnsafe(process.argv[1]);
   console.log(JSON.stringify(rows));

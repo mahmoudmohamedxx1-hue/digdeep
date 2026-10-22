@@ -87,7 +87,8 @@ rm -f /tmp/e2e-real.jar
 echo "── cleanup: purge probe user from local DB"
 DATABASE_URL="$DB" bun -e '
 const { PrismaClient } = require("@prisma/client");
-const p = new PrismaClient({ datasources: { db: { url: process.env.DATABASE_URL } } });
+const { PrismaPg } = require("@prisma/adapter-pg");
+const p = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
 (async () => {
   const u = await p.user.findUnique({ where: { email: process.argv[1] } });
   if (u) await p.session.deleteMany({ where: { userId: u.id } }), await p.user.delete({ where: { id: u.id } });

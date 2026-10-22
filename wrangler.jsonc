@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "digdeep",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "vars": {
+    // non-secret runtime config (secrets via `wrangler secret put`):
+    //   DATABASE_URL          Supabase session-pooler URL (postgresql://…:5432/postgres)
+    //   CRON_SECRET           random hex
+    //   ZAI_API_KEY           (optional — GLM lane)
+    "CF_PROFILE": "1",
+    "AUTH_SCRYPT_N": "16384",
+    "SUPABASE_URL": "https://vvopggnkskzzwolxbjig.supabase.co",
+    "SUPABASE_ANON_KEY": "sb_publishable_PGIlUqfudf0aisRjfC9s6g_KatzsD-D",
+    "ADMIN_EMAILS": "mahmoudmohamedxx1@gmail.com"
+  }
+}

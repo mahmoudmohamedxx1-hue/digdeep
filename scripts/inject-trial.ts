@@ -12,6 +12,7 @@
  *  court=true, stats.court per variant, honest reportMd, a few events.
  */
 import { PrismaClient } from "@prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
 import { notifyRunFinished } from "../src/lib/platform/webhooks";
 
 // v3.4.1: same invalid-URL skip the app applies (src/lib/db.ts) — a stale
@@ -24,7 +25,7 @@ function resolveDbUrl(): string {
     : "postgresql://postgres:postgres@localhost:5433/digdeep";
 }
 
-const prisma = new PrismaClient({ datasources: { db: { url: resolveDbUrl() } } });
+const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: resolveDbUrl() }) });
 const ARGS = process.argv.slice(2);
 const FLAG = (name: string): string | null => {
   const i = ARGS.indexOf(`--${name}`);

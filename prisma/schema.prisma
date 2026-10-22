@@ -1,5 +1,9 @@
 generator client {
   provider = "prisma-client-js"
+  // driver adapters: pure-JS query path via @prisma/adapter-pg — required for
+  // Cloudflare Workers (no native engine binaries on workerd) and fully
+  // supported on Node (same adapter everywhere, one code path).
+  previewFeatures = ["driverAdapters"]
 }
 
 datasource db {

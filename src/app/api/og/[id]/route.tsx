@@ -136,6 +136,20 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     });
   };
 
+  // SVG card — shared by the shaping-failure ladder and the CF_PROFILE path
+  // (see src/lib/og/cf-og-stub.ts: on the Workers free plan the satori/resvg
+  // wasm would blow the 3 MiB worker limit, so this profile never bundles it)
+  const svgCard = (): Response => {
+    const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    return new Response(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630"><rect width="1200" height="630" fill="#04110f"/><rect x="3" y="3" width="1194" height="624" rx="24" fill="none" stroke="${accent}" stroke-opacity="0.35" stroke-width="2"/><text x="72" y="98" font-family="Georgia, serif" font-size="34" fill="#e6fffa" font-weight="bold">DigDeep</text><text x="72" y="330" font-family="Georgia, serif" font-size="42" fill="#f0fdfa" font-weight="600">${esc(snap.query.slice(0, 60))}</text><text x="72" y="420" font-family="system-ui, sans-serif" font-size="26" fill="${accent}" font-weight="700">${esc(headline)}</text><text x="72" y="500" font-family="system-ui, sans-serif" font-size="21" fill="#94a3b8">${sources.length} sources read · every citation audited · every claim checked</text></svg>`,
+      { headers: { "Content-Type": "image/svg+xml", "Cache-Control": "public, max-age=3600, s-maxage=86400" } },
+    );
+  };
+
+  // CF profile: no satori/resvg in the bundle — SVG card directly
+  if (process.env.CF_PROFILE === "1") return svgCard();
+
   try {
     return await renderPng(!hasArabic);
   } catch {
@@ -144,11 +158,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     } catch {
       // absolute last resort: the SVG variant (browsers render it; scrapers that
       // demand raster simply show no image) — never a 500 on a share URL.
-      const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-      return new Response(
-        `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630"><rect width="1200" height="630" fill="#04110f"/><rect x="3" y="3" width="1194" height="624" rx="24" fill="none" stroke="${accent}" stroke-opacity="0.35" stroke-width="2"/><text x="72" y="98" font-family="Georgia, serif" font-size="34" fill="#e6fffa" font-weight="bold">DigDeep</text><text x="72" y="330" font-family="Georgia, serif" font-size="42" fill="#f0fdfa" font-weight="600">${esc(snap.query.slice(0, 60))}</text><text x="72" y="420" font-family="system-ui, sans-serif" font-size="26" fill="${accent}" font-weight="700">${esc(headline)}</text><text x="72" y="500" font-family="system-ui, sans-serif" font-size="21" fill="#94a3b8">${sources.length} sources read · every citation audited · every claim checked</text></svg>`,
-        { headers: { "Content-Type": "image/svg+xml", "Cache-Control": "public, max-age=3600, s-maxage=86400" } },
-      );
+      return svgCard();
     }
   }
 }

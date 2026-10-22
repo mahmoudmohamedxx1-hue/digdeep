@@ -46,6 +46,7 @@ db/
 *.sqlite
 
 # vercel
+.open-next/
 .vercel
 
 # ---------------------------------------------------------------
@@ -77,6 +78,7 @@ scripts/*
 !scripts/test-relevance.ts
 !scripts/test-court-render.ts
 !scripts/test-compute.ts
+!scripts/test-auth.ts
 !scripts/test-standalone.sh
 !scripts/prod-audit-verify.sh
 !scripts/test-migration.sh

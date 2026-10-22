@@ -8,7 +8,20 @@ import { db } from "@/lib/db";
 // format string — a latent bomb: any param bump would have broken every
 // existing login). New hashes cost 2× memory (OWASP direction); old ones
 // keep verifying forever.
-const SCRYPT_N = 32768;
+// v3.8: N is environment-tunable (AUTH_SCRYPT_N). Default 32768 everywhere;
+// the Cloudflare Workers free plan runs at 16384 — its per-invocation CPU
+// budget empirically kills scrypt at N=32768 (verified live: 16384 passes,
+// 32768 hard-fails). Stored hashes carry their own N, so accounts hashed on
+// one platform verify on any platform.
+const SCRYPT_N = (() => {
+  const raw = Number.parseInt(process.env.AUTH_SCRYPT_N ?? "", 10);
+  // powers of two within [16384, 1048576] only — anything else is a config
+  // mistake and falls back to the safe default rather than weakening auth
+  if (Number.isFinite(raw) && raw >= 16384 && raw <= 1048576 && (raw & (raw - 1)) === 0) {
+    return raw;
+  }
+  return 32768;
+})();
 const SCRYPT_R = 8;
 const SCRYPT_P = 1;
 const SCRYPT_MAXMEM = 128 * 1024 * 1024; // ≥ 128·N·r for every N we ever issue
@@ -61,16 +74,20 @@ export async function verifyPassword(password: string, stored: string): Promise<
   }
 }
 
-// A fixed scrypt hash of an UNGUESSABLE random value. Verifying against it
+// Fixed scrypt hashes of UNGUESSABLE random values. Verifying against one
 // when the email has no account keeps login latency uniform (known-address
-// runs scrypt, unknown-address now does too) — kills the timing oracle that
-// let anyone enumerate registered emails by response time.
-const DUMMY_VERIFY_HASH =
-  "scrypt$32768$8$1$eT+sacpiFjng0gkRM/3X5A==$xiEG3EcLNVsn5TIpQKk6hpnGQThq3ZLoVk+Xx/OAZTAjsnP70DZbOC19LLkot7UFujmfNBOM1/Ccd0LmMYdWnw==";
+// runs scrypt, unknown-address does too) — kills the timing oracle that
+// let anyone enumerate registered emails by response time. One dummy per
+// cost level: the dummy's N must match the profile's SCRYPT_N, or the
+// equalization itself becomes the oracle.
+const DUMMY_VERIFY_HASHES: Record<number, string> = {
+  16384: "scrypt$16384$8$1$gtj6yGPvgq1JC5QiSxFP5Q==$DXjVidmwwVn7YlA+m0AHvy/joD7J4YWlmrydxCqww8P7Qicrct4A3cxCZ6ACDkm4ILScf4lqAy+CD9VYaOXZMA==",
+  32768: "scrypt$32768$8$1$eT+sacpiFjng0gkRM/3X5A==$xiEG3EcLNVsn5TIpQKk6hpnGQThq3ZLoVk+Xx/OAZTAjsnP70DZbOC19LLkot7UFujmfNBOM1/Ccd0LmMYdWnw==",
+};
 
 /** Timing-equalizing verify for the "account doesn't exist" login path. */
 export async function verifyDummyPassword(password: string): Promise<void> {
-  await verifyPassword(password, DUMMY_VERIFY_HASH);
+  await verifyPassword(password, DUMMY_VERIFY_HASHES[SCRYPT_N] ?? DUMMY_VERIFY_HASHES[32768]);
 }
 
 // v3.7 — common-password screen. Exact-match list (normalized lowercase) of

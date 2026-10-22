@@ -166,7 +166,8 @@ echo "── 4b · OG card renderer (PNG, not SVG) + script degradation ──"
 if command -v bun >/dev/null 2>&1; then
   DATABASE_URL="${DATABASE_URL:-postgresql://postgres:postgres@localhost:5433/digdeep}" bun -e '
 import { PrismaClient } from "@prisma/client";
-const p = new PrismaClient({ datasources: { db: { url: process.env.DATABASE_URL } } });
+import { PrismaPg } from "@prisma/adapter-pg";
+const p = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
 const base = { reportMd: "# t", stats: JSON.stringify({ citationIntegrity: 88, court: { verdict: "GUILTY" } }), sources: JSON.stringify([{ url: "https://a.com", domain: "a.com", title: "A", sectionTitle: "X" }, { url: "https://b.com", domain: "b.com", title: "B", sectionTitle: "Y" }]) };
 await p.sharedReport.upsert({ where: { id: "s-citestand" }, update: {}, create: { id: "s-citestand", jobId: "ci-og-latin", query: "Is the wandering albatross the longest-winged living bird?", ...base } });
 await p.sharedReport.upsert({ where: { id: "s-cistarab" }, update: {}, create: { id: "s-cistarab", jobId: "ci-og-arabic", query: "\u0647\u0644 \u0627\u0644\u0628\u062d\u062b \u0627\u0644\u0639\u0645\u064a\u0642 \u0645\u062c\u0627\u0646\u064a\u061f", ...base } });
@@ -280,7 +281,8 @@ echo "$SECREG" | grep -q '"user"' && pass "security fixture account registered" 
 # new hashes carry the doubled scrypt cost (N=32768)
 HARDFMT=$(DATABASE_URL="$DATABASE_URL" bun -e '
 const { PrismaClient } = require("@prisma/client");
-const p = new PrismaClient({ datasources: { db: { url: process.env.DATABASE_URL } } });
+const { PrismaPg } = require("@prisma/adapter-pg");
+const p = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
 (async () => {
   const u = await p.user.findUnique({ where: { email: "'$SECEMAIL'" }, select: { passwordHash: true } });
   console.log(u?.passwordHash?.split("$").slice(0, 4).join("$") ?? "none");
@@ -317,7 +319,8 @@ echo "$RELOGIN" | grep -q '"user"' && pass "login with the NEW password → 200 
 LEMAIL="ci-legacy-$RND@test.local"
 DATABASE_URL="$DATABASE_URL" bun -e '
 const { PrismaClient } = require("@prisma/client");
-const p = new PrismaClient({ datasources: { db: { url: process.env.DATABASE_URL } } });
+const { PrismaPg } = require("@prisma/adapter-pg");
+const p = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
 (async () => {
   await p.user.create({ data: { email: "'$LEMAIL'", name: "legacy", passwordHash: "scrypt$16384$8$1$Hdf4dc5l0hytsqS+ZCflgg==$dhnBfG1MhhZfSxL9KQi0MB1ZMJreKAVJHwbZv/nN9LAeP4Xjtfdvav8ZAZxDKfJaLj0CmQabqI59sOVfA+/CvA==" } });
   await p.$disconnect();
@@ -760,7 +763,8 @@ echo "── 17 · Cleanup: purge this suite's test data (cascade) ──"
 # users (whose keys/hooks/watches/sessions cascade for real).
 CLEANED=$(DATABASE_URL="$DATABASE_URL" bun -e '
 const { PrismaClient } = require("@prisma/client");
-const p = new PrismaClient({ datasources: { db: { url: process.env.DATABASE_URL } } });
+const { PrismaPg } = require("@prisma/adapter-pg");
+const p = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) });
 (async () => {
   // 1. runs of this suite: the two inject threads + any run attributed to a
   //    ci-* account (covers orphans left by pre-cleanup-fix runs)
