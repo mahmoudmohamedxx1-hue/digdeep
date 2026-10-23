@@ -1,9 +1,12 @@
 generator client {
   provider = "prisma-client-js"
-  // driver adapters: pure-JS query path via @prisma/adapter-pg — required for
-  // Cloudflare Workers (no native engine binaries on workerd) and fully
-  // supported on Node (same adapter everywhere, one code path).
-  previewFeatures = ["driverAdapters"]
+  // driver adapters + WASM query compiler: the ENGINE-FREE query path via
+  // @prisma/adapter-pg — required for Cloudflare Workers (no native binaries
+  // on workerd). CRITICAL: driverAdapters ALONE still needs the Rust library
+  // engine in Prisma 6.x (the adapter replaces only the connection layer);
+  // queryCompiler replaces the engine with a WASM compiler that bundles fine
+  // into workerd. Node/Vercel run the same path — one code path everywhere.
+  previewFeatures = ["driverAdapters", "queryCompiler"]
 }
 
 datasource db {
