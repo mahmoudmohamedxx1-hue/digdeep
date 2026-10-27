@@ -84,6 +84,7 @@ function createClient(): PrismaClient {
       );
     }
     // PrismaD1 expects the D1Database binding (facade over prepare/bind/all/run)
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { PrismaD1 } = require("@prisma/adapter-d1") as typeof import("@prisma/adapter-d1");
     return new PrismaClient({
       adapter: new PrismaD1(d1 as never),

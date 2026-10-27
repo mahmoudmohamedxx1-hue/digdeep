@@ -60,6 +60,7 @@ import {
   phaseAtLeast,
   type EngineCheckpoint,
   type EnginePhase,
+  type QuickLaneState,
 } from "./checkpoint";
 import { applySourceQualityGate } from "./sourcequality";
 import { getDomainPack, siteVariants } from "./domain-packs";
@@ -176,7 +177,9 @@ function fmtMin(ms: number): string {
   return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`;
 }
 
-class Ctx {
+/** v3.9.1: exported for the quick-lane slicing proof (scripts/cf/test-quick-slicing.ts) —
+ * not part of the app's public surface. */
+export class Ctx {
   jobId: string;
   seq: number;
   sourceN = 0;
@@ -886,21 +889,52 @@ async function runChatLane(
   await ctx.emit("done", "Replied", `Conversational answer in ${Math.round(durationMs / 1000)}s — no sources fetched, no research run${courtRecall ? " — recalled from the court record of this thread's trial" : ""}${fallback ? " (built-in script — models were throttled)" : ""}${pinNote ? ` (${pinNote})` : ""}`, replyModel, stats);
 }
 
-/** QUICK LANE — one focused search pass + a concise cited answer (Perplexity quick answer). */
-async function runQuickLane(
+/** QUICK LANE — one focused search pass + a concise cited answer (Perplexity quick answer).
+ *  v3.9.1 continuation: on sliced platforms (Vercel clock, CF free CPU cap) the
+ *  search+read pass is checkpointed, and (when yieldBeforeCompose) the compose
+ *  runs in a FRESH slice — the streamed answer is the lane's longest, heaviest
+ *  call, and giving it its own platform budget is what lets quick answers
+ *  survive hosts that kill long slices. A resumed run goes straight to compose
+ *  and first tries to SALVAGE the partial draft the dead attempt streamed
+ *  (the draft flushes to the section row every ~1.1s). */
+export async function runQuickLane(
   ctx: Ctx,
   job: { id: string; query: string; language: string },
-  threadContext: string
+  threadContext: string,
+  opts: {
+    /** continuation: restore an interrupted search+read pass (sources kept, no re-search) */
+    resume?: QuickLaneState;
+    /** continuation: persist the searched+read state at the compose boundary */
+    persist?: (s: QuickLaneState) => Promise<void>;
+    /** hand the compose its own fresh slice (CF free plan: per-event CPU cap) */
+    yieldBeforeCompose?: boolean;
+  } = {}
 ): Promise<void> {
+  let sec: { id: string };
+  let valid: { n: number; title: string; domain: string; excerpt: string }[];
+  let sourcesUsed: { n: number; url: string; title: string; domain: string }[];
+  if (opts.resume) {
+    // v3.9.1 continuation — the search+read pass completed in an earlier slice
+    sec = { id: opts.resume.secId };
+    valid = opts.resume.valid;
+    sourcesUsed = opts.resume.sourcesUsed;
+    await updateJob(ctx.jobId, { status: "researching", stage: "Writing the answer…", progress: 80 });
+    await ctx.emit(
+      "info",
+      "Continuing the quick answer — resuming where the last slice stopped",
+      "The sources for this answer were already found and read; the previous slice was cut short by the platform clock before the answer finished. This slice picks up exactly there — no re-searching, no re-reading."
+    );
+  } else {
   await updateJob(ctx.jobId, { status: "researching", stage: "Searching the web…", progress: 15, startedAt: new Date() });
   await ctx.emit(
     "info",
     "Quick-answer mode — skipping the full research pipeline",
     `This looks like a simple factual question, so I am doing ONE focused search pass instead of the multi-aspect research pipeline. Honest estimate: under a minute.${threadContext ? " (Thread context is being considered.)" : ""}`
   );
-  const sec = await db.researchSection.create({
+  const secRow = await db.researchSection.create({
     data: { jobId: ctx.jobId, order: 0, title: "Quick answer", question: job.query, queries: JSON.stringify([job.query]) },
   });
+  sec = { id: secRow.id };
 
   // 1. search
   const rs = await searchAll(job.query, { academic: false });
@@ -923,7 +957,7 @@ async function runQuickLane(
   }
 
   // 2. read (parallel, cap 4)
-  const sourcesUsed: { n: number; url: string; title: string; domain: string }[] = [];
+  sourcesUsed = [];
   const contents = await Promise.all(
     picked.map(async (r) => {
       const page = await fetchPageContent(r.url, 3200, r.excerpt);
@@ -941,7 +975,7 @@ async function runQuickLane(
       return { n, title: r.title || page.title, domain: r.domain || page.domain, excerpt };
     })
   );
-  let valid = contents.filter((c): c is { n: number; title: string; domain: string; excerpt: string } => !!c);
+  valid = contents.filter((c): c is { n: number; title: string; domain: string; excerpt: string } => !!c);
 
   // snippet fallback so citations & the Sources row stay honest
   if (valid.length === 0 && rs.length > 0) {
@@ -957,12 +991,47 @@ async function runQuickLane(
     }
     valid = snippetSrcs;
   }
+  } // ── end fresh run (search + read complete) ─────────────────────────────
+
+  // 2.5 v3.9.1 continuation boundary — persist what the compose needs, and on
+  // platforms that asked for it (CF free: per-event CPU cap) END this slice so
+  // the streamed answer is composed in a fresh event with a fresh budget.
+  // (The stage update comes FIRST so a yielded run waits at an honest
+  // "Writing the answer…" 80%, not at "Searching the web…" 15%.)
+  await updateJob(ctx.jobId, { stage: "Writing the answer…", progress: 80 });
+  if (opts.persist) {
+    await opts.persist({ secId: sec.id, valid, sourcesUsed, threadContext });
+    if (opts.yieldBeforeCompose) {
+      await ctx.emit(
+        "info",
+        "Slice boundary — composing the answer in a fresh slice",
+        "The sources are already found and read, and the platform caps each function slice, so the answer itself is composed in a fresh slice. Nothing is re-done — the next slice continues from exactly here."
+      );
+      return; // the poller's next GET resumes from the checkpoint straight into compose
+    }
+  }
 
   // 3. answer (streamed live — the answer types itself out as it is generated)
-  await updateJob(ctx.jobId, { stage: "Writing the answer…", progress: 80 });
   let answer = "";
   let answerModel: string | undefined;
-  if (valid.length > 0) {
+  if (opts.resume) {
+    // v3.9.1 SALVAGE — the dead attempt streamed its draft into the section row
+    // (flushed every ~1.1s). If most of the answer is already there, complete
+    // from it instead of gambling on another full compose pass.
+    try {
+      const prior = await db.researchSection.findUnique({ where: { id: opts.resume.secId }, select: { draftMd: true } });
+      const priorText = (prior?.draftMd ?? "").trim();
+      if (priorText.length >= 400) {
+        answer = priorText;
+        await ctx.emit(
+          "info",
+          "Recovering the interrupted answer",
+          "The previous attempt had already written most of this answer when the platform cut it short — completing from that text instead of restarting the composition from zero."
+        );
+      }
+    } catch { /* no salvageable draft — fall through to a fresh compose */ }
+  }
+  if (!answer && valid.length > 0) {
     const res = await ctx.llmLive(
       [{ role: "user", content: quickAnswerPrompt(job.query, valid, job.language) }],
       "quick-answer",
@@ -972,7 +1041,7 @@ async function runQuickLane(
     answer = res.text;
     answerModel = res.model;
     await maybePinFallbackNote(ctx, res);
-  } else {
+  } else if (!answer) {
     // nothing retrievable — answer from general knowledge, honestly flagged
     const res = await ctx.llmLive(
       [{ role: "user", content: `Question: "${job.query}"\n\nWeb searches returned no usable sources. Answer directly from general knowledge in ${job.language}. Be concise (under 250 words), lead with the answer, and END with one short italic line noting that web sources could not be retrieved for this answer so it is unverified general knowledge.` }],
@@ -1040,6 +1109,29 @@ export async function runJob(jobId: string) {
     leaseHeld = await acquireLease(jobId);
     if (!leaseHeld) return;
 
+    // v3.9.1 anti-livelock guard: an ACTIVE job that already burned its slice
+    // budget without completing fails honestly instead of being re-adopted
+    // forever. Live-observed on the CF free plan: a run killed mid-phase has no
+    // checkpoint, so each adoption restarted it from 0% — an unbounded loop of
+    // re-searching and re-reading that never completes (sliceN was only
+    // persisted on checkpoint-resumes, so the old MAX_SLICES guard never fired).
+    const MAX_SLICES = process.env.CF_PROFILE === "1" ? 60 : 12; // CF slices are ~45s, not ~5min
+    if ((job.sliceN ?? 0) >= MAX_SLICES) {
+      await db.researchJob.update({
+        where: { id: jobId },
+        data: {
+          status: "failed", stage: "Interrupted",
+          error: `This run was cut short by the hosting platform ${job.sliceN} times without completing. Please start a fresh run — each attempt gets fresh platform resources, and shorter modes (quick) usually complete.`,
+          completedAt: new Date(),
+        },
+      }).catch(() => {});
+      await db.activityEvent.create({
+        data: { jobId, type: "error", title: "Run interrupted too many times", detail: "The hosting platform kept cutting this run short before it could checkpoint. Starting a fresh run is the honest path — each attempt gets fresh resources.", seq: 9_999_999 },
+      }).catch(() => {});
+      await notifyRunFinished(jobId).catch(() => {}); // run.failed webhooks
+      return;
+    }
+
     const unlimited = job.breadth < 0 || job.depth < 0 || job.maxSources < 0 || job.maxMinutes < 0;
     // P2-1 domain pack — evidence standards, authority whitelists, citation format
     const pack = getDomainPack(job.domain);
@@ -1049,7 +1141,17 @@ export async function runJob(jobId: string) {
     // is absolute — anchored at the first slice's t0, restored from the
     // checkpoint on every resume. The tail (drafts → grade → improve) still
     // reserves the last 175s of the ABSOLUTE deadline.
-    const SERVERLESS = !!process.env.VERCEL;
+    const SERVERLESS = !!process.env.VERCEL || process.env.CF_PROFILE === "1";
+    // v3.9.1: CF_PROFILE counts as serverless too — the Workers free plan caps
+    // CPU per request event, so the engine MUST slice + checkpoint + yield so
+    // each next phase lands in a fresh event with a fresh CPU budget. CF slices
+    // are much shorter (45s default) than Vercel's 288s; DIGDEEP_SLICE_MS
+    // overrides both without a code change.
+    const CF = process.env.CF_PROFILE === "1";
+    const sliceMs = Math.max(
+      CF ? 10_000 : 30_000,
+      Number(process.env.DIGDEEP_SLICE_MS) || (CF ? 45_000 : 288_000)
+    );
     const rawBudgetMs = unlimited ? Infinity : Math.max(3, job.maxMinutes) * 60_000;
 
     // ── v2.5.0 continuation state: load the checkpoint, restore ctx ────────
@@ -1060,7 +1162,6 @@ export async function runJob(jobId: string) {
     const absoluteDeadline = cp?.absoluteDeadline ?? (unlimited ? null : t0 + rawBudgetMs);
     const budgetMinutes = unlimited ? -1 : Math.max(1, Math.floor(rawBudgetMs / 60_000));
     const sliceN = (job.sliceN ?? 0) + 1;
-    const MAX_SLICES = 12; // runaway guard: ~60 min of serverless compute per run
 
     const maxSeq = await db.activityEvent.aggregate({ where: { jobId }, _max: { seq: true } });
     const ctx = new Ctx(jobId, job.modelPref as ModelPref, (maxSeq._max.seq ?? 0) + 1, {
@@ -1068,9 +1169,10 @@ export async function runJob(jobId: string) {
       depth: job.depth,
       maxSources: job.maxSources,
       anyUnlimited: unlimited,
-      // each SLICE gets a fresh function clock — the platform freezes at 300s.
+      // each SLICE gets a fresh function clock — the platform freezes at 300s
+      // (Vercel) or throttles CPU per event (Cloudflare free).
       // (DIGDEEP_SLICE_MS shortens the slice for local continuation testing.)
-      ...(SERVERLESS ? { hardStopMs: Math.max(30_000, Number(process.env.DIGDEEP_SLICE_MS) || 288_000) } : {}),
+      ...(SERVERLESS ? { hardStopMs: sliceMs } : {}),
     });
     // v2.5.0: the deadline is ABSOLUTE across slices, not per-invocation
     ctx.deadline = absoluteDeadline ?? Infinity;
@@ -1150,15 +1252,19 @@ export async function runJob(jobId: string) {
       auditDone = cp.auditDone === true;
       bundleDoneState = cp.bundleDone === true;
       concurrency = cp.aspectTimes?.length ? Math.max(2, Math.min(4, Math.round(cp.aspectTimes.length / 2))) : 4;
-      await db.researchJob.update({ where: { id: jobId }, data: { sliceN } }).catch(() => {});
       await ctx.emit(
         "info",
         `Continuing the run — serverless slice ${sliceN} of at most ${MAX_SLICES}`,
-        `The previous function slice reached its ~5-minute platform clock, so the engine checkpointed its state and paused. This slice resumes exactly where it stopped (no re-searching, no re-reading) — the time budget is spent on research, not restarts. Elapsed so far: ${fmtMin(Date.now() - t0)}.`,
+        `The previous function slice reached its platform clock, so the engine checkpointed its state and paused. This slice resumes exactly where it stopped (no re-searching, no re-reading) — the time budget is spent on research, not restarts. Elapsed so far: ${fmtMin(Date.now() - t0)}.`,
         undefined,
         { slice: sliceN, phase: resumePhase, elapsedMs: Date.now() - t0 }
       );
     }
+    // v3.9.1: persist sliceN on EVERY adoption, not just checkpoint-resumes —
+    // a platform that keeps killing slices mid-phase (CF free CPU cap) must see
+    // the counter climb even when each restart begins from scratch, or the
+    // MAX_SLICES runaway guard at the top of runJob never fires.
+    await db.researchJob.update({ where: { id: jobId }, data: { sliceN } }).catch(() => {});
 
     /** v2.5.0: persist the continuation checkpoint. Called at phase boundaries
      *  and after each aspect/round completes — a slice frozen between saves
@@ -1226,12 +1332,13 @@ export async function runJob(jobId: string) {
     }, 8_000);
 
     if (SERVERLESS && !resuming) {
+      const sliceLabel = sliceMs >= 90_000 ? `~${Math.round(sliceMs / 60_000)}-minute` : `~${Math.round(sliceMs / 1000)}-second`;
       await ctx.emit(
         "info",
-        `Serverless continuation run — the engine works in ~5-minute slices until your ${unlimited ? "open-ended (unlimited)" : `${budgetMinutes}-minute`} budget is spent`,
-        "This deployment runs on serverless functions, which cap each function slice at roughly five minutes. The engine checkpoints its state continuously and continues in a fresh slice whenever one ends — so the full time budget is spent on research, not squeezed into one invocation. Multi-engine search, citation audit, self-grading and improvement rounds all run unchanged, across as many slices as the budget needs.",
+        `Serverless continuation run — the engine works in ${sliceLabel} slices until your ${unlimited ? "open-ended (unlimited)" : `${budgetMinutes}-minute`} budget is spent`,
+        `This deployment runs on serverless functions, which cap each function slice at ${sliceLabel}. The engine checkpoints its state continuously and continues in a fresh slice whenever one ends — so the full time budget is spent on research, not squeezed into one invocation. Multi-engine search, citation audit, self-grading and improvement rounds all run unchanged, across as many slices as the budget needs.`,
         undefined,
-        { serverless: true, continuation: true, budgetMs: unlimited ? null : rawBudgetMs }
+        { serverless: true, continuation: true, budgetMs: unlimited ? null : rawBudgetMs, sliceMs }
       );
     }
 
@@ -1303,6 +1410,20 @@ export async function runJob(jobId: string) {
       );
     } catch { /* malformed docs are ignored */ }
     docs = docs.slice(0, 4);
+
+    // ── v3.9.1 QUICK-LANE CONTINUATION ────────────────────────────────────
+    // A checkpoint in phase "drafting" carrying quick-lane state means the
+    // search+read pass already completed in an earlier slice — resume straight
+    // at compose (or salvage the partial draft the dead attempt streamed).
+    // Without this, a slice death mid-compose restarted the whole run from 0%
+    // every time (live-observed on the CF free plan).
+    if (resuming && cp?.quick && resumePhase === "drafting") {
+      await runQuickLane(ctx, { ...job, query: q }, threadContext, {
+        resume: cp.quick,
+        yieldBeforeCompose: false, // already in a fresh slice — compose now
+      });
+      return;
+    }
 
     // ---------- STAGE 0: UNDERSTAND FIRST, THEN ROUTE (chat vs quick answer vs deep research) ----------
     // The selected mode (quick…unlimited) sets HOW DEEP real questions get researched —
@@ -1435,7 +1556,23 @@ export async function runJob(jobId: string) {
     }
     if (intent === "quick") {
       await ctx.emit("info", "Routed to: quick answer", routeWhy);
-      await runQuickLane(ctx, { ...job, query: q }, threadContext);
+      await runQuickLane(ctx, { ...job, query: q }, threadContext, {
+        // v3.9.1: checkpoint the search+read pass so a mid-compose slice death
+        // resumes at compose instead of restarting the whole run; on CF also
+        // hand the compose a fresh slice of its own (per-event CPU cap).
+        persist: (s) =>
+          saveCheckpoint(jobId, {
+            v: 1,
+            phase: "drafting",
+            t0,
+            absoluteDeadline,
+            researchCutoffAt: null,
+            sliceN,
+            researchQuery: q,
+            quick: s,
+          }),
+        yieldBeforeCompose: CF,
+      });
       return;
     }
 

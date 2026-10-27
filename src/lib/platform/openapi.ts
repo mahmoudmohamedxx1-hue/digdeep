@@ -5,7 +5,7 @@
  * change it HERE — the docs page follows automatically.
  */
 
-export const API_VERSION = "3.7.0";
+export const API_VERSION = "3.9.1";
 
 const bearer = [{ bearerAuth: [] }] as const;
 const jsonBody = (schema: Record<string, unknown>, example: Record<string, unknown>) => ({

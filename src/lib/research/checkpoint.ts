@@ -62,6 +62,24 @@ export interface CheckpointQuality {
   repairQueries: string[];
 }
 
+/** v3.9.1 — quick-lane continuation state. The quick lane (one search pass +
+ * one streamed compose) used to assume it always fits a single slice — true on
+ * Vercel, false on the Cloudflare free plan, where the per-event CPU cap kills
+ * the isolate mid-compose and (without this state) the whole run restarted
+ * from scratch: re-searching, re-reading, re-composing, forever. Persisted at
+ * the search+read → compose boundary; a resumed run goes straight to compose
+ * (or salvages the partial draft the dead attempt already streamed). */
+export interface QuickLaneState {
+  /** the "Quick answer" section row — reused on resume so drafts accumulate in one place */
+  secId: string;
+  /** sources successfully read (excerpt-capped) — the compose prompt's evidence */
+  valid: { n: number; title: string; domain: string; excerpt: string }[];
+  /** every source row created for citation numbering (order matters) */
+  sourcesUsed: { n: number; url: string; title: string; domain: string }[];
+  /** thread context restored into the resume event's message */
+  threadContext: string;
+}
+
 export interface EngineCheckpoint {
   v: 1;
   phase: EnginePhase;
@@ -77,6 +95,8 @@ export interface EngineCheckpoint {
   // ── stage 0-1 products ────────────────────────────────────────────────
   intent?: string;
   routeWhy?: string;
+  /** v3.9.1: quick-lane (search+read done, compose pending) — see QuickLaneState */
+  quick?: QuickLaneState;
   /** v2.7: the query the engine actually researches — the user's message
    *  resolved against the thread's conversation memory. Set once in stage 0,
    *  restored on resume so later slices search/try/grade the same question. */

@@ -1,0 +1,41 @@
+name: Watches cron
+
+# v3.9.1 — the Cloudflare worker has no native cron trigger (the OpenNext worker
+# does not export a scheduled handler, so a wrangler "triggers" entry would fail
+# the deploy), and scheduled watches must not silently die with the Vercel
+# deployment. This workflow carries the daily tick instead: it hits the public
+# cron route with the same Bearer-secret contract Vercel Cron used (vercel.json).
+#
+# ONE-TIME OPERATOR SETUP:
+#   repo → Settings → Secrets and variables → Actions → New repository secret
+#     Name:  CRON_SECRET
+#     Value: the worker's CRON_SECRET (Cloudflare dashboard → Workers & Pages →
+#            digdeep → Settings → Variables and Secrets; or `wrangler secret list`)
+#   Then make sure Actions are enabled for the repo — the schedule starts on its
+#   own; workflow_dispatch also allows a manual tick from the Actions tab.
+#
+# Failure semantics: 200 = tick ran · 401 = CRON_SECRET missing/wrong ·
+# 5xx/timeout = the route or D1 needs eyes. A red run here is the signal.
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # 06:00 UTC daily — identical to the Vercel Cron entry
+  workflow_dispatch: {}
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Tick /api/cron/watches on the live worker
+        run: |
+          set -euo pipefail
+          code=$(curl -sS -m 180 -o /tmp/cron-body.json -w "%{http_code}" \
+            -X POST "https://digdeep.mahmoudmohamedxx1.workers.dev/api/cron/watches" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" || echo 000)
+          echo "HTTP $code"
+          cat /tmp/cron-body.json 2>/dev/null || true
+          echo
+          if [ "$code" = "401" ]; then
+            echo "::error::CRON_SECRET rejected — set the repository secret to the worker's CRON_SECRET value (see the header of this workflow file)."
+          fi
+          test "$code" = "200"

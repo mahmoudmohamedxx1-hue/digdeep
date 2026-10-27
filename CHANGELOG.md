@@ -1,5 +1,69 @@
 # Changelog
 
+## v3.9.1 — quick answers survive hosts that kill long slices (2026-10-27)
+
+- **Found live on the Cloudflare free deployment.** A quick-answer run died at
+  the "Writing the answer" step — twice, at the same point — because the whole
+  run (search → read → streamed compose) executed inside ONE request event, and
+  the free plan's per-event CPU cap killed the isolate mid-compose. Worse: the
+  quick lane never checkpointed, so every re-trigger restarted the whole run
+  from 0% — re-searching, re-reading, re-composing, forever (observed live:
+  9 orphan "Quick answer" sections, the same 3 sources re-read each cycle, and
+  `sliceN` never climbed because it was only persisted on checkpoint-resumes,
+  so the runaway guard never fired).
+- The engine now slices on Cloudflare exactly as it has on Vercel since v2.5.0:
+  `CF_PROFILE=1` activates the slice clock (45s default, `DIGDEEP_SLICE_MS`
+  to tune), checkpoints, and yields. The quick lane checkpoints its
+  search+read pass and hands the streamed compose a fresh slice of its own —
+  the heaviest call gets a fresh per-event CPU budget.
+- A resumed quick run first tries to **salvage the partial draft** the dead
+  attempt streamed into its section row (flushed every ~1.1s): if most of the
+  answer is already written, the run completes from it, honestly labeled —
+  no re-compose gamble.
+- Anti-livelock guard: `sliceN` is persisted on EVERY adoption (60-slice cap
+  on CF), so a platform that keeps killing slices mid-phase now fails the run
+  honestly ("start a fresh run") instead of looping forever.
+- Audit tooling: `scripts/cf/worker-audit.sh` — the full live battery
+  (55 checks) retargeted from `digdeepx.vercel.app` to the Cloudflare worker,
+  with v3.9.0 semantics (the secret-guarded `/api/admin/migrate` schema
+  snapshot, D1 column-count verification, the CF SVG og variants) and a
+  single controlled OTP-lane probe. Note for fixtures: Supabase rejects
+  reserved email domains (`example.com`) with `email_address_invalid` — the
+  app maps that upstream rejection to the honest 502 "temporarily
+  unavailable" (the v3.5.2 fix working as designed).
+- API version string caught up: `3.7.0` → `3.9.1` (it had missed the 3.8/3.9
+  hosting migrations).
+
+## v3.9.0 — the database is D1, everywhere (2026-10-27)
+
+- **SQLite everywhere, platform-adaptive adapter.** One generated client
+  (SQLite dialect, query-compiler WASM — no native engine binary), two runtime
+  adapters: Cloudflare D1 (the `DB` binding, via `@prisma/adapter-d1`) in
+  production, better-sqlite3 locally (FK enforcement ON so cascade deletes
+  behave exactly like D1). A stale `postgres://` `DATABASE_URL` now fails
+  loudly with migration guidance instead of constructing a broken client.
+- `DATABASE_URL` is gone from the worker entirely — the app's only database is
+  the D1 database `digdeep-db` (schema: `scripts/cf/d1-init.sql`, idempotent —
+  15 tables, 20 indexes, FK constraints; D1 enforces FKs by default).
+  Supabase stays as a service for OTP email only.
+- The old Postgres-era `/api/admin/migrate` additive-repair endpoint became a
+  **D1 schema snapshot tool**: GET (secret-guarded) reports every table's
+  shape via `PRAGMA table_info`; POST is a safe no-op that reports the current
+  shape and the correct runbook — old runbooks fail closed instead of
+  corrupting D1 with Postgres DDL.
+
+## v3.8.0 — hosted on Cloudflare, 100% free (2026-10-22)
+
+- **DigDeep runs on the Cloudflare Workers free plan.** Prisma driver adapters
+  (no native engine binary), `AUTH_SCRYPT_N` profile-tunable (16384 on CF —
+  the empirical CPU ceiling of the free plan; 32768 on Vercel/local; stored
+  hashes carry their own parameters so accounts verify cross-platform), and a
+  CF build profile that swaps `next/og`'s satori/resvg wasm for the SVG card
+  variant — the bundle lands at 2368 KiB gzipped against the 3 MiB free-plan
+  limit (704 KiB headroom, zero wasm).
+- Live at `digdeep.mahmoudmohamedxx1.workers.dev`. The Vercel path stays
+  fully intact and green on the same commit.
+
 ## v3.6.0 — chatting now needs an account (2026-10-21)
 
 - **The operator closed anonymous chatting.** Anyone who wants to talk to
