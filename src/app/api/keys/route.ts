@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getSessionUser, newApiKey, hashApiKey, KEY_SCOPES, type KeyScope } from "@/lib/auth";
 import { monthlyKeyUsage } from "@/lib/platform/start-run";
+import { encodeStringArray, parseStringArray } from "@/lib/platform/dbjson";
 
 export const maxDuration = 60;
 
@@ -23,7 +24,7 @@ export async function GET() {
         revoked: k.revoked,
         lastUsedAt: k.lastUsedAt?.toISOString() ?? null,
         createdAt: k.createdAt.toISOString(),
-        scopes: k.scopes,
+        scopes: parseStringArray(k.scopes),
         monthlyLimit: k.monthlyLimit,
         usage: k.monthlyLimit != null && !k.revoked ? await monthlyKeyUsage(k.id) : null,
       })),
@@ -65,7 +66,7 @@ export async function POST(req: Request) {
     }
     const { key, prefix } = newApiKey();
     const rec = await db.apiKey.create({
-      data: { userId: user.id, name, prefix, keyHash: hashApiKey(key), scopes, monthlyLimit },
+      data: { userId: user.id, name, prefix, keyHash: hashApiKey(key), scopes: encodeStringArray(scopes), monthlyLimit },
     });
     // the full key crosses the wire exactly once — the server keeps only its hash
     return NextResponse.json({ id: rec.id, name, prefix: `${prefix}…`, key, scopes, monthlyLimit });

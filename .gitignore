@@ -119,3 +119,4 @@ db/.pgpw
 !scripts/verify_maze_208.py
 !scripts/verify_mazemark_210.py
 3210
+.graveyard/

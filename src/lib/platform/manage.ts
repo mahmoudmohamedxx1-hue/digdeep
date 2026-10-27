@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { WEBHOOK_EVENTS, newWebhookSecret, type WebhookEvent } from "@/lib/platform/webhooks";
 import { PRESETS } from "@/lib/platform/start-run";
 import { isPublicHttpUrl } from "@/lib/platform/url-guard";
+import { encodeStringArray, parseStringArray } from "@/lib/platform/dbjson";
 
 /**
  * v3.4 PLATFORM — owner-scoped CRUD for webhooks + watches. Shared by the
@@ -38,7 +39,7 @@ export async function listWebhooks(userId: string) {
   return hooks.map((h) => ({
     id: h.id,
     url: h.url,
-    events: h.events,
+    events: parseStringArray(h.events),
     active: h.active,
     secret: h.secret, // owner-only surface (session or key auth) — needed to verify signatures
     createdAt: h.createdAt.toISOString(),
@@ -58,8 +59,8 @@ export async function createWebhook(
   if (!evts.length) return { ok: false, error: `Subscribe to at least one event: ${WEBHOOK_EVENTS.join(", ")}.`, status: 400 };
   const count = await db.webhook.count({ where: { userId } });
   if (count >= MAX_WEBHOOKS) return { ok: false, error: `Webhook limit reached (${MAX_WEBHOOKS}).`, status: 409 };
-  const hook = await db.webhook.create({ data: { userId, url, events: evts, secret: newWebhookSecret() } });
-  return { ok: true, webhook: { id: hook.id, url: hook.url, events: hook.events, secret: hook.secret, active: hook.active } };
+  const hook = await db.webhook.create({ data: { userId, url, events: encodeStringArray(evts), secret: newWebhookSecret() } });
+  return { ok: true, webhook: { id: hook.id, url: hook.url, events: parseStringArray(hook.events), secret: hook.secret, active: hook.active } };
 }
 
 export async function updateWebhook(
@@ -69,7 +70,7 @@ export async function updateWebhook(
 ): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
   const hook = await db.webhook.findUnique({ where: { id } });
   if (!hook || hook.userId !== userId) return { ok: false, error: "Webhook not found.", status: 404 };
-  const data: { active?: boolean; events?: string[]; url?: string; secret?: string } = {};
+  const data: { active?: boolean; events?: string; url?: string; secret?: string } = {};
   if (patch.active != null) data.active = patch.active;
   if (patch.url != null) {
     if (!validWebhookUrl(patch.url)) return { ok: false, error: "A valid http(s) URL is required.", status: 400 };
@@ -78,7 +79,7 @@ export async function updateWebhook(
   if (patch.events != null) {
     const evts = [...new Set(patch.events.filter((e): e is WebhookEvent => (WEBHOOK_EVENTS as readonly string[]).includes(e)))];
     if (!evts.length) return { ok: false, error: "Subscribe to at least one event.", status: 400 };
-    data.events = evts;
+    data.events = encodeStringArray(evts);
   }
   await db.webhook.update({ where: { id }, data });
   return { ok: true };

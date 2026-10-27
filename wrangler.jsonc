@@ -10,13 +10,26 @@
   },
   "vars": {
     // non-secret runtime config (secrets via `wrangler secret put`):
-    //   DATABASE_URL          Supabase session-pooler URL (postgresql://…:5432/postgres)
     //   CRON_SECRET           random hex
     //   ZAI_API_KEY           (optional — GLM lane)
+    // v3.9.0: DATABASE_URL is GONE — the database is D1 (binding below),
+    // zero external DB dependencies. Supabase Auth (OTP email) stays as a
+    // service via SUPABASE_URL/ANON_KEY.
     "CF_PROFILE": "1",
     "AUTH_SCRYPT_N": "16384",
     "SUPABASE_URL": "https://vvopggnkskzzwolxbjig.supabase.co",
     "SUPABASE_ANON_KEY": "sb_publishable_PGIlUqfudf0aisRjfC9s6g_KatzsD-D",
     "ADMIN_EMAILS": "mahmoudmohamedxx1@gmail.com"
-  }
+  },
+  // v3.9.0 — Cloudflare D1 (free tier): the app's only database. Created via
+  // the D1 REST API; schema applied from scripts/cf/d1-init.sql (idempotent,
+  // 15 tables + 20 indexes + FK constraints). D1 enforces FKs by default.
+  // Local dev uses better-sqlite3 over db/dev.db with the same schema.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "digdeep-db",
+      "database_id": "76098642-67b5-4f9c-ba35-eee510718bda"
+    }
+  ]
 }

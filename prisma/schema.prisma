@@ -1,16 +1,23 @@
 generator client {
   provider = "prisma-client-js"
   // driver adapters + WASM query compiler: the ENGINE-FREE query path via
-  // @prisma/adapter-pg — required for Cloudflare Workers (no native binaries
-  // on workerd). CRITICAL: driverAdapters ALONE still needs the Rust library
-  // engine in Prisma 6.x (the adapter replaces only the connection layer);
-  // queryCompiler replaces the engine with a WASM compiler that bundles fine
-  // into workerd. Node/Vercel run the same path — one code path everywhere.
+  // @prisma/adapter-d1 (Workers) / @prisma/adapter-better-sqlite3 (Node) —
+  // required for Cloudflare Workers (no native binaries on workerd). CRITICAL:
+  // driverAdapters ALONE still needs the Rust library engine in Prisma 6.x
+  // (the adapter replaces only the connection layer); queryCompiler replaces
+  // the engine with a WASM compiler that bundles fine into workerd.
   previewFeatures = ["driverAdapters", "queryCompiler"]
 }
 
 datasource db {
-  provider = "postgresql"
+  // v3.9.0 — SQLITE DIALECT (single code path for every platform):
+  //   * Cloudflare Workers (prod): D1 binding via @prisma/adapter-d1 (see src/lib/db.ts)
+  //   * Node local dev / tests:    better-sqlite3 via @prisma/adapter-better-sqlite3
+  // The schema is pure scalars (String/Int/Boolean/DateTime) — zero Json columns,
+  // zero enums, zero PG-specific types — so the same models run on both engines.
+  // D1 enforces FK constraints (incl. onDelete: Cascade) by default; the local
+  // better-sqlite3 path sets PRAGMA foreign_keys = ON through a factory wrapper.
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
@@ -134,8 +141,11 @@ model ApiKey {
   revoked      Boolean       @default(false)
   lastUsedAt   DateTime?
   createdAt    DateTime      @default(now())
-  // v3.4 platform layer — per-key authorization + usage caps
-  scopes       String[]      @default(["research:read", "research:write", "webhooks", "watches"])
+  // v3.4 platform layer — per-key authorization + usage caps.
+  // v3.9.0: JSON-encoded TEXT (SQLite/D1 has no array columns) — decoded at
+  // every read boundary via parseStringArray (src/lib/platform/dbjson.ts);
+  // the API surface still speaks real string arrays.
+  scopes       String         @default("[\"research:read\",\"research:write\",\"webhooks\",\"watches\"]")
   monthlyLimit Int? // max research runs per calendar month via this key; null = unlimited
   researchJobs ResearchJob[]
 
@@ -224,7 +234,10 @@ model Webhook {
   user       User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   url        String
   secret     String // per-hook signing secret (regenerable) — HMAC-SHA256
-  events     String[] // ["run.completed","run.failed","watch.changed"]
+  // v3.9.0: JSON-encoded TEXT (SQLite/D1) — decoded via parseStringArray;
+  // webhooks.ts filters with a quoted-substring `contains`, exact for the
+  // fixed WEBHOOK_EVENTS token set.
+  events     String            @default("[]")
   active     Boolean           @default(true)
   createdAt  DateTime          @default(now())
   deliveries WebhookDelivery[]

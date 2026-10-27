@@ -53,13 +53,18 @@ const nextConfig: NextConfig = {
      stub — satori + resvg.wasm + yoga.wasm + Noto (~700 KiB gzipped) would
      push the worker over the free 3 MiB limit. The og route serves its SVG
      card variant on this profile (see src/lib/og/cf-og-stub.ts). Vercel and
-     local builds are untouched — full PNG og:images everywhere else. */
+     local builds are untouched — full PNG og:images everywhere else.
+     v3.9.0: also alias the Node-only better-sqlite3 stack to a stub — the
+     native .node binary must never enter the workerd bundle; on Workers the
+     D1 adapter is used instead (src/lib/db.ts, isWorkersRuntime() branch). */
   webpack: (config) => {
     if (process.env.CF_PROFILE === "1") {
       config.resolve = config.resolve ?? {};
       config.resolve.alias = {
         ...(config.resolve.alias ?? {}),
         "next/og": path.resolve(__dirname, "src/lib/og/cf-og-stub.ts"),
+        "better-sqlite3": path.resolve(__dirname, "src/lib/db/cf-sqlite-node-stub.ts"),
+        "@prisma/adapter-better-sqlite3": path.resolve(__dirname, "src/lib/db/cf-sqlite-node-stub.ts"),
       };
     }
     return config;

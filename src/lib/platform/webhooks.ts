@@ -57,7 +57,11 @@ export async function deliverWebhookEvent(
   payload: Record<string, unknown>,
   jobId?: string,
 ): Promise<void> {
-  const hooks = await db.webhook.findMany({ where: { userId, active: true, events: { has: event } } });
+  // v3.9.0: events is a JSON-encoded TEXT column on SQLite/D1 — array `has`
+  // becomes a quoted-substring `contains`. Exact for the fixed WEBHOOK_EVENTS
+  // token set: every stored token is double-quoted, so no token can appear
+  // quoted inside another token's encoding.
+  const hooks = await db.webhook.findMany({ where: { userId, active: true, events: { contains: `"${event}"` } } });
   if (!hooks.length) return;
   const body = JSON.stringify({ ...payload, event, deliveredAt: new Date().toISOString() });
   const ts = Date.now();

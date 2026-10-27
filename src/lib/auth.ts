@@ -2,6 +2,7 @@ import { createHash, randomBytes, scrypt as _scrypt, timingSafeEqual } from "cry
 import { promisify } from "util";
 import { cookies } from "next/headers";
 import { db } from "@/lib/db";
+import { parseStringArray } from "@/lib/platform/dbjson";
 
 // v3.7: scrypt parameters are carried IN the stored string and honored on
 // verify (previously verify silently relied on Node's defaults matching the
@@ -242,7 +243,7 @@ export async function userFromApiKey(authHeader: string | null): Promise<ApiCall
     id: record.user.id,
     email: record.user.email,
     name: record.user.name,
-    key: { id: record.id, scopes: record.scopes?.length ? record.scopes : [...KEY_SCOPES], monthlyLimit: record.monthlyLimit ?? null },
+    key: { id: record.id, scopes: parseStringArray(record.scopes, KEY_SCOPES), monthlyLimit: record.monthlyLimit ?? null },
   };
 }
 
