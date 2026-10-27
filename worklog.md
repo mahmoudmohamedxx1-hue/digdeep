@@ -624,3 +624,18 @@ Work Log:
 
 Stage Summary:
 - Live checks DONE: 53/55 audit green + both failures root-caused (one was my fixture, one was F1) + F1 FIXED, proven 16/16 locally, committed & pushed as v3.9.1 (bfda90e). The worker still runs the OLD code until redeployed. OPERATOR ITEMS: (1) re-send the cfat_ Cloudflare token (env only — I run wrangler deploy; the fix is inert until then — every quick answer on the worker can still livelock); (2) add the CRON_SECRET repo secret in GitHub → Settings → Secrets → Actions so the watches cron workflow activates; (3) optional: delete the audit account + cancelled probe run from /account if undesired. KNOWN DEBT for a future task: test-standalone.sh SQLite port; the chat lane (runChatLane) has the same no-checkpoint shape as the quick lane had (lower risk — shorter composes — but the same fix pattern applies).
+
+---
+Task ID: 48
+Agent: main (Z.ai)
+Task: User: "give to me an email and password to test" — provide working test credentials for the live DigDeep worker.
+
+Work Log:
+- Reviewed password policy (auth.ts COMMON_PASSWORDS screen, 8–200 chars) and the audit's throwaway-account pattern (audit-v39-*@test.local).
+- Created a dedicated demo account on the live worker via POST /api/auth register: demo@digdeep.app / DigDeep-Demo-2026 (passes common-password screen; scrypt-16384 hash on CF profile).
+- Verified end-to-end: register → session (user id cmvqlc1u40000tr1iuaenk0of) → GET /api/auth shows hasPassword:true, otpEnabled:true → logout ok → fresh password login ok.
+- Verified app surfaces while logged in: home 200, /api/stats 200 (real D1 data: 3 accounts, runs present).
+- Logged out and removed the cookie jar so the account is clean for the operator (no dangling sessions).
+
+Stage Summary:
+- Test credentials handed to the operator: https://digdeep.mahmoudmohamedxx1.workers.dev — demo@digdeep.app / DigDeep-Demo-2026. Password path fully verified live. Reminded the operator of the known caveat: the deployed worker still runs v3.9.0 (quick-answer livelock fix v3.9.1 is inert until the cfat_ token is re-sent and the worker redeployed), and OTP-code sign-in only works with an email the operator can actually read (demo@digdeep.app is fictional — use their own Gmail to test the OTP lane).
