@@ -639,3 +639,20 @@ Work Log:
 
 Stage Summary:
 - Test credentials handed to the operator: https://digdeep.mahmoudmohamedxx1.workers.dev — demo@digdeep.app / DigDeep-Demo-2026. Password path fully verified live. Reminded the operator of the known caveat: the deployed worker still runs v3.9.0 (quick-answer livelock fix v3.9.1 is inert until the cfat_ token is re-sent and the worker redeployed), and OTP-code sign-in only works with an email the operator can actually read (demo@digdeep.app is fictional — use their own Gmail to test the OTP lane).
+
+---
+Task ID: 49
+Agent: main (Z.ai)
+Task: User: "why this reply (Answered from the built-in script — every model was throttled…)" — explain the chat-lane fallback banner the operator hit while testing with the demo account.
+
+Work Log:
+- LOCATED the mechanism: src/lib/research/engine.ts runChatLane — chat messages get ONE llmLive call with fast-fail ({patient:false, timeoutMs:30s}) because chat must never sit out cooldown minutes; on total failure it answers from builtinChatReply and marks throttledFallback (orange banner in pplx/answer.tsx, stats llmCalls:0, byModel "DigDeep (built-in)").
+- CLARIFIED the architecture (was briefly misread): /api/providers (src/lib/llm/router.ts: freellmpool@127.0.0.1 + glm-flash) is a LEGACY side module used ONLY by that status page — the ENGINE's real chain is src/lib/research/llm.ts BUILTIN_POOL = 7 keyless LLM7 models (api.llm7.io direct) + Pollinations direct + z.ai SDK lanes (sandbox-only) + custom user endpoints. The providers page showing a chain nothing uses is a pre-existing inconsistency worth fixing someday.
+- REPRODUCED LIVE (demo account): "hey there, how are you doing today?" → routed to chat (conversational) → completed 21s, mode:chat, llmCalls:0, throttledFallback:true, reply model "DigDeep (built-in)". Exact same experience as the operator's.
+- PROBED the lanes from a fresh IP: Pollinations answers instantly; LLM7 keyless is flaky per-model (GLM-5.3-Flash + DeepSeek-V4-Flash "currently unavailable", Mistral-Nemo works). Verdict: the lanes are ALIVE but throttled in waves — from Cloudflare's shared egress IPs the anonymous quota is far more contended, so within the chat lane's 30s budget every lane fails → honest script fallback. The banner text is accurate ("throttled"), not a config error.
+- TESTED the banner's promise ("ask a real research question and the pipeline will wait out the cooldowns") with a real quick run ("current population of Tokyo 2026"): the run LIVELOCKED at 4% "Understanding the question" — event log shows the cycle: classify fails (all LLM backends failed) → heuristic fallback → search succeeds (6 results) → next LLM step hits the throttle wall → isolate dies → re-adoption restarts classification (event count 12→19 over ~2.5 min, classify event x4). This is the known v3.9.0 F1 livelock, NOT yet fixed on the deployed worker (v3.9.1 fix is inert until redeploy).
+- CLEANUP: cancelled the looping run (note: cancel is PATCH /api/research/[id] {action:"cancel"} — POST returns 405, my first two cancel attempts used the wrong shape), verified status → cancelled, logged the demo account out, removed cookie jars.
+- Not changed: no code modified this task — behavior is by-design honest degradation; the actionable fixes are the two known operator items (redeploy v3.9.1 via cfat_ token; optional free personal LLM7 key in Settings to escape the shared anonymous quota waves).
+
+Stage Summary:
+- Answer to the operator: the banner fired because (1) the message was conversational → chat lane; (2) chat fast-fails at 30s by design; (3) every keyless model lane was rate-limited at that moment (shared anonymous quota, worst from Cloudflare's shared egress IPs); (4) DigDeep answered from its built-in script and labeled it honestly instead of erroring. Real research questions do NOT currently fare better on the live worker: verified a fresh quick run livelocking at 4% (v3.9.0 bug, fix awaiting redeploy). Reliable paths: free personal LLM7 key in Settings (personal quota, code path already live) + redeploy v3.9.1 (needs cfat_ token re-sent).
