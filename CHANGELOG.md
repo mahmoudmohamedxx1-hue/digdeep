@@ -1,5 +1,45 @@
 # Changelog
 
+## v3.11.1 — grounded chat actually answers weather asks; CF build un-broken (2026-10-30)
+
+- **Weather asks in chat now return real conditions.** The v3.11 web pass
+  found weather pages fine, but the pages that rank (weather.com & friends)
+  render the conditions with client-side JS — the text-extracted excerpt
+  carried no temperature, and replies degraded to "I couldn't find the exact
+  conditions" (the operator's live "weather in cairo" complaint). Fix has
+  three legs:
+  - **wttr.in lookup (new `src/lib/research/weather.ts`):** keyless JSON
+    current conditions for any place; `weatherPlace()` extracts the place
+    from the message ("hey, what's the weather in cairo right now?" →
+    "cairo", 8 trigger shapes + 4 negatives tested), the lookup is injected
+    as the lead source [1] ahead of the relevance gate, 8s abort budget,
+    fail-closed (any error → ordinary engine results continue). Proven live:
+    the exact failing message now replies "22°C (feels like 18°C), clear,
+    39% humidity, wind 18 km/h N; today 17–26°C [1]" with a References
+    block (scripts/cf/run-weather-proof.sh).
+  - **Snippet-first excerpts:** the engine snippet (which usually carries
+    the live fact) is now prepended to the page text instead of being
+    discarded when the page read succeeds.
+  - **Grounded-prompt hardening:** mine the pack for concrete facts first;
+    when the pack lacks the exact figure, state what it does establish and
+    stop — never offer to "run a quick search" (one already ran).
+- **CF builds were broken since v3.9.0 — fixed.** `src/lib/db/` was never
+  committed (the unanchored `db/` gitignore pattern swallowed it; a sandbox
+  reset then destroyed the untracked stub), so every `CF_PROFILE=1` build
+  failed on the `@prisma/adapter-better-sqlite3` alias target. Reconstructed
+  the stub, anchored the pattern to `/db/`, and committed the seven
+  lost-and-found source files the pattern had been hiding.
+- **Quarantined six broken WIP research-UI files** (an unfinished iteration
+  predating v3.11: 12 tsc errors, references a `db.report` table that
+  doesn't exist) from `src/` into `attic/research-ui-wip/` (gitignored,
+  excluded from tsconfig) — they were live routes in every local bundle
+  despite never being committed. The tree now type-checks to zero errors.
+- Committed package-lock.json (installs had drifted with no lockfile in
+  git).
+- BATTERY: tsc 0 errors · eslint clean · routing 67 cases (12 new
+  weatherPlace) · sysprompt 43 · chat-web E2E 23/23 (re-run after the
+  changes) · targeted weather proof PASS. API_VERSION 3.11.0 → 3.11.1.
+
 ## v3.11.0 — web access in chat: grounded replies with live citations (2026-10-30)
 
 - **Chat can now answer current questions.** The chat lane used to be

@@ -305,5 +305,30 @@ for (const { q, want } of live) {
   console.log(`${ok ? "PASS" : "FAIL"}  ${JSON.stringify(q)}  →  ${got}  (want ${want})`);
 }
 
+// ---- v3.11.1 weatherPlace — extract the place from a weather ask ----
+import { weatherPlace } from "../src/lib/research/weather";
+const wx: { q: string; want: string | null }[] = [
+  { q: "hey, what's the weather in cairo right now?", want: "cairo" },
+  { q: "what's the weather in cairo today?", want: "cairo" },
+  { q: "weather in new york tomorrow?", want: "new york" },
+  { q: "how's the temperature in san francisco", want: "san francisco" },
+  { q: "is it raining in london?", want: "london" },
+  { q: "tokyo weather this week", want: "tokyo" },
+  { q: "what's the forecast for rome this weekend?", want: "rome" },
+  { q: "how hot is it in dubai right now", want: "dubai" },
+  // not weather asks / no place → null (no lookup fires)
+  { q: "hey how are you doing today?", want: null },
+  { q: "what's the latest news on artificial intelligence?", want: null },
+  { q: "what's the price of bitcoin right now?", want: null },
+  { q: "what's the weather like?", want: null }, // no place named
+];
+console.log("\n--- v3.11.1 weatherPlace (chat-lane wttr.in lookup) ---");
+for (const { q, want } of wx) {
+  const got = weatherPlace(q);
+  const ok = want === null ? got === null : got !== null && got.toLowerCase() === want.toLowerCase();
+  if (!ok) fails++;
+  console.log(`${ok ? "PASS" : "FAIL"}  ${JSON.stringify(q)}  →  ${JSON.stringify(got)}  (want ${JSON.stringify(want)})`);
+}
+
 console.log(fails === 0 ? "\nALL PASS" : `\n${fails} FAILURES`);
 process.exit(fails === 0 ? 0 : 1);

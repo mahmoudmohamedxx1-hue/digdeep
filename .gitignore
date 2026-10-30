@@ -41,7 +41,7 @@ server.log
 next-env.d.ts
 
 # local runtime data
-db/
+/db/
 *.db
 *.sqlite
 
@@ -122,3 +122,4 @@ db/.pgpw
 !scripts/verify_mazemark_210.py
 3210
 .graveyard/
+attic/

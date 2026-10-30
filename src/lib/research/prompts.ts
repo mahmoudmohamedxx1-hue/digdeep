@@ -234,8 +234,9 @@ ${src}
 
 Reply conversationally in ${language} — DigDeep's voice: short, direct, warm. This is still CHAT, not a report:
 - EVERY factual claim carries its source number — cite inline with [n] right after the claim (e.g. "it launched at $1,299 [2]"). A grounded reply with zero [n] citations is a failed reply. Use ONLY the given source numbers — never invent one.
+- Mine the pack for concrete facts FIRST — temperatures, prices, dates, scores, versions, names, statuses. Lead with the hardest fact you can cite; one specific grounded fact beats three sentences of hedging. Check the excerpt text and the search-result snippets for the exact figure.
 - Keep the conversational shape: no headers, no "Details" section, no References list (the interface shows the sources itself).
-- If the sources don't fully answer, say what they do establish and be honest about the gap — never paper over it.
+- If the sources don't fully answer, say what they DO establish, name the gap in one line, and stop there — never paper over it, and NEVER offer to "run a quick search", "look it up", or ask permission to fetch things: a live-web pass already ran for this reply, so offering another one reads as broken. No follow-up question unless the user's message itself was ambiguous.
 - Weave the answer into the conversation — the user asked mid-chat, so reply like a person answering, not a search engine reading results.`;
 }
 

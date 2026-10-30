@@ -5,6 +5,7 @@ import { pinChoiceOf } from "@/lib/model-choices";
 import { capabilityQuestion, chatSearchQuery, courtMetaQuestion, courtTrialWorthiness, followUpishHeuristic, heuristicChatIntent, needsLiveFacts, selfKnowledgeTopic, type SelfTopic } from "./intent-heuristics";
 import { searchAll, fetchPageContent, domainOf, type SearchResult } from "./search";
 import { gateByRelevance } from "./relevance";
+import { weatherPlace, fetchWeatherSource } from "./weather";
 import {
   supportTokens as sharedSupportTokens,
   lexicalSupport as sharedLexicalSupport,
@@ -893,6 +894,19 @@ export async function runChatLane( // exported as a test seam for the v3.11 grou
     if (gated.dropped.length > 0) {
       await ctx.emit("refine", `Dropped ${gated.dropped.length} off-topic results — kept ${gated.kept.length}`, "The dropped pages matched filler words, not the question.");
     }
+    // v3.11.1 — keyless current-weather lookup (wttr.in): the pages that rank
+    // for weather queries render the conditions with client-side JS, so the
+    // text-extracted excerpts often carry no temperature at all. wttr.in's
+    // JSON carries the actual numbers; unshift it so it is always picked and
+    // survives as source [1]. Fail-closed: null → ordinary engine results.
+    const wxPlace = weatherPlace(job.query) ?? weatherPlace(sq);
+    if (wxPlace) {
+      const wx = await fetchWeatherSource(wxPlace);
+      if (wx) {
+        gated.kept.unshift(wx);
+        await ctx.emit("info", `Live weather check for ${wxPlace} (wttr.in)`, "Current conditions fetched as the lead source for this reply.");
+      }
+    }
     const picked: SearchResult[] = [];
     const domainCount: Record<string, number> = {};
     for (const r of gated.kept) {
@@ -906,13 +920,24 @@ export async function runChatLane( // exported as a test seam for the v3.11 grou
     }
     const contents = await Promise.all(
       picked.map(async (r) => {
-        const page = await fetchPageContent(r.url, 2400, r.excerpt);
+        // wttr.in's excerpt already IS the content (fetched as JSON) — a page
+        // fetch would only re-request the HTML variant and risk losing it
+        const page = r.engine === "wttr.in"
+          ? { text: r.excerpt ?? r.snippet, domain: r.domain, title: r.title, words: 50 }
+          : await fetchPageContent(r.url, 2400, r.excerpt);
         if (!page) {
           await ctx.emit("read", `Could not read ${r.domain}`, r.title, undefined, { url: r.url, ok: false }, "verbose");
           return null;
         }
         const n = ++ctx.sourceN;
-        const excerpt = page.text.split(/\s+/).slice(0, 550).join(" ");
+        // v3.11.1 — snippet-first composite excerpt: JS-heavy pages (weather,
+        // prices, scores) spend their first 2400 chars on cookie/nav boilerplate,
+        // while the ENGINE snippet usually carries the live fact ("28°C, partly
+        // cloudy"). Prepend the snippet so the concrete number can never be
+        // stripped by page extraction; page text still follows for substance.
+        const bodyText = page.text.split(/\s+/).slice(0, 550).join(" ").trim();
+        const snip = (r.snippet || "").trim();
+        const excerpt = snip && !bodyText.startsWith(snip.slice(0, 60)) ? `${snip}\n— from the page: ${bodyText}` : bodyText;
         await db.source.create({
           data: { jobId: ctx.jobId, url: r.url, domain: r.domain || page.domain, title: r.title || page.title || r.domain, snippet: r.snippet || excerpt.slice(0, 280), engine: r.engine, words: page.words, used: true, sectionTitle: "Reply", round: 1, quality: 60 },
         }).catch(() => null);
