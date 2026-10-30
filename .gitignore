@@ -79,6 +79,8 @@ scripts/*
 !scripts/test-court-render.ts
 !scripts/test-compute.ts
 !scripts/test-auth.ts
+!scripts/test-sysprompt.ts
+!scripts/probe-self-identity.ts
 !scripts/test-standalone.sh
 !scripts/prod-audit-verify.sh
 !scripts/test-migration.sh
