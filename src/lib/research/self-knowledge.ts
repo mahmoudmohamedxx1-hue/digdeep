@@ -41,7 +41,7 @@ MODES: quick, standard, deep, exhaustive, custom, unlimited (no caps on aspects,
 
 MODELS: GLM-5.3-Flash -> GLM-4.5-Flash (z.ai) with automatic failover to the keyless LLM7 and Pollinations pools. Optional bring-your-own-key endpoints in Settings -> Backends (presets for OpenAI, Gemini, DeepSeek, Groq, or any OpenAI-compatible URL); a key flagged "synthesis" is used only for report-writing, with the free chain as failover. Throttled models are labeled honestly, never silently swapped.
 
-OTHER FACTS: threads are stored in the user's browser (IndexedDB); up to 4 documents (.txt/.md/.csv/.json) can be attached to a question and become first-class cited sources; every report shows source diversity (domain count, median source age) and warns when one domain exceeds 40% of sources; timing labels ("Thought for Ns") are honest elapsed time.`;
+OTHER FACTS: DigDeep is an independent project, not affiliated with or built by any AI lab. Threads are stored in the user's browser (IndexedDB); up to 4 documents (.txt/.md/.csv/.json) can be attached to a question and become first-class cited sources; every report shows source diversity (domain count, median source age) and warns when one domain exceeds 40% of sources; timing labels ("Thought for Ns") are honest elapsed time.`;
 
 /** One-line pipeline summary — used when the question touches both engines and process. */
 export const PIPELINE_ONE_LINER =

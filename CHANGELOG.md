@@ -1,5 +1,51 @@
 # Changelog
 
+## v3.10.0 — self-aware system prompt, Fable-5 structure (2026-10-30)
+
+- **The chat model now knows who it is.** The models serving DigDeep's lanes
+  are interchangeable rented backends (GLM, Mistral, MiniMax, DeepSeek…), and
+  they arrive carrying their own identities — so a plain chat turn could be
+  answered "as Mistral", with a claim of being ChatGPT, or with policies that
+  are not DigDeep's. `CHAT_SYS` was one dense paragraph with no identity
+  grounding; the product spec was only injected when a self-topic was
+  detected, so every other reply ran identity-free.
+- **CHAT_SYS rebuilt with the structure of the leaked Claude Fable 5 system
+  prompt** (the ~120K-character Anthropic prompt): opener → `# digdeep_behavior`
+  → `## product_information` (the grounded spec, now embedded on EVERY chat
+  reply) → `## identity_and_the_harness` (self-awareness: the harness IS
+  DigDeep, the backend is an implementation detail — "a car does not introduce
+  itself by its engine"; never identify as the base model or claim to be
+  ChatGPT/Claude/Gemini/Grok/Copilot; honest scripted answer for "which model
+  are you?"; knows about the throttled built-in-script fallback and that the
+  interface labels the serving backend) → `## tone_and_formatting` with
+  `### lists_and_bullets` → `## responding_to_mistakes_and_criticism` →
+  `## knowledge_cutoff_and_live_information` (no browsing in chat, never
+  fabricate, hand time-sensitive questions to the research lanes) →
+  `## evenhandedness` (court mode exists for verdicts) → `## user_wellbeing`
+  → `## the_chat_lane` (the harness spec, where Fable has its memory
+  filesystem: what the lane sees, what it must never do).
+- **Self-identity leaks fixed across all lanes:** the chat and quick-answer
+  prompts said "in a Claude-like voice" — telling rented models to imitate a
+  rival assistant, which is exactly how identity confusion starts. Both now
+  say "in DigDeep's voice / You ARE DigDeep — never claim to be any other
+  assistant or its maker". `RESEARCHER_SYS` gains the harness identity line.
+  The grounded spec now answers "who made you" honestly: DigDeep is an
+  independent project, not affiliated with any AI lab.
+- **Proof, not vibes:** live probe (`scripts/probe-self-identity.ts`) sends
+  the real `CHAT_SYS` to a real keyless backend and asks the three
+  identity-breaking questions — 3/3 clean: "I'm DigDeep… I'm not ChatGPT";
+  "an independent project… not affiliated with OpenAI, Anthropic"; honest
+  about no browsing in chat + offers a research run. New structural suite
+  `scripts/test-sysprompt.ts` (33 checks) pins the Fable skeleton order, the
+  always-embedded product spec, every identity rule, catalog-label
+  consistency (the backends named in the prompt must exist in
+  `model-choices.ts`), the surviving craft rules, size bounds (4–12 KB —
+  fits 32k-context backends; actual 8.6 KB), and no residual "Claude-like".
+- Battery: tsc clean · eslint clean · 9 unit suites green (routing 48,
+  jury, pin, relevance, court-render 48+12, compute 40, auth 41,
+  sysprompt 33). Note: the deployed Cloudflare worker still runs v3.9.0 —
+  this ships with the pending redeploy (needs the Cloudflare token).
+
 ## v3.9.1 — quick answers survive hosts that kill long slices (2026-10-27)
 
 - **Found live on the Cloudflare free deployment.** A quick-answer run died at
