@@ -2,7 +2,7 @@ import { db } from "@/lib/db";
 import { notifyRunFinished } from "@/lib/platform/webhooks";
 import { llmComplete, llmStreamComplete, pinnedBackendId, routeInfoFor, type ChatMsg, type LlmResult, type ModelPref, type StreamDelta } from "./llm";
 import { pinChoiceOf } from "@/lib/model-choices";
-import { capabilityQuestion, courtMetaQuestion, courtTrialWorthiness, followUpishHeuristic, heuristicChatIntent, selfKnowledgeTopic, type SelfTopic } from "./intent-heuristics";
+import { capabilityQuestion, chatSearchQuery, courtMetaQuestion, courtTrialWorthiness, followUpishHeuristic, heuristicChatIntent, needsLiveFacts, selfKnowledgeTopic, type SelfTopic } from "./intent-heuristics";
 import { searchAll, fetchPageContent, domainOf, type SearchResult } from "./search";
 import { gateByRelevance } from "./relevance";
 import {
@@ -46,6 +46,7 @@ import {
   debateSkepticPrompt,
   debateJudgePrompt,
   diffDigestPrompt,
+  groundedChatPrompt,
   msg,
   type Intent,
 } from "./prompts";
@@ -820,31 +821,137 @@ ${v.chargesStuck?.length ? `\nCharges that stuck:\n${v.chargesStuck.map((c) => `
 Answer the user's question FROM THIS RECORD ONLY. Report the verdict, the split, the deliberation, the judge's reasoning and the juror positions exactly as recorded — never invent proceedings, votes or arguments that are not here. If the record does not cover what they asked, say so plainly. Do NOT start a new trial and do NOT suggest a research run for this.`;
 }
 
-/** CHAT LANE — direct conversational reply, no search, no report structure.
+/** CHAT LANE — direct conversational reply, no report structure.
  *  Self-knowledge questions (engines/process/models/capabilities) get the grounded
  *  SELF_KNOWLEDGE spec injected into the prompt, so the answer is accurate even
  *  though the model has never seen the codebase. With courtRecall, the reply is
- *  answered from the trial record of a previous turn in this thread instead. */
-async function runChatLane(
+ *  answered from the trial record of a previous turn in this thread instead.
+ *  v3.11 GROUNDED CHAT: when the message needs CURRENT FACTS (a price, news,
+ *  weather, who won, "latest…", an explicit "look it up"), the lane runs ONE
+ *  bounded live-web pass — search + up to 3 reads — and grounds the reply in
+ *  it with [n] citations, so chat answers time-sensitive questions instead of
+ *  saying "I cannot see the live web". On sliced platforms (CF free CPU cap)
+ *  the reply composes in its own slice, exactly like the quick lane. */
+export async function runChatLane( // exported as a test seam for the v3.11 grounded-chat proof
   ctx: Ctx,
-  job: { id: string; query: string },
+  job: { id: string; query: string; language: string },
   threadContext: string,
-  courtRecall?: { query: string; verdict: CourtVerdict }
+  courtRecall?: { query: string; verdict: CourtVerdict },
+  opts: {
+    /** continuation: restore an interrupted grounded-web pass (sources kept, no re-search) */
+    resume?: QuickLaneState;
+    /** continuation: persist the web pass at the compose boundary */
+    persist?: (s: QuickLaneState) => Promise<void>;
+    /** hand the reply compose its own fresh slice (CF free plan: per-event CPU cap) */
+    yieldBeforeCompose?: boolean;
+  } = {}
 ): Promise<void> {
   const selfTopic = selfKnowledgeTopic(job.query) ?? (capabilityQuestion(job.query) ? ("capabilities" as SelfTopic) : null);
+  // grounded chat fires only for genuinely live-fact asks — never for self-knowledge
+  // (the spec answers those) and never for a court recall (the record answers those)
+  const wantsWeb = !opts.resume && !selfTopic && !courtRecall && needsLiveFacts(job.query);
+  let sourcesUsed: { n: number; url: string; title: string; domain: string }[] = [];
+  let valid: { n: number; title: string; domain: string; excerpt: string }[] = [];
+
   await updateJob(ctx.jobId, { status: "planning", stage: "Thinking…", progress: 40, startedAt: new Date() });
   await ctx.emit(
     "info",
-    "Chat mode — no research needed for this",
+    wantsWeb ? "Chat mode — with a quick live-web check" : "Chat mode — no research needed for this",
     courtRecall
       ? `You asked about the trial that already ran in this thread — I am recalling the verdict (${courtRecall.verdict.verdict}, ${courtRecall.verdict.guilty}–${courtRecall.verdict.notGuilty}) from the court record instead of re-trying a concluded case.`
       : selfTopic
       ? `This asks about my own ${selfTopicWord(selfTopic)} — I know that from my configuration, so I am answering directly from my product spec instead of launching the research pipeline.`
+      : wantsWeb
+      ? "This message reads as conversation, but it asks about something current — a price, news, a result. I am checking the live web for a few sources first, then replying right here in chat (not the full research pipeline)."
       : "This message reads as conversation (greeting / small talk / about DigDeep), so I am replying directly instead of launching the research pipeline. Ask any real question and I will dig deep."
   );
-  const sec = await db.researchSection.create({
-    data: { jobId: ctx.jobId, order: 0, title: "Reply", question: job.query, queries: "[]" },
-  });
+  const sec: { id: string } = opts.resume
+    ? // v3.11 continuation — reuse the "Reply" section row so drafts accumulate in one place
+      { id: opts.resume.secId }
+    : await db.researchSection.create({
+        data: { jobId: ctx.jobId, order: 0, title: "Reply", question: job.query, queries: wantsWeb ? JSON.stringify([job.query]) : "[]" },
+      });
+
+  if (opts.resume) {
+    // v3.11 continuation — the grounded-web pass completed in an earlier slice
+    valid = opts.resume.valid;
+    sourcesUsed = opts.resume.sourcesUsed;
+    await updateJob(ctx.jobId, { status: "researching", stage: "Writing the reply…", progress: 80 });
+    await ctx.emit(
+      "info",
+      "Continuing the reply — resuming where the last slice stopped",
+      "The live sources for this reply were already found and read; the previous slice was cut short by the platform clock before the reply finished. This slice picks up exactly there — no re-searching, no re-reading."
+    );
+  } else if (wantsWeb) {
+    // ── v3.11 the bounded live-web pass (mirrors the quick lane, tighter caps) ──
+    await updateJob(ctx.jobId, { status: "researching", stage: "Checking the live web…", progress: 30 });
+    // the conversational wrappers ("btw", "hey") poison search ranking — search the cleaned question
+    const sq = chatSearchQuery(job.query);
+    const rs = await searchAll(sq, { academic: false });
+    await ctx.emit("search", `Searching: “${sq}”`, `${rs.length} results`, undefined, { query: sq, count: rs.length, engines: [...new Set(rs.map((r) => r.engine))] });
+    const gated = gateByRelevance(sq, job.query, rs.filter((r) => r.url && !r.domain.includes("duckduckgo.com")));
+    if (gated.dropped.length > 0) {
+      await ctx.emit("refine", `Dropped ${gated.dropped.length} off-topic results — kept ${gated.kept.length}`, "The dropped pages matched filler words, not the question.");
+    }
+    const picked: SearchResult[] = [];
+    const domainCount: Record<string, number> = {};
+    for (const r of gated.kept) {
+      if (picked.length >= 3) break; // chat needs less evidence than a quick answer
+      if (ctx.seenUrls.has(r.url)) continue;
+      const dc = domainCount[r.domain] ?? 0;
+      if (dc >= 2) continue;
+      domainCount[r.domain] = dc + 1;
+      picked.push(r);
+      ctx.seenUrls.add(r.url);
+    }
+    const contents = await Promise.all(
+      picked.map(async (r) => {
+        const page = await fetchPageContent(r.url, 2400, r.excerpt);
+        if (!page) {
+          await ctx.emit("read", `Could not read ${r.domain}`, r.title, undefined, { url: r.url, ok: false }, "verbose");
+          return null;
+        }
+        const n = ++ctx.sourceN;
+        const excerpt = page.text.split(/\s+/).slice(0, 550).join(" ");
+        await db.source.create({
+          data: { jobId: ctx.jobId, url: r.url, domain: r.domain || page.domain, title: r.title || page.title || r.domain, snippet: r.snippet || excerpt.slice(0, 280), engine: r.engine, words: page.words, used: true, sectionTitle: "Reply", round: 1, quality: 60 },
+        }).catch(() => null);
+        sourcesUsed.push({ n, url: r.url, title: r.title || page.title || r.domain, domain: r.domain || page.domain });
+        await ctx.emit("read", `Reading ${r.domain} · ${page.words.toLocaleString()} words`, r.title || page.title, undefined, { url: r.url, words: page.words, n }, "verbose");
+        return { n, title: r.title || page.title, domain: r.domain || page.domain, excerpt };
+      })
+    );
+    valid = contents.filter((c): c is { n: number; title: string; domain: string; excerpt: string } => !!c);
+    // snippet fallback so citations & the Sources row stay honest
+    if (valid.length === 0 && rs.length > 0) {
+      await ctx.emit("info", "Full page reads failed — using search-result snippets");
+      const snippetSrcs = rs.slice(0, 3).map((r, i) => ({ n: 900 + i, title: r.title, domain: r.domain, excerpt: r.snippet }));
+      for (let i = 0; i < snippetSrcs.length; i++) {
+        const r = rs[i];
+        if (!r?.url) continue;
+        await db.source.create({
+          data: { jobId: ctx.jobId, url: r.url, domain: r.domain || "", title: r.title || r.domain || "source", snippet: r.snippet, engine: "snippet", words: 0, used: true, sectionTitle: "Reply", round: 1, quality: 30 },
+        }).catch(() => null);
+        sourcesUsed.push({ n: 900 + i, url: r.url, title: r.title || r.domain, domain: r.domain || "" });
+      }
+      valid = snippetSrcs;
+    }
+    // v3.11 continuation boundary — persist the web pass; on CF end this slice
+    // so the streamed reply composes in a fresh event with a fresh CPU budget.
+    await updateJob(ctx.jobId, { stage: "Writing the reply…", progress: 80 });
+    if (opts.persist) {
+      await opts.persist({ secId: sec.id, valid, sourcesUsed, threadContext });
+      if (opts.yieldBeforeCompose) {
+        await ctx.emit(
+          "info",
+          "Slice boundary — writing the reply in a fresh slice",
+          "The live sources are already found and read, and the platform caps each function slice, so the reply itself is written in a fresh slice. Nothing is re-done — the next slice continues from exactly here."
+        );
+        return; // the poller's next GET resumes from the checkpoint straight into compose
+      }
+    }
+  }
+
   let reply = "";
   let replyModel = "";
   let fallback = false;
@@ -854,9 +961,14 @@ async function runChatLane(
     // being written instead of staring at a spinner. Fast-fail opts: chat must never ride
     // minutes of throttling; the built-in script below catches total exhaustion.
     const res = await ctx.llmLive(
-      [{ role: "user", content: chatPrompt(job.query, threadContext ? threadContext.slice(0, 1200) : "", selfTopic, courtRecall ? courtRecallText(courtRecall) : undefined) }],
-      "chat-reply",
-      "Thinking about your message",
+      [{
+        role: "user",
+        content: valid.length > 0
+          ? groundedChatPrompt(job.query, threadContext ? threadContext.slice(0, 1200) : "", valid, job.language || "English")
+          : chatPrompt(job.query, threadContext ? threadContext.slice(0, 1200) : "", selfTopic, courtRecall ? courtRecallText(courtRecall) : undefined),
+      }],
+      valid.length > 0 ? "chat-grounded" : "chat-reply",
+      valid.length > 0 ? "Writing a grounded reply" : "Thinking about your message",
       { system: CHAT_SYS, streamTo: sec.id, fast: { patient: false, timeoutMs: 30_000 } }
     );
     reply = res.text.trim();
@@ -867,13 +979,21 @@ async function runChatLane(
     fallback = true;
     reply = builtinChatReply(job.query);
     replyModel = "DigDeep (built-in)";
-    await ctx.emit("info", "Models are throttled — replying from my own script", "All free backends are rate-limited right now, so this reply is built in rather than model-generated. Nothing is lost — ask a real research question and the pipeline will wait out the cooldowns.");
+    await ctx.emit("info", "Models are throttled — replying from my own script", `All free backends are rate-limited right now, so this reply is built in rather than model-generated.${sourcesUsed.length > 0 ? ` The ${sourcesUsed.length} live source${sourcesUsed.length > 1 ? "s" : ""} I found are saved on this run — regenerate the reply in a moment and I will answer from them.` : " Nothing is lost — ask a real research question and the pipeline will wait out the cooldowns."}`);
   }
   await db.researchSection.update({ where: { id: sec.id }, data: { status: "done", draftMd: reply, findings: reply } });
   const durationMs = Date.now() - ctx.startedAt;
+  // citation remap + References (same assembly as the quick lane — the UI numbers
+  // sources by row order, so [n]s must be renumbered to match)
+  const remap: Record<number, number> = {};
+  sourcesUsed.forEach((s, i) => (remap[s.n] = i + 1));
+  const refs = sourcesUsed.map((s, i) => `${i + 1}. ${s.title} — *${s.domain}* — ${s.url}`).join("\n");
+  const body = sourcesUsed.length > 0 ? reply.replace(/\[(\d+)\]/g, (_, d) => `[${remap[Number(d)] ?? d}]`) : reply;
+  const reportMd = sourcesUsed.length > 0 ? `${body}\n\n## References\n\n${refs}` : body;
   const stats = {
     mode: "chat",
     durationMs,
+    ...(sourcesUsed.length > 0 ? { sourcesConsulted: sourcesUsed.length } : {}),
     llmCalls: fallback ? 0 : 1,
     byModel: { [replyModel]: { calls: 1, totalMs: durationMs } },
     reportWords: reply.split(/\s+/).length,
@@ -882,11 +1002,11 @@ async function runChatLane(
     finishedAt: new Date().toISOString(),
   };
   await updateJob(ctx.jobId, {
-    status: "completed", stage: "Completed", progress: 100, reportMd: reply,
+    status: "completed", stage: "Completed", progress: 100, reportMd,
     stats: JSON.stringify(stats), completedAt: new Date(),
   });
   await notifyRunFinished(ctx.jobId); // v3.4: webhooks + watch advancement (never throws)
-  await ctx.emit("done", "Replied", `Conversational answer in ${Math.round(durationMs / 1000)}s — no sources fetched, no research run${courtRecall ? " — recalled from the court record of this thread's trial" : ""}${fallback ? " (built-in script — models were throttled)" : ""}${pinNote ? ` (${pinNote})` : ""}`, replyModel, stats);
+  await ctx.emit("done", "Replied", `Conversational answer in ${Math.round(durationMs / 1000)}s${sourcesUsed.length > 0 ? ` · ${sourcesUsed.length} live source${sourcesUsed.length > 1 ? "s" : ""} checked` : " — no sources fetched, no research run"}${courtRecall ? " — recalled from the court record of this thread's trial" : ""}${fallback ? " (built-in script — models were throttled)" : ""}${pinNote ? ` (${pinNote})` : ""}`, replyModel, stats);
 }
 
 /** QUICK LANE — one focused search pass + a concise cited answer (Perplexity quick answer).
@@ -1417,6 +1537,17 @@ export async function runJob(jobId: string) {
     // at compose (or salvage the partial draft the dead attempt streamed).
     // Without this, a slice death mid-compose restarted the whole run from 0%
     // every time (live-observed on the CF free plan).
+    // ── v3.11 CHAT-LANE CONTINUATION ──────────────────────────────────
+    // A checkpoint in phase "drafting" carrying chat-lane state means the
+    // grounded-web pass (search+read) already completed in an earlier slice —
+    // resume straight at the reply compose, same pattern as the quick lane.
+    if (resuming && cp?.chat && resumePhase === "drafting") {
+      await runChatLane(ctx, { ...job, query: q }, cp.chat.threadContext ?? threadContext, undefined, {
+        resume: cp.chat,
+        yieldBeforeCompose: false, // already in a fresh slice — compose now
+      });
+      return;
+    }
     if (resuming && cp?.quick && resumePhase === "drafting") {
       await runQuickLane(ctx, { ...job, query: q }, threadContext, {
         resume: cp.quick,
@@ -1551,7 +1682,23 @@ export async function runJob(jobId: string) {
     await updateJob(jobId, { mode: intent });
     if (intent === "chat") {
       await ctx.emit("info", "Routed to: chat", routeWhy);
-      await runChatLane(ctx, job, threadContext, courtRecall);
+      await runChatLane(ctx, job, threadContext, courtRecall, {
+        // v3.11: when the message needs current facts, the lane runs a bounded
+        // web pass — checkpoint it so a mid-compose slice death resumes at the
+        // reply instead of restarting; on CF hand the compose its own slice.
+        persist: (s) =>
+          saveCheckpoint(jobId, {
+            v: 1,
+            phase: "drafting",
+            t0,
+            absoluteDeadline,
+            researchCutoffAt: null,
+            sliceN,
+            researchQuery: q,
+            chat: s,
+          }),
+        yieldBeforeCompose: CF,
+      });
       return;
     }
     if (intent === "quick") {

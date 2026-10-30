@@ -97,6 +97,10 @@ export interface EngineCheckpoint {
   routeWhy?: string;
   /** v3.9.1: quick-lane (search+read done, compose pending) — see QuickLaneState */
   quick?: QuickLaneState;
+  /** v3.11: chat-lane grounded-web pass (search+read done, reply compose pending).
+   *  Same shape as the quick-lane state — the lanes differ in voice and output,
+   *  not in what a web pass must carry across a slice boundary. */
+  chat?: QuickLaneState;
   /** v2.7: the query the engine actually researches — the user's message
    *  resolved against the thread's conversation memory. Set once in stage 0,
    *  restored on resume so later slices search/try/grade the same question. */

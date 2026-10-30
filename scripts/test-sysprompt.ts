@@ -4,7 +4,7 @@
  *  embed the grounded product spec ALWAYS, carry the identity/self-awareness
  *  rules, and stay consistent with the live model catalog.
  *  Run: bun scripts/test-sysprompt.ts */
-import { CHAT_SYS, RESEARCHER_SYS, chatPrompt, quickAnswerPrompt } from "../src/lib/research/prompts";
+import { CHAT_SYS, RESEARCHER_SYS, chatPrompt, quickAnswerPrompt, groundedChatPrompt } from "../src/lib/research/prompts";
 import { SELF_KNOWLEDGE } from "../src/lib/research/self-knowledge";
 import { LLM7_KEYLESS_CHOICES } from "../src/lib/model-choices";
 
@@ -71,8 +71,11 @@ ok(CHAT_SYS.includes("SAME language the user wrote in"), "language mirroring rul
 ok(CHAT_SYS.includes("at most one question back"), "one-question-back rule");
 ok(CHAT_SYS.includes('"genuinely", "honestly", "straightforward"'), "banned filler words");
 ok(CHAT_SYS.includes("at most ONCE per conversation"), "invite-a-topic-once rule");
-ok(CHAT_SYS.includes("NO web access"), "chat lane forbids pretending to browse");
-ok(CHAT_SYS.includes("never fabricate"), "no fabricated facts/citations");
+ok(CHAT_SYS.includes("source pack"), "prompt knows the v3.11 live source-pack mechanism");
+ok(CHAT_SYS.includes("no web access"), "turns without a source pack still forbid pretending to browse");
+ok(CHAT_SYS.includes("never pretend to have searched"), "never pretend to have searched");
+ok(CHAT_SYS.includes("never state a number, date, quote or statistic that is not in the sources"), "no fabricated facts/citations (source-pack turns)");
+ok(CHAT_SYS.includes("harness never searches the web for DigDeep itself"), "self-knowledge never triggers a web pass");
 
 console.log("── E · size & hygiene ──");
 const len = CHAT_SYS.length;
@@ -90,6 +93,16 @@ ok(RESEARCHER_SYS.includes("never invent facts or citations"), "RESEARCHER_SYS k
 const selfP = chatPrompt("what engines do you use?", "", "engines" as never);
 ok(selfP.includes("PRODUCT INFORMATION"), "self-topic chat prompt still injects the product spec");
 ok(selfP.includes("answer from the product information above ONLY") || selfP.includes("Answer from the product information above ONLY"), "self-topic prompt still enforces spec-only answers");
+
+console.log("── G · grounded chat (v3.11 web access in chat) ──");
+const gp = groundedChatPrompt("what's bitcoin at right now?", "", [{ n: 1, title: "CoinMarketCap", domain: "coinmarketcap.com", excerpt: "BTC is at $67,400." }], "English");
+ok(gp.includes("Live web sources just retrieved"), "grounded prompt presents the source pack");
+ok(gp.includes("[1] CoinMarketCap (coinmarketcap.com)"), "grounded prompt numbers the sources");
+ok(gp.includes("cite inline with [n]"), "grounded prompt demands [n] citations");
+ok(gp.includes("Use ONLY the given source numbers"), "grounded prompt forbids invented citations");
+ok(gp.includes("still CHAT, not a report"), "grounded reply keeps the conversational shape");
+ok(gp.includes("never invent"), "grounded prompt: never invent a source number");
+ok(!/\bClaude\b/.test(gp), "grounded prompt has no Claude reference");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

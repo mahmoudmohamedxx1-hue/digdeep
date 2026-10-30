@@ -17,7 +17,7 @@
 export const SELF_KNOWLEDGE = `PRODUCT INFORMATION — DigDeep. Answer questions about yourself ONLY from this section. If a detail is not here, say you are not sure rather than inventing it.
 
 WHAT DIGDEEP IS
-An autonomous research assistant with three lanes. Every message is routed automatically: chat (conversation and questions about DigDeep itself — direct reply, no search), quick (simple factual questions — one focused multi-engine pass with citations), research (real questions — the full pipeline below, streamed live). Free and keyless by default.
+An autonomous research assistant with three lanes. Every message is routed automatically: chat (conversation — a direct reply, and when the message asks about something current — a price, news, a result — a quick live-web check with citations, no full pipeline; questions about DigDeep itself answer from the product spec), quick (simple factual questions — one focused multi-engine pass with citations), research (real questions — the full pipeline below, streamed live). Free and keyless by default.
 
 SEARCH ENGINES (13 total, run in parallel per query, results deduped and interleaved; an LLM reranks candidates with publication dates in view so fast-moving topics prefer fresh evidence):
 - Whole-web, keyless: DuckDuckGo, SearXNG (public instances; users can add their own in Settings), Mojeek, Marginalia

@@ -331,3 +331,64 @@ export function heuristicChatIntent(raw: string): "chat" | null {
   if (selfKnowledgeTopic(raw)) return "chat";
   return null;
 }
+
+/** v3.11 — does a CHAT-lane message need live web facts?
+ *
+ *  The chat lane keeps its conversational shape, but when the message asks
+ *  about something time-sensitive (a price, news, weather, who won, "latest…")
+ *  or explicitly asks to look something up, the lane runs ONE bounded web pass
+ *  (search + up to 3 reads) and grounds the reply in it — chat answers current
+ *  questions with citations instead of "I cannot see the live web".
+ *
+ *  Precision beats recall here: a false positive costs a ~5s web pass, but a
+ *  false trigger on pure small talk makes chat feel sluggish — so every
+ *  pattern is anchored to genuinely time-sensitive language, and questions
+ *  about DigDeep itself NEVER need the web (the grounded spec answers them).
+ *  Both the normalized text AND the raw message are matched: normalize()
+ *  strips a trailing "now", which would otherwise hide "right now". */
+export function needsLiveFacts(raw: string): boolean {
+  const s = normalize(raw);
+  if (!s) return false;
+  const rawLo = raw.toLowerCase();
+  const hit = (re: RegExp) => re.test(s) || re.test(rawLo);
+  // questions about DigDeep itself never need the web — the product spec answers them
+  if (selfKnowledgeTopic(raw) || capabilityQuestion(raw)) return false;
+  // explicit search asks — "search for X", "look it up", "google it", "fact check"
+  if (hit(/\b(search (the web |the internet |online )?(for|up)|look (it|this|that|them|him|her|up)+ up|google (it|the|what|who|when|where|how|that)|fact ?check)\b/)) return true;
+  // freshness markers — the answer changes with time
+  if (hit(/\b(right now|as we speak|currently|at the moment|these days|nowadays|up to date|up-to-date|breaking|latest|newest|just (released|announced|dropped|came out|launched))\b/)) return true;
+  // time-anchored factual nouns — "today's weather", "the match today", "news this week"
+  if (hit(/\b(today|tonight|this (morning|afternoon|evening|week|month|year))('?s)? (weather|news|price|match|game|score|stock|headlines|deal|quote|episode|top|best)\b/)) return true;
+  if (hit(/\b(weather|news|price|match|game|score|stock|headline|episode|version|release|poll) (today|tonight|now|this (week|month|year))\b/)) return true;
+  // recent-event shapes — "who won", "what happened", "any news on", "any updates"
+  if (hit(/\b(who (won|wins|leads|playing)|what happened|what s happening|any (news|updates?|word) (on|about)|any update|is it true that .* (just )?(happened|died|released|announced))\b/)) return true;
+  // volatile facts — prices, rates, standings, dates, elections
+  if (hit(/\b(price|prices|stock price|share price|exchange rate|market cap|net worth|weather|forecast|temperature|odds|release date|launch date|box office|election|exit poll|score|standings?|leaderboard)\b/)) return true;
+  // year-qualified comparisons — "best laptops 2026" (bare years never fire)
+  if (hit(/\b(best|top|new|newest|fastest|cheapest|most popular|flagship)\b[^.]*\b(20\d{2})\b|\b(20\d{2})\b[^.]*\b(best|top|new|newest|fastest|cheapest|most popular|flagship)\b/)) return true;
+  // state-of-the-world checks — "is X still called Y", "is X down"
+  if (hit(/\bstill (called|named|available|open|down|banned|legal|alive|out|the case|true)\b|\b(down|offline) right now\b/)) return true;
+  return false;
+}
+
+/** v3.11 — clean a conversational message into the SEARCH QUERY for the chat
+ *  lane's web pass. Mixed messages ("btw what's the weather in cairo right
+ *  now?") must not be searched verbatim — the conversational wrappers poison
+ *  the ranking (live-observed: "btw …weather…right now" surfaced SPACE-weather
+ *  pages). Strips lead-ins and trailing politeness, keeps the question's own
+ *  words (time words like "right now" stay — they signal freshness); falls
+ *  back to the raw message when nothing recognizable remains. */
+export function chatSearchQuery(raw: string): string {
+  let s = raw.trim();
+  for (let i = 0; i < 4; i++) {
+    const stripped = s
+      .replace(/^(hey|hi|hello|yo|ok|okay|so|well|hmm+|um+|btw|by the way|quick (one|question)|sorry|please|pls|and|but|just|actually|really)[,!?.\s]+/i, "")
+      .trim();
+    if (stripped === s) break;
+    s = stripped;
+  }
+  s = s.replace(/[\s,]*(please|pls|thanks|thank you|thx|man|bro|dude|mate|buddy)[\s,.!?]*$/i, "").trim();
+  s = s.replace(/[?!.]+$/, "").trim();
+  if (s.length < 8 || s.split(/\s+/).length < 2) return raw.trim(); // nothing recognizable — search the raw message
+  return s;
+}

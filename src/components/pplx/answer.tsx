@@ -228,7 +228,11 @@ export function AnswerView({
 
   // chat replies: one continuous typing stream across live → completed
   const chatFull = job.reportMd ?? liveAnswerText;
-  const chatTarget = isChat && animate ? chatFull : "";
+  // v3.11 grounded chat: reportMd carries a trailing "## References" block for
+  // export/share/copy — the chat bubble shows only the reply itself (the [n]
+  // chips link to the sources via the sources prop)
+  const chatBody = chatFull.replace(/\n*## References\n[\s\S]*$/, "").trim();
+  const chatTarget = isChat && animate ? chatBody : "";
   const { text: typedChat, typing: chatTyping, skip: skipChat } = useTyper(chatTarget, isChat && animate);
 
   // parse the completed report once — stable identities keep the memoized
@@ -273,8 +277,9 @@ export function AnswerView({
             </p>
           </div>
         )}
-        <div className={chatTyping ? "typing-caret" : ""}>
-          <Markdown text={animate ? typedChat : chatFull} />
+        <div className={chatTyping ? "typing-caret" : ""} dir="auto">
+          {/* v3.11: sources prop makes [n] citations in grounded chat replies link to the sources */}
+          <Markdown text={animate ? typedChat : chatBody} sources={sources.length > 0 ? sources : undefined} />
         </div>
         {chatTyping && <div className="mt-3"><SkipTypingButton onClick={skipChat} /></div>}
 

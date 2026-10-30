@@ -1,6 +1,6 @@
 /** Routing sanity tests — chat heuristics must catch meta/casual messages,
  *  and must NOT catch real research questions. Run: bun scripts/test-routing.ts */
-import { heuristicChatIntent, selfKnowledgeTopic } from "../src/lib/research/intent-heuristics";
+import { heuristicChatIntent, selfKnowledgeTopic, needsLiveFacts } from "../src/lib/research/intent-heuristics";
 
 const cases: { q: string; want: "chat" | null }[] = [
   // ---- must be CHAT (the user's complaint) ----
@@ -265,6 +265,41 @@ const meta: { q: string; want: boolean }[] = [
 console.log("\n--- v2.9 court meta questions (verdict recall gate) ---");
 for (const { q, want } of meta) {
   const got = courtMetaQuestion(q);
+  const ok = got === want;
+  if (!ok) fails++;
+  console.log(`${ok ? "PASS" : "FAIL"}  ${JSON.stringify(q)}  →  ${got}  (want ${want})`);
+}
+
+// ---- v3.11 needsLiveFacts — when does the CHAT lane run a live-web pass? ----
+const live: { q: string; want: boolean }[] = [
+  // must TRIGGER the web pass (current facts, explicitly time-sensitive)
+  { q: "btw what's the price of bitcoin right now?", want: true },
+  { q: "what's the weather in cairo today?", want: true },
+  { q: "who won the match yesterday?", want: true },
+  { q: "any news on the openai thing?", want: true },
+  { q: "what's the latest version of node?", want: true },
+  { q: "hey, can you look up the exchange rate for me?", want: true },
+  { q: "google it: who is the current ceo of twitter", want: true },
+  { q: "what are the best laptops 2026?", want: true },
+  { q: "is twitter still called x?", want: true },
+  { q: "what's happening in the world right now", want: true },
+  { q: "any update on the gaza ceasefire?", want: true },
+  // must NOT trigger (pure conversation / self-knowledge / timeless chat)
+  { q: "how are you today?", want: false },
+  { q: "hey, how are you doing?", want: false },
+  { q: "thanks, that was helpful", want: false },
+  { q: "what can you do?", want: false },
+  { q: "who made you?", want: false },
+  { q: "what engines do you use?", want: false },
+  { q: "can you make a deep research?", want: false },
+  { q: "tell me about yourself", want: false },
+  { q: "i was born in 1999", want: false },
+  { q: "that answer was right", want: false },
+  { q: "are you still free to use?", want: false },
+];
+console.log("\n--- v3.11 needsLiveFacts (chat-lane web-pass trigger) ---");
+for (const { q, want } of live) {
+  const got = needsLiveFacts(q);
   const ok = got === want;
   if (!ok) fails++;
   console.log(`${ok ? "PASS" : "FAIL"}  ${JSON.stringify(q)}  →  ${got}  (want ${want})`);

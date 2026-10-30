@@ -1,5 +1,67 @@
 # Changelog
 
+## v3.11.0 — web access in chat: grounded replies with live citations (2026-10-30)
+
+- **Chat can now answer current questions.** The chat lane used to be
+  web-blind: ask "btw what's bitcoin at right now?" mid-conversation and the
+  reply was "I cannot see the live web" (or, before v3.10, an improvised
+  guess). Now the lane detects live-fact asks and runs ONE bounded web pass —
+  search + up to 3 page reads — then writes the reply from those sources with
+  inline [n] citations: conversational in shape, cited in substance. Pure
+  small talk stays pure (no web pass, no cost); self-knowledge questions
+  still answer from the product spec (the harness never searches the web for
+  DigDeep itself).
+- **Trigger:** `needsLiveFacts()` (intent-heuristics, zero-LLM, works when
+  every model is throttled) fires on explicit search asks ("look it up",
+  "google it"), freshness markers ("right now", "latest", "today's …"),
+  volatile facts (prices, rates, weather, scores, release dates), year-
+  qualified comparisons ("best laptops 2026"), recent-event shapes ("who
+  won", "any news on") and state checks ("is twitter still called x") — and
+  never on greetings, self-topics or timeless chat ("how are you today"
+  stays offline). 22 pinned cases in test-routing.
+- **Search quality:** mixed conversational messages are searched via
+  `chatSearchQuery()` — a cleaner that strips the wrappers ("btw", "hey …",
+  trailing politeness) which poison ranking (live-observed: the verbatim
+  "btw …weather…right now" surfaced SPACE-weather pages; the cleaned query
+  fixed it). The gate scores against the cleaned query but keeps the full
+  message as intent reference.
+- **Serverless survival (the quick-lane pattern, applied to chat):** the web
+  pass checkpoints (`EngineCheckpoint.chat`, phase "drafting") and on the CF
+  free plan YIELDS before the reply compose — a mid-compose CPU-cap death
+  resumes at the reply with sources kept, no re-search, no duplicate section
+  row. A throttle-death mid-web-pass still restarts the pass (searches are
+  idempotent). Resume dispatch lives in runJob next to the quick lane's.
+- **Assembly:** the reply gets the quick lane's citation treatment — [n]s
+  remapped to source-row order, a References block appended to reportMd for
+  export/share/copy, `sourcesConsulted` in stats, and the done line reads
+  "Conversational answer in Ns · K live sources checked". The UI chat bubble
+  renders the reply (References block stripped) with the sources prop wired
+  so [n] chips link to the sources; throttled fallback now says the found
+  sources are saved and offers regeneration.
+- **Prompt:** CHAT_SYS's `knowledge_cutoff_and_live_information` and
+  `the_chat_lane` sections rewritten for the source-pack mechanism — when a
+  pack is present every factual claim must carry its [n] ("a grounded reply
+  with zero [n] citations is a failed reply"), when absent the no-web rules
+  apply. New `groundedChatPrompt()` keeps the chat voice (no headers, no
+  References list in-text) while demanding citations. SELF_KNOWLEDGE's lane
+  description updated to match.
+- **Proof, not vibes:** `scripts/cf/run-chat-web-test.sh` — real engine, real
+  web search, real LLM lanes, throwaway SQLite DB, CF profile — 23/23: pure
+  chat runs no web pass; the live-facts message searches/reads (Source rows
+  created), persists the checkpoint, yields at "Writing the reply…" 80%;
+  runJob adoption resumes with sources unchanged, no duplicate section,
+  completes with inline citations + References + sourcesConsulted; sliceN
+  climbs. Honesty verified en route: when the retrieved sources genuinely
+  didn't answer (the space-weather and IPL-cricket fixtures), the model said
+  so plainly instead of papering over it — that's the designed gap behavior.
+- Battery: tsc clean · eslint clean · 9 unit suites green (routing 48+22
+  needsLiveFacts, jury, pin, relevance, court-render 48+12, compute 40, auth
+  41, sysprompt 43) + the 23-check E2E. Note: whole-web engines (DDG et al)
+  were IP-blocked from the dev sandbox during testing — the verticals
+  (Bing News et al) carried the proof; on the live worker the whole-web
+  engines are the ones that served Task 49's runs. Deploys with the pending
+  Cloudflare redeploy.
+
 ## v3.10.0 — self-aware system prompt, Fable-5 structure (2026-10-30)
 
 - **The chat model now knows who it is.** The models serving DigDeep's lanes
