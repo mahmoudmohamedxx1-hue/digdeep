@@ -1088,6 +1088,18 @@ export async function runQuickLane(
   if (gatedQuick.dropped.length > 0) {
     await ctx.emit("refine", `Dropped ${gatedQuick.dropped.length} off-topic results — kept ${gatedQuick.kept.length}`, "The dropped pages matched filler words, not the question.");
   }
+  // v3.11.1 — same weather fix as the chat lane: pages that rank for weather
+  // queries render conditions with client-side JS, so their text excerpts
+  // carry no temperature. wttr.in's keyless JSON carries the actual numbers;
+  // inject it as the lead source. Fail-closed (null → ordinary results).
+  const wxPlace = weatherPlace(job.query);
+  if (wxPlace) {
+    const wx = await fetchWeatherSource(wxPlace);
+    if (wx) {
+      gatedQuick.kept.unshift(wx);
+      await ctx.emit("info", `Live weather check for ${wxPlace} (wttr.in)`, "Current conditions fetched as the lead source for this answer.");
+    }
+  }
   const fresh = gatedQuick.kept;
   const picked: SearchResult[] = [];
   const domainCount: Record<string, number> = {};
@@ -1105,13 +1117,20 @@ export async function runQuickLane(
   sourcesUsed = [];
   const contents = await Promise.all(
     picked.map(async (r) => {
-      const page = await fetchPageContent(r.url, 3200, r.excerpt);
+      // wttr.in's excerpt already IS the content (fetched as JSON)
+      const page = r.engine === "wttr.in"
+        ? { text: r.excerpt ?? r.snippet, domain: r.domain, title: r.title, words: 50 }
+        : await fetchPageContent(r.url, 3200, r.excerpt);
       if (!page) {
         await ctx.emit("read", `Could not read ${r.domain}`, r.title, undefined, { url: r.url, ok: false }, "verbose");
         return null;
       }
       const n = ++ctx.sourceN;
-      const excerpt = page.text.split(/\s+/).slice(0, 750).join(" ");
+      // v3.11.1 — snippet-first: the engine snippet usually carries the live
+      // fact; page text spends its first chars on nav/cookie boilerplate.
+      const bodyText = page.text.split(/\s+/).slice(0, 750).join(" ").trim();
+      const snip = (r.snippet || "").trim();
+      const excerpt = snip && !bodyText.startsWith(snip.slice(0, 60)) ? `${snip}\n— from the page: ${bodyText}` : bodyText;
       await db.source.create({
         data: { jobId: ctx.jobId, url: r.url, domain: r.domain || page.domain, title: r.title || page.title || r.domain, snippet: r.snippet || excerpt.slice(0, 280), engine: r.engine, words: page.words, used: true, sectionTitle: "Quick answer", round: 1, quality: 60 },
       }).catch(() => null);
